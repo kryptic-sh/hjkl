@@ -248,7 +248,7 @@ mod tests {
     /// on n1. Content-agnostic: the round-trip only needs a valid `SerTree`.
     fn sample_tree(current: u32) -> SerTree {
         SerTree {
-            base: "a".to_string(),
+            base: Some("a".to_string()),
             nodes: vec![
                 SerNode {
                     parent: None,
@@ -314,7 +314,7 @@ mod tests {
         assert_eq!(loaded.file_mtime_unix_ms, 42_000);
         assert_eq!(loaded.current_seq, 1, "current node seq in header");
         assert_eq!(loaded.tree.nodes.len(), 3);
-        assert_eq!(loaded.tree.base, "a");
+        assert_eq!(loaded.tree.base.as_deref(), Some("a"));
         assert_eq!(loaded.tree.current, 1);
         assert_eq!(loaded.tree.nodes[2].delta.as_ref().unwrap().new, "c");
         // `p` is unused as a real target here but proves the helper compiles.

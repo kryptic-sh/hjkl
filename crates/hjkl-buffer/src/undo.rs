@@ -1246,14 +1246,18 @@ pub struct SerNode {
     pub seq: u64,
 }
 
-/// Serializable projection of an [`UndoTree`] for the undofile. Postcard-encoded
-/// (non-self-describing, so a schema/version drift surfaces as a parse `Err`
-/// that the reader discards). See [`UndoTree::to_serializable`] /
-/// [`UndoTree::from_serializable`].
+/// Serializable projection of an [`UndoTree`] for the undofile and the swap
+/// undo section. Postcard-encoded (non-self-describing, so a schema/version
+/// drift surfaces as a parse `Err` that the reader discards). See
+/// [`UndoTree::to_serializable`] / [`UndoTree::from_serializable`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerTree {
-    /// Root base text (the anchor the delta chain replays from).
-    pub base: String,
+    /// Root base text (the anchor the delta chain replays from). Always
+    /// `Some` on write; `from_serializable` rejects `None` — a tree without an
+    /// anchor is structurally invalid outside the swap context. The swap
+    /// writer drops it for single-node trees (the body IS the base) and the
+    /// swap reader re-substitutes the body text before the tree is rebuilt.
+    pub base: Option<String>,
     /// Dense node arena (no holes).
     pub nodes: Vec<SerNode>,
     /// Root index into `nodes`.
@@ -1334,12 +1338,16 @@ impl UndoTree {
                 }
             })
             .collect();
-        let base = self
-            .get(self.root)
-            .base
-            .as_ref()
-            .map(|r| r.to_string())
-            .unwrap_or_default();
+        // Always `Some`: the undofile and the swap's multi-node trees anchor on
+        // the root text; only the swap writer may drop it (single-node trees,
+        // where the body IS the base) and it re-substitutes on read.
+        let base = Some(
+            self.get(self.root)
+                .base
+                .as_ref()
+                .map(|r| r.to_string())
+                .unwrap_or_default(),
+        );
         SerTree {
             base,
             nodes,
@@ -1368,6 +1376,10 @@ impl UndoTree {
         if len == 0 || s.root as usize >= len || s.current as usize >= len {
             return None;
         }
+        // A tree without an anchor is structurally invalid outside the swap
+        // context, where the body supplies the base (the swap reader fills it
+        // before this is ever reached). Reject rather than guess.
+        let base_str = s.base.as_deref()?;
         // Validate links and the root/non-root delta discipline up front.
         let mut seqs = std::collections::BTreeSet::new();
         for (i, n) in s.nodes.iter().enumerate() {
@@ -1419,7 +1431,7 @@ impl UndoTree {
         {
             return None;
         }
-        let base = ropey::Rope::from_str(&s.base);
+        let base = ropey::Rope::from_str(base_str);
         let (depths, reachable) = depths_from_root(s);
         // With the lists partitioning the nodes, reachability from the root is
         // what rules out a cycle: a node inside one is reachable from no root.
@@ -3188,6 +3200,17 @@ mod serialize_tests {
         assert!(UndoTree::from_serializable(&ser).is_none());
     }
 
+    /// A tree without a root base is structurally invalid outside the swap
+    /// context (where the body supplies the base). `to_serializable` always
+    /// emits `Some`; a `None` can only come from the swap writer's dedup, which
+    /// the swap reader reverses before rebuilding.
+    #[test]
+    fn from_serializable_rejects_missing_base() {
+        let mut ser = headline_tree().to_serializable();
+        ser.base = None;
+        assert!(UndoTree::from_serializable(&ser).is_none());
+    }
+
     #[test]
     fn from_serializable_rejects_non_root_missing_delta() {
         let mut ser = headline_tree().to_serializable();
@@ -3255,7 +3278,7 @@ mod serialize_tests {
             seq,
         };
         let ser = SerTree {
-            base: "hello".into(),
+            base: Some("hello".into()),
             nodes: vec![
                 n(None, vec![], None, 0),
                 n(Some(2), vec![2], d(), 1),

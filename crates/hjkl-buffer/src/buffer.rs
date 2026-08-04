@@ -987,7 +987,7 @@ mod tests {
     /// `base`, tagged with `seq`.
     fn single_node_tree(base: &str, seq: u64) -> crate::SerTree {
         crate::SerTree {
-            base: base.to_string(),
+            base: Some(base.to_string()),
             nodes: vec![crate::SerNode {
                 parent: None,
                 children: Vec::new(),

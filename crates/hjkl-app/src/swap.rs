@@ -105,6 +105,10 @@ impl SwapHeader {
 /// Serialized with `postcard` in its own length-delimited section between the
 /// header and the body. A read error (schema drift, truncation) makes recovery
 /// fall back to content-only; it never blocks or corrupts the recovery.
+///
+/// A single-node tree is written with `base: None` (the body IS the base —
+/// see [`dedup_single_node_base`]); [`read_swap_full`] re-substitutes the body
+/// text before the tree is rebuilt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwapUndo {
     /// The serialized undo tree (root base text + delta-encoded nodes).
@@ -112,6 +116,27 @@ pub struct SwapUndo {
     /// `seq` of the live current node — must match `tree`'s current node; a
     /// mismatch on read rejects the tree (recover content only).
     pub current_seq: u64,
+}
+
+/// When the swap's undo tree is a single node, the root's base is
+/// byte-identical to the swap body: `undo_to_serializable` syncs the current
+/// node to the live rope first, and a single-node tree has root == current —
+/// so `sync_current` stashed the very rope being streamed as the body into the
+/// root's base. Drop the base so the document is stored ONCE, not twice;
+/// [`read_swap_full`] restores it from the body on recovery. Multi-node trees
+/// keep their real anchor.
+///
+/// `body` is only consulted by the debug assertion; pass the rope being
+/// written as the swap body.
+pub fn dedup_single_node_base(tree: &mut SerTree, body: &Rope) {
+    if tree.nodes.len() == 1 && tree.base.is_some() {
+        debug_assert_eq!(
+            tree.base.as_deref(),
+            Some(body.to_string().as_str()),
+            "single-node swap tree: base must equal the swap body"
+        );
+        tree.base = None;
+    }
 }
 
 // ── Where swap files live ─────────────────────────────────────────────────────
@@ -490,6 +515,17 @@ fn read_swap_full_locked(path: &Path) -> std::io::Result<(SwapHeader, String, Op
             format!("swap: body length exceeds {MAX_BODY_LEN}"),
         ));
     }
+
+    // Single-node trees are written with `base: None` (the body IS the base —
+    // see `dedup_single_node_base`); restore the anchor from the body before
+    // any consumer rebuilds the tree. For a multi-node tree `base` is always
+    // present, so this is a no-op.
+    let undo = undo.map(|mut u| {
+        if u.tree.base.is_none() {
+            u.tree.base = Some(body.clone());
+        }
+        u
+    });
 
     Ok((header, body, undo))
 }
@@ -927,7 +963,7 @@ mod tests {
     /// no delta) — enough to exercise the swap's undo-section serialization.
     fn sample_tree(base: &str, seq: u64) -> SerTree {
         SerTree {
-            base: base.to_string(),
+            base: Some(base.to_string()),
             nodes: vec![hjkl_buffer::SerNode {
                 parent: None,
                 children: Vec::new(),
@@ -965,13 +1001,125 @@ mod tests {
         assert_eq!(got_body, body);
         let got_undo = got_undo.expect("v3 swap must carry the undo section");
         assert_eq!(got_undo.current_seq, 7);
-        assert_eq!(got_undo.tree.base, body);
+        assert_eq!(got_undo.tree.base.as_deref(), Some(body));
         assert_eq!(got_undo.tree.nodes.len(), 1);
         assert_eq!(got_undo.tree.root, 0);
         assert_eq!(got_undo.tree.current, 0);
         assert_eq!(got_undo.tree.next_seq, 8);
         assert_eq!(got_undo.tree.nodes[0].seq, 7);
         assert_eq!(got_undo.tree.nodes[0].cursor, (2, 5));
+    }
+
+    /// A two-node tree: root "a" → child "ab" (current). The anchor is real
+    /// history, so `dedup_single_node_base` must leave it alone.
+    fn two_node_tree() -> SerTree {
+        SerTree {
+            base: Some("a".to_string()),
+            nodes: vec![
+                hjkl_buffer::SerNode {
+                    parent: None,
+                    children: vec![1],
+                    last_child: Some(1),
+                    delta: None,
+                    cursor: (0, 0),
+                    timestamp_unix_ms: 1,
+                    marks: hjkl_buffer::MarkSnapshot::default(),
+                    seq: 4,
+                },
+                hjkl_buffer::SerNode {
+                    parent: Some(0),
+                    children: Vec::new(),
+                    last_child: None,
+                    delta: Some(hjkl_buffer::Delta {
+                        start: 1,
+                        old: String::new(),
+                        new: "b".to_string(),
+                    }),
+                    cursor: (0, 1),
+                    timestamp_unix_ms: 2,
+                    marks: hjkl_buffer::MarkSnapshot::default(),
+                    seq: 5,
+                },
+            ],
+            root: 0,
+            current: 1,
+            next_seq: 6,
+        }
+    }
+
+    /// The dedup's contract end to end: a single-node tree is written with
+    /// `base: None` in the on-disk undo section (the body IS the base), and
+    /// `read_swap_full` recovers a tree whose base is the body — rebuilding to
+    /// exactly the swap content.
+    #[test]
+    fn single_node_tree_dedups_base_and_reads_back_body() {
+        let td = tempfile::tempdir().unwrap();
+        let swp = td.path().join("dedup.swp");
+
+        let header = sample_header("/tmp/dedup.rs");
+        let body = "the quick brown fox jumps\nover the lazy dog\n";
+        let rope = Rope::from_str(body);
+        let mut undo = SwapUndo {
+            tree: sample_tree(body, 7),
+            current_seq: 7,
+        };
+        dedup_single_node_base(&mut undo.tree, &rope);
+        assert!(undo.tree.base.is_none(), "single-node base must be dropped");
+        write_swap_full(&swp, &header, &rope, Some(&undo)).unwrap();
+
+        // The on-disk undo section carries base: None — parse it out of the
+        // raw file exactly as `read_swap_full_locked` does.
+        let bytes = std::fs::read(&swp).unwrap();
+        let hlen = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        let ulen_off = 8 + hlen;
+        let ulen = u32::from_le_bytes(bytes[ulen_off..ulen_off + 4].try_into().unwrap()) as usize;
+        let parsed: SwapUndo =
+            postcard::from_bytes(&bytes[ulen_off + 4..ulen_off + 4 + ulen]).unwrap();
+        assert!(parsed.tree.base.is_none(), "base must be None on disk");
+
+        // read_swap_full restores the body as the base; the tree rebuilds and
+        // materializes to the swap content.
+        let (_h, got_body, got_undo) = read_swap_full(&swp).unwrap();
+        assert_eq!(got_body, body);
+        let got_undo = got_undo.expect("v3 swap must carry the undo section");
+        assert_eq!(got_undo.tree.base.as_deref(), Some(body));
+        let view = hjkl_buffer::View::from_str(body);
+        assert!(
+            view.install_recovered_undo_tree(&got_undo.tree, got_undo.current_seq),
+            "recovered tree must install and materialize to the swap body"
+        );
+    }
+
+    /// A multi-node tree keeps its real base on disk and round-trips it.
+    #[test]
+    fn multi_node_tree_keeps_base_and_round_trips() {
+        let td = tempfile::tempdir().unwrap();
+        let swp = td.path().join("multi.swp");
+
+        let header = sample_header("/tmp/multi.rs");
+        let rope = Rope::from_str("ab");
+        let mut undo = SwapUndo {
+            tree: two_node_tree(),
+            current_seq: 5,
+        };
+        dedup_single_node_base(&mut undo.tree, &rope); // no-op for multi-node
+        assert!(undo.tree.base.is_some(), "multi-node trees keep their base");
+        write_swap_full(&swp, &header, &rope, Some(&undo)).unwrap();
+
+        let (_h, got_body, got_undo) = read_swap_full(&swp).unwrap();
+        assert_eq!(got_body, "ab");
+        let got_undo = got_undo.expect("v3 swap must carry the undo section");
+        assert_eq!(
+            got_undo.tree.base.as_deref(),
+            Some("a"),
+            "anchor round-trips"
+        );
+        assert_eq!(got_undo.tree.nodes.len(), 2);
+        let view = hjkl_buffer::View::from_str("ab");
+        assert!(
+            view.install_recovered_undo_tree(&got_undo.tree, got_undo.current_seq),
+            "multi-node recovered tree must install"
+        );
     }
 
     /// A swap written with body text but NO undo tree (the `write_swap` /

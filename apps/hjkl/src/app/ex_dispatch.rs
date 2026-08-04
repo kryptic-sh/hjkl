@@ -1469,7 +1469,12 @@ impl App {
         // §6c) so a crash-`:recover` restores undo/redo, not just the text.
         // `undo_to_serializable` syncs the tree's current to the live rope, so
         // the stored tree's current materializes to exactly this body.
-        let (tree, current_seq) = self.slots[idx].buffer().undo_to_serializable();
+        let (mut tree, current_seq) = self.slots[idx].buffer().undo_to_serializable();
+        // Single-node tree ⇒ the root base IS the body (root == current, and
+        // `sync_current` stashed the live rope into the root). Drop the base so
+        // the document is stored once, not twice; `read_swap_full`
+        // re-substitutes the body on recovery.
+        swap::dedup_single_node_base(&mut tree, &rope);
         let swap_undo = swap::SwapUndo { tree, current_seq };
         if let Err(e) = swap::write_swap_full(&swap_path, &header, &rope, Some(&swap_undo)) {
             tracing::debug!(path = %swap_path.display(), err = %e, "swap write failed");
