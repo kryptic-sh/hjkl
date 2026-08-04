@@ -63,6 +63,15 @@ fn is_sentence_closing(c: char) -> bool {
 /// punctuation — moving into or out of a run of blank lines is itself a
 /// stop. When `)` finds no next sentence, it lands on the last character
 /// of the buffer (a no-op if already there or past it).
+///
+/// Scans row by row outward from the cursor, stopping at the first
+/// boundary, instead of materializing the whole buffer into per-row
+/// `Vec<char>`s. The boundary rules are identical to the old
+/// full-buffer `sentence_boundaries` walk: a terminator's trailing
+/// whitespace pushes the boundary onto the *first* row above it that is
+/// blank or holds a non-whitespace char (skipping non-blank
+/// all-whitespace rows), which the `stopper_eol` flag below carries
+/// across rows.
 pub fn sentence_boundary<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     forward: bool,
@@ -72,15 +81,22 @@ pub fn sentence_boundary<H: hjkl_engine::types::Host>(
     if raw_n_lines == 0 {
         return None;
     }
-    let lines: Vec<Vec<char>> = (0..raw_n_lines)
-        .map(|r| rope_line_to_str(&rope, r).chars().collect())
-        .collect();
+    // Borrow row `r` as a `Cow<str>` instead of cloning a `String` per row
+    // (`rope_line_to_str`). `rope_line_bytes` gives the byte length of the
+    // row's content with every line separator excluded, matching
+    // `hjkl_buffer::rope_line_str` exactly (see `viewport_math::rope_line_slice`).
+    let line_of = |r: usize| -> std::borrow::Cow<'_, str> {
+        let start = rope.line_to_byte(r);
+        rope.byte_slice(start..start + hjkl_buffer::rope_line_bytes(&rope, r))
+            .into()
+    };
+    let line_chars = |r: usize| -> Vec<char> { line_of(r).chars().collect() };
     // Skip vim's single phantom trailing empty row — ropey's len_lines()
     // always synthesizes one extra empty final "line" when the buffer
     // text ends in `\n` (see hjkl_engine::motions::move_bottom / the
     // content_row_count clamp it shares with every vertical motion). A
     // genuinely empty *real* last line (e.g. "One.\n\n") is left alone.
-    let n_lines = if raw_n_lines > 1 && lines[raw_n_lines - 1].is_empty() {
+    let n_lines = if raw_n_lines > 1 && line_chars(raw_n_lines - 1).is_empty() {
         raw_n_lines - 1
     } else {
         raw_n_lines
@@ -88,21 +104,197 @@ pub fn sentence_boundary<H: hjkl_engine::types::Host>(
     if n_lines == 0 {
         return None;
     }
-    let boundaries = sentence_boundaries(&lines, n_lines);
     let cursor = ed.cursor();
     let cursor = (cursor.0.min(n_lines - 1), cursor.1);
+    let (cr, cc) = cursor;
 
     if forward {
-        if let Some(&p) = boundaries.iter().find(|&&p| p > cursor) {
-            return Some(p);
+        // Closest row below the cursor whose terminator's trailing
+        // whitespace runs to end-of-line. Such a terminator pushes a
+        // boundary onto the first stopper row above it — which may be the
+        // cursor's own row — so the flag is seeded by walking down from
+        // `cr - 1` past skippable rows.
+        let mut stopper_eol = if cr == 0 {
+            false
+        } else {
+            closest_stopper_below(&line_chars, cr - 1).is_some_and(|(_, eol)| eol)
+        };
+        let mut prev_blank = cr > 0 && line_chars(cr - 1).is_empty();
+        for r in cr..n_lines {
+            let blank = line_chars(r).is_empty();
+            let first_ns = line_chars(r).iter().position(|&c| !c.is_whitespace());
+            let mut cands: Vec<(usize, usize)> = Vec::new();
+            // Blank-line transition: `(r, 0)` when the previous row's
+            // blankness differs.
+            if r > 0 && prev_blank != blank {
+                cands.push((r, 0));
+            }
+            // Trailing-whitespace walk from a terminator below this row
+            // lands here on this row's first non-whitespace cell.
+            if stopper_eol && let Some(c) = first_ns {
+                cands.push((r, c));
+            }
+            let (mid, has_eol) = scan_row_boundaries(r, &line_chars);
+            cands.extend(mid);
+            for (row, col) in cands {
+                if r > cr || col > cc {
+                    return Some((row, col));
+                }
+            }
+            prev_blank = blank;
+            stopper_eol = if first_ns.is_some() || blank {
+                has_eol
+            } else {
+                stopper_eol
+            };
         }
         // No next sentence: land on the last character of the buffer,
         // but never move backward past the cursor.
-        let end = end_of_buffer_pos(&lines, n_lines);
+        let end_col = line_chars(n_lines - 1).len().saturating_sub(1);
+        let end = (n_lines - 1, end_col);
         (end > cursor).then_some(end)
     } else {
-        boundaries.into_iter().rfind(|&p| p < cursor)
+        // Closest stopper row below the current row, with whether its
+        // terminator's trailing whitespace runs to EOL. Maintained
+        // incrementally as the scan descends (rows below are visited
+        // first), so each row's walk-from-below boundary is a flag check
+        // rather than a per-row re-walk.
+        let mut origin: Option<(usize, bool)> = if cr == 0 {
+            None
+        } else {
+            closest_stopper_below(&line_chars, cr - 1)
+        };
+        for r in (0..=cr).rev() {
+            let blank = line_chars(r).is_empty();
+            let first_ns = line_chars(r).iter().position(|&c| !c.is_whitespace());
+            let (mid, _has_eol) = scan_row_boundaries(r, &line_chars);
+            // Candidates in descending order: mid-line boundaries (largest
+            // col first), the walk-from-below landing, the blank-line
+            // transition, then `(0, 0)`.
+            let mut cands: Vec<(usize, usize)> = Vec::new();
+            cands.extend(mid.into_iter().rev());
+            if origin.is_some_and(|(_, eol)| eol)
+                && let Some(c) = first_ns
+            {
+                cands.push((r, c));
+            }
+            // The transition boundary compares against the row *below* `r`
+            // (smaller index) — read it directly, since the descending scan
+            // has already passed it.
+            let prev_blank = r > 0 && line_chars(r - 1).is_empty();
+            if r > 0 && prev_blank != blank {
+                cands.push((r, 0));
+            }
+            if r == 0 {
+                cands.push((0, 0));
+            }
+            for (row, col) in cands {
+                if r < cr || col < cc {
+                    return Some((row, col));
+                }
+            }
+            origin = if r > 0 {
+                if row_skippable(&line_chars, r - 1) {
+                    // The row below the next row is skippable, so the
+                    // closest stopper below it is unchanged.
+                    origin
+                } else if r >= 2 {
+                    // `r - 1` is a stopper itself but sits *above* the
+                    // next row's search range `[0, r-2]` — walk down past
+                    // the skippable run directly below it.
+                    closest_stopper_below(&line_chars, r - 2)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+        }
+        None
     }
+}
+
+/// A row the trailing-whitespace walk passes *through* without stopping:
+/// non-blank and holding only whitespace.
+fn row_skippable<F: Fn(usize) -> Vec<char>>(line_chars: &F, r: usize) -> bool {
+    let lc = line_chars(r);
+    !lc.is_empty() && lc.iter().all(|&c| c.is_whitespace())
+}
+
+/// The closest row at or below `p` (walking down past skippable rows)
+/// that the trailing-whitespace walk would stop on — blank or holding a
+/// non-whitespace char — with whether its terminator's whitespace runs
+/// to end-of-line. `None` when every row down to 0 is skippable.
+fn closest_stopper_below<F: Fn(usize) -> Vec<char>>(
+    line_chars: &F,
+    mut p: usize,
+) -> Option<(usize, bool)> {
+    while p > 0 && row_skippable(line_chars, p) {
+        p -= 1;
+    }
+    (!row_skippable(line_chars, p)).then(|| (p, row_has_eol_walk(line_chars, p)))
+}
+
+/// True when row `r` has a terminator whose trailing whitespace (or the
+/// terminator itself) runs to end-of-line — such a terminator pushes a
+/// boundary onto a later row.
+fn row_has_eol_walk<F: Fn(usize) -> Vec<char>>(line_chars: &F, r: usize) -> bool {
+    scan_row_boundaries(r, line_chars).1
+}
+
+/// Per-row sentence-boundary scan, mirroring `sentence_boundaries`'s
+/// within-row loop: terminator runs, optional closing-punctuation runs,
+/// and the whitespace that completes a boundary. Returns the mid-line
+/// boundaries landing on this row (ascending) and whether a terminator's
+/// trailing whitespace runs to end-of-line (its boundary lands on a later
+/// row — see [`sentence_boundary`]).
+fn scan_row_boundaries<F: Fn(usize) -> Vec<char>>(
+    r: usize,
+    line_chars: &F,
+) -> (Vec<(usize, usize)>, bool) {
+    let lc = line_chars(r);
+    let mut mid: Vec<(usize, usize)> = Vec::new();
+    let mut has_eol = false;
+    let mut i = 0;
+    while i < lc.len() {
+        if is_sentence_terminator(lc[i]) {
+            let mut j = i;
+            while j + 1 < lc.len() && is_sentence_terminator(lc[j + 1]) {
+                j += 1;
+            }
+            let mut k = j;
+            while k + 1 < lc.len() && is_sentence_closing(lc[k + 1]) {
+                k += 1;
+            }
+            if k + 1 < lc.len() {
+                // Terminator (+ closing run) followed by more text on the
+                // same line: only a boundary if that text starts with
+                // whitespace, and the boundary is the first non-whitespace
+                // cell after that whitespace — or a later row when the
+                // whitespace runs to EOL.
+                if lc[k + 1].is_whitespace() {
+                    let mut c = k + 1;
+                    while c < lc.len() && lc[c].is_whitespace() {
+                        c += 1;
+                    }
+                    if c < lc.len() {
+                        mid.push((r, c));
+                    } else {
+                        has_eol = true;
+                    }
+                }
+                i = k + 1;
+            } else {
+                // Terminator run reaches end of line — the boundary (if
+                // any) is whatever comes after the line break.
+                has_eol = true;
+                break;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    (mid, has_eol)
 }
 
 /// Every valid sentence-boundary landing position within `lines[..n_lines]`,
@@ -275,7 +467,185 @@ pub fn sentence_step_forward<H: hjkl_engine::types::Host>(
 /// whitespace (or end-of-line) as a boundary; runs of consecutive
 /// terminators stay attached to the same sentence. `as` extends to
 /// include trailing whitespace; `is` does not.
+///
+/// Runs the flat-Vec scan over a window of rows around the cursor
+/// instead of the whole buffer; when a walk would need to cross the
+/// window's edge the full-buffer scan takes over, so the result is
+/// byte-for-byte identical either way.
 pub fn sentence_text_object<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    inner: bool,
+    count: usize,
+) -> Option<((usize, usize), (usize, usize))> {
+    let count = count.max(1);
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let raw_n_lines = rope.len_lines();
+    if raw_n_lines == 0 {
+        return None;
+    }
+    let cursor = ed.cursor();
+    let win_lo = cursor.0.saturating_sub(SENTENCE_WINDOW_ROWS);
+    let win_hi = (cursor.0 + SENTENCE_WINDOW_ROWS).min(raw_n_lines - 1);
+    let line_of = |r: usize| -> std::borrow::Cow<'_, str> {
+        let start = rope.line_to_byte(r);
+        rope.byte_slice(start..start + hjkl_buffer::rope_line_bytes(&rope, r))
+            .into()
+    };
+    let line_chars = |r: usize| -> Vec<char> { line_of(r).chars().collect() };
+    let line_len = |r: usize| -> usize { line_of(r).chars().count() };
+    let win_off = rope.line_to_char(win_lo);
+    let (win_lens, chars, last_content) =
+        window_flat(raw_n_lines, win_lo, win_hi, &line_len, &line_chars);
+    let flat_len = chars.len();
+    let whole_buffer = win_lo == 0 && win_hi >= last_content;
+    if flat_len == 0 {
+        // The old scan returns None for a content-less buffer; a window
+        // that starts past the buffer's content (phantom-row cursor)
+        // needs the full scan to answer.
+        return if whole_buffer {
+            None
+        } else {
+            sentence_text_object_full(ed, inner, count)
+        };
+    }
+    // Flat index ↔ (row, col) over the window. One extra `win_lens`
+    // entry past the window's top row makes a flat index sitting on a
+    // `\n` map to the next row exactly like the old whole-buffer
+    // arithmetic.
+    let idx_to_pos = |mut idx: usize| -> (usize, usize) {
+        for (i, &len) in win_lens.iter().enumerate() {
+            if idx <= len {
+                return (win_lo + i, idx);
+            }
+            idx -= len + 1;
+        }
+        let last = win_lens.len() - 1;
+        (win_lo + last, win_lens[last])
+    };
+    // Cursor's flat index: the rope's char offset of the cursor minus the
+    // window's offset. ropey's char space matches the flat scan — every
+    // row contributes its chars plus one separator, and the popped final
+    // newline only sits past the last content row.
+    let cursor_idx = (rope.line_to_char(cursor.0) + cursor.1 - win_off).min(flat_len - 1);
+    let is_terminator = |c: char| matches!(c, '.' | '?' | '!');
+    let mut clipped = false;
+
+    // Walk backward from cursor to find the start of the current
+    // sentence. A boundary is: whitespace immediately after a run of
+    // terminators (or start-of-buffer). Running off the window's bottom
+    // edge (only possible when the window doesn't start at row 0) means
+    // the true start lies below the window — fall back.
+    let mut start = cursor_idx;
+    while start > 0 {
+        let prev = chars[start - 1];
+        if prev.is_whitespace() {
+            // Check if the whitespace follows a terminator — if so,
+            // we've crossed a sentence boundary; the sentence begins
+            // at the first non-whitespace cell *after* this run.
+            let mut k = start - 1;
+            while k > 0 && chars[k - 1].is_whitespace() {
+                k -= 1;
+            }
+            if k > 0 && is_terminator(chars[k - 1]) {
+                break;
+            }
+        }
+        start -= 1;
+    }
+    if start == 0 && win_lo > 0 {
+        clipped = true;
+    }
+    // Skip leading whitespace (vim doesn't include it in the
+    // sentence body).
+    while start < flat_len && chars[start].is_whitespace() {
+        start += 1;
+    }
+    if start >= flat_len {
+        return if whole_buffer {
+            None
+        } else {
+            sentence_text_object_full(ed, inner, count)
+        };
+    }
+    if clipped {
+        return sentence_text_object_full(ed, inner, count);
+    }
+
+    // Walk forward to the sentence end (last terminator before the
+    // next whitespace boundary). Walking off the window's top edge when
+    // the window stops short of the buffer's end is a clip.
+    let mut end = start;
+    while end < flat_len {
+        if is_terminator(chars[end]) {
+            // Consume any consecutive terminators (e.g. `?!`).
+            while end + 1 < flat_len && is_terminator(chars[end + 1]) {
+                end += 1;
+            }
+            // If followed by whitespace or end-of-buffer, that's the
+            // boundary.
+            if end + 1 >= flat_len || chars[end + 1].is_whitespace() {
+                break;
+            }
+        }
+        end += 1;
+    }
+    if end == flat_len && win_hi < last_content {
+        return sentence_text_object_full(ed, inner, count);
+    }
+    // `Nis` / `Nas`: extend across `count - 1` further sentences, skipping the
+    // whitespace between each and walking to the next sentence's end.
+    let mut rem = count - 1;
+    while rem > 0 {
+        let mut s = end + 1;
+        while s < flat_len && chars[s].is_whitespace() {
+            s += 1;
+        }
+        if s >= flat_len {
+            if win_hi < last_content {
+                return sentence_text_object_full(ed, inner, count);
+            }
+            break;
+        }
+        let mut e = s;
+        while e < flat_len {
+            if is_terminator(chars[e]) {
+                while e + 1 < flat_len && is_terminator(chars[e + 1]) {
+                    e += 1;
+                }
+                if e + 1 >= flat_len || chars[e + 1].is_whitespace() {
+                    break;
+                }
+            }
+            e += 1;
+        }
+        if e == flat_len && win_hi < last_content {
+            return sentence_text_object_full(ed, inner, count);
+        }
+        end = e;
+        rem -= 1;
+    }
+    // Inclusive end → exclusive end_idx.
+    let end_idx = (end + 1).min(flat_len);
+
+    let final_end = if inner {
+        end_idx
+    } else {
+        // `as`: include trailing whitespace (but stop before the next
+        // newline so we don't gobble a paragraph break — vim keeps
+        // sentences within a paragraph for the trailing-ws extension).
+        let mut e = end_idx;
+        while e < flat_len && chars[e].is_whitespace() && chars[e] != '\n' {
+            e += 1;
+        }
+        e
+    };
+
+    Some((idx_to_pos(start), idx_to_pos(final_end)))
+}
+
+/// The whole-buffer `is`/`as` scan — the fallback for windowed
+/// [`sentence_text_object`] when a walk crosses the window's edge.
+fn sentence_text_object_full<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
     count: usize,
@@ -409,7 +779,147 @@ pub fn sentence_text_object<H: hjkl_engine::types::Host>(
 /// `it` / `at` — XML tag pair text object. Builds a flat char index of
 /// the buffer, walks `<...>` tokens to pair tags via a stack, and
 /// returns the innermost pair containing the cursor.
+///
+/// Runs the token walk over a window of rows around the cursor; when no
+/// pair is found inside the window, or the found pair touches the
+/// window's edge (its open or close may extend past it), the
+/// whole-buffer walk decides.
 pub fn tag_text_object<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    inner: bool,
+) -> Option<((usize, usize), (usize, usize))> {
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let raw_n_lines = rope.len_lines();
+    if raw_n_lines == 0 {
+        return None;
+    }
+    let cursor = ed.cursor();
+    let win_lo = cursor.0.saturating_sub(TAG_WINDOW_ROWS);
+    let win_hi = (cursor.0 + TAG_WINDOW_ROWS).min(raw_n_lines - 1);
+    let line_of = |r: usize| -> std::borrow::Cow<'_, str> {
+        let start = rope.line_to_byte(r);
+        rope.byte_slice(start..start + hjkl_buffer::rope_line_bytes(&rope, r))
+            .into()
+    };
+    let line_chars = |r: usize| -> Vec<char> { line_of(r).chars().collect() };
+    let line_len = |r: usize| -> usize { line_of(r).chars().count() };
+    let win_off = rope.line_to_char(win_lo);
+    let (win_lens, chars, last_content) =
+        window_flat(raw_n_lines, win_lo, win_hi, &line_len, &line_chars);
+    let flat_len = chars.len();
+    let whole_buffer = win_lo == 0 && win_hi >= last_content;
+    if flat_len == 0 {
+        return if whole_buffer {
+            None
+        } else {
+            tag_text_object_full(ed, inner)
+        };
+    }
+    let idx_to_pos = |mut idx: usize| -> (usize, usize) {
+        for (i, &len) in win_lens.iter().enumerate() {
+            if idx <= len {
+                return (win_lo + i, idx);
+            }
+            idx -= len + 1;
+        }
+        let last = win_lens.len() - 1;
+        (win_lo + last, win_lens[last])
+    };
+    // Cursor's flat index — deliberately unclamped, matching the old
+    // scan (a past-end column still compares sensibly against tag spans).
+    let cursor_idx = rope.line_to_char(cursor.0) + cursor.1 - win_off;
+
+    // Walk `<...>` tokens. Track open tags on a stack; on a matching
+    // close pop and consider the pair a candidate when the cursor lies
+    // inside its content range. Innermost wins (replace whenever a
+    // tighter range turns up). Also track the first complete pair that
+    // starts at or after the cursor so we can fall back to a forward
+    // scan (targets.vim-style) when the cursor isn't inside any tag.
+    let mut stack: Vec<(usize, usize, String)> = Vec::new(); // (open_start, content_start, name)
+    let mut innermost: Option<(usize, usize, usize, usize)> = None;
+    let mut next_after: Option<(usize, usize, usize, usize)> = None;
+    let mut i = 0;
+    while i < flat_len {
+        if chars[i] != '<' {
+            i += 1;
+            continue;
+        }
+        let mut j = i + 1;
+        while j < flat_len && chars[j] != '>' {
+            j += 1;
+        }
+        if j >= flat_len {
+            break;
+        }
+        let inside: String = chars[i + 1..j].iter().collect();
+        let close_end = j + 1;
+        let trimmed = inside.trim();
+        if trimmed.starts_with('!') || trimmed.starts_with('?') {
+            i = close_end;
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix('/') {
+            let name = rest.split_whitespace().next().unwrap_or("").to_string();
+            if !name.is_empty()
+                && let Some(stack_idx) = stack.iter().rposition(|(_, _, n)| *n == name)
+            {
+                let (open_start, content_start, _) = stack[stack_idx].clone();
+                stack.truncate(stack_idx);
+                let content_end = i;
+                let candidate = (open_start, content_start, content_end, close_end);
+                // A pair encloses the cursor when the cursor lies anywhere
+                // within the whole pair span — including ON the open or close
+                // tag itself (vim `it`/`at` operate on the tag under the
+                // cursor, not just its content). Innermost (tightest span)
+                // wins; closes are seen innermost-first so the first enclosing
+                // candidate is already the tightest.
+                if cursor_idx >= open_start && cursor_idx < close_end {
+                    innermost = match innermost {
+                        Some((os, _, _, ce)) if os <= open_start && close_end <= ce => {
+                            Some(candidate)
+                        }
+                        None => Some(candidate),
+                        existing => existing,
+                    };
+                } else if open_start >= cursor_idx && next_after.is_none() {
+                    next_after = Some(candidate);
+                }
+            }
+        } else if !trimmed.ends_with('/') {
+            let name: String = trimmed
+                .split(|c: char| c.is_whitespace() || c == '/')
+                .next()
+                .unwrap_or("")
+                .to_string();
+            if !name.is_empty() {
+                stack.push((i, close_end, name));
+            }
+        }
+        i = close_end;
+    }
+
+    let Some((open_start, content_start, content_end, close_end)) = innermost.or(next_after) else {
+        return tag_text_object_full(ed, inner);
+    };
+    // A pair whose open sits on the window's first row (with content
+    // below it) or whose close sits on/after the window's last row could
+    // be a fragment of a pair extending past the window — the
+    // whole-buffer scan decides.
+    let open_row = idx_to_pos(open_start).0;
+    let close_row = idx_to_pos(close_end).0;
+    if (open_row == win_lo && win_lo > 0) || (close_row >= win_hi && win_hi < raw_n_lines - 1) {
+        return tag_text_object_full(ed, inner);
+    }
+    if inner {
+        Some((idx_to_pos(content_start), idx_to_pos(content_end)))
+    } else {
+        Some((idx_to_pos(open_start), idx_to_pos(close_end)))
+    }
+}
+
+/// The whole-buffer `it`/`at` walk — the fallback for windowed
+/// [`tag_text_object`].
+fn tag_text_object_full<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
@@ -519,6 +1029,53 @@ pub fn tag_text_object<H: hjkl_engine::types::Host>(
     } else {
         Some((idx_to_pos(open_start), idx_to_pos(close_end)))
     }
+}
+
+/// Rows above and below the cursor that the windowed text-object scans
+/// cover before falling back to the whole buffer.
+const SENTENCE_WINDOW_ROWS: usize = 200;
+const TAG_WINDOW_ROWS: usize = 50;
+
+/// Build the windowed flat char scan over rows `[win_lo, win_hi]` — a
+/// slice of the buffer around the cursor. Returns the per-row char
+/// counts for the rows that contribute content (plus one extra entry for
+/// the row just past the window when it stops short of the buffer's last
+/// content row, so a flat index sitting on a `\n` maps to the next row
+/// exactly like the old whole-buffer arithmetic), the joined flat
+/// `Vec<char>` (with a trailing `\n` only when the window stops short of
+/// the buffer's end), and the buffer's last content row.
+///
+/// `line_len`/`line_chars` must both read row `r`'s content with the
+/// trailing line separator excluded (the `rope_line_to_str` contract).
+fn window_flat<F: Fn(usize) -> usize, G: Fn(usize) -> Vec<char>>(
+    raw_n_lines: usize,
+    win_lo: usize,
+    win_hi: usize,
+    line_len: &F,
+    line_chars: &G,
+) -> (Vec<usize>, Vec<char>, usize) {
+    // The last row that contributes content: the old scan pops the
+    // buffer's final `\n`, so ropey's phantom empty last row (synthesized
+    // for a trailing newline) contributes nothing.
+    let last_content = if raw_n_lines > 1 && line_len(raw_n_lines - 1) == 0 {
+        raw_n_lines - 2
+    } else {
+        raw_n_lines - 1
+    };
+    let hi = win_hi.min(last_content);
+    let mut win_lens: Vec<usize> = (win_lo..=hi).map(line_len).collect();
+    let mut flat: Vec<char> = Vec::new();
+    for r in win_lo..=hi {
+        flat.extend(line_chars(r));
+        if r < hi {
+            flat.push('\n');
+        }
+    }
+    if hi < last_content {
+        flat.push('\n');
+        win_lens.push(line_len(hi + 1));
+    }
+    (win_lens, flat, last_content)
 }
 pub fn is_wordchar(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
@@ -1292,4 +1849,329 @@ pub fn paragraph_text_object<H: hjkl_engine::types::Host>(
     }
     let end_col = rope_line_to_str(&rope, bot).chars().count();
     Some(((top, 0), (bot, end_col)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hjkl_buffer::View;
+    use hjkl_engine::{DefaultHost, Editor, Options};
+
+    fn make_editor(content: &str) -> Editor<View, DefaultHost> {
+        let buf = View::from_str(content);
+        let host = DefaultHost::new();
+        crate::vim::vim_editor(buf, host, Options::default())
+    }
+
+    /// `is` on the second sentence of a two-sentence paragraph, with a
+    /// blank line (paragraph break) after it. Pins the exact charwise
+    /// range the windowed flat-Vec scan must reproduce byte-for-byte.
+    #[test]
+    fn sentence_text_object_is_exact_range_mid_paragraph() {
+        let mut ed = make_editor("First sentence. Second one.\n\nThird.");
+        ed.set_cursor_quiet(0, 16); // start of "Second one."
+        assert_eq!(
+            sentence_text_object(&ed, true, 1),
+            Some(((0, 16), (0, 27))),
+            "is must span exactly \"Second one.\" (exclusive end after the '.')"
+        );
+        // `as` adds trailing whitespace, but a paragraph break (the '\n')
+        // is never gobbled, so it lands on the same exclusive end.
+        assert_eq!(
+            sentence_text_object(&ed, false, 1),
+            Some(((0, 16), (0, 27)))
+        );
+    }
+
+    /// `(` / `)` boundary walking across a blank-line paragraph break.
+    /// `sentence_boundary` must find the same (row, col) landings the
+    /// full-buffer scan produced.
+    #[test]
+    fn sentence_boundary_matches_full_scan_across_paragraph_break() {
+        let mut ed = make_editor("First sentence. Second one.\n\nThird.");
+        // Forward from buffer start → start of "Second one."
+        ed.set_cursor_quiet(0, 0);
+        assert_eq!(sentence_boundary(&ed, true), Some((0, 16)));
+        // Forward from start of "Second one." → the blank-line boundary.
+        ed.set_cursor_quiet(0, 16);
+        assert_eq!(sentence_boundary(&ed, true), Some((1, 0)));
+        // Backward from start of "Second one." → buffer start.
+        assert_eq!(sentence_boundary(&ed, false), Some((0, 0)));
+        // Backward from buffer start → no previous boundary.
+        ed.set_cursor_quiet(0, 0);
+        assert_eq!(sentence_boundary(&ed, false), None);
+    }
+
+    /// `it` / `at` on a small nested tag buffer. The whole buffer fits in
+    /// the window, so the result must match the full scan exactly.
+    #[test]
+    fn tag_text_object_exact_range_nested() {
+        let mut ed = make_editor("<div>\n  <p>Hello</p>\n</div>");
+        ed.set_cursor_quiet(1, 5); // the 'H' of "Hello"
+        assert_eq!(tag_text_object(&ed, true), Some(((1, 5), (1, 10))));
+        assert_eq!(tag_text_object(&ed, false), Some(((1, 2), (1, 14))));
+    }
+
+    /// `it` / `at` edge cases: cursor before any tag (forward fallback),
+    /// inside a single-line pair, and inside a pair spanning rows.
+    #[test]
+    fn tag_text_object_edge_cases() {
+        // Cursor before the first tag → forward scan to the next pair.
+        let mut ed = make_editor("text <b>x</b>");
+        ed.set_cursor_quiet(0, 0);
+        assert_eq!(tag_text_object(&ed, true), Some(((0, 8), (0, 9))));
+        assert_eq!(tag_text_object(&ed, false), Some(((0, 5), (0, 13))));
+        // Inside a multi-line pair: content runs from just past the open
+        // tag to just before the close tag, across the newlines.
+        let mut ed = make_editor("<a>\n  body\n</a>");
+        ed.set_cursor_quiet(1, 3);
+        assert_eq!(tag_text_object(&ed, true), Some(((0, 3), (2, 0))));
+        assert_eq!(tag_text_object(&ed, false), Some(((0, 0), (2, 4))));
+        // Unmatched close → no pair.
+        let ed = make_editor("</a>");
+        assert_eq!(tag_text_object(&ed, true), None);
+    }
+
+    // ── Differential tests: the new incremental scans vs. the old
+    // full-buffer implementations, kept verbatim as test-only references.
+
+    /// Reference: the pre-incremental full-buffer `sentence_boundary`.
+    fn old_sentence_boundary<H: hjkl_engine::types::Host>(
+        ed: &Editor<hjkl_buffer::View, H>,
+        forward: bool,
+    ) -> Option<(usize, usize)> {
+        let rope = hjkl_engine::types::Query::rope(ed.buffer());
+        let raw_n_lines = rope.len_lines();
+        if raw_n_lines == 0 {
+            return None;
+        }
+        let lines: Vec<Vec<char>> = (0..raw_n_lines)
+            .map(|r| rope_line_to_str(&rope, r).chars().collect())
+            .collect();
+        let n_lines = if raw_n_lines > 1 && lines[raw_n_lines - 1].is_empty() {
+            raw_n_lines - 1
+        } else {
+            raw_n_lines
+        };
+        if n_lines == 0 {
+            return None;
+        }
+        let boundaries = sentence_boundaries(&lines, n_lines);
+        let cursor = ed.cursor();
+        let cursor = (cursor.0.min(n_lines - 1), cursor.1);
+        if forward {
+            if let Some(&p) = boundaries.iter().find(|&&p| p > cursor) {
+                return Some(p);
+            }
+            let end = end_of_buffer_pos(&lines, n_lines);
+            (end > cursor).then_some(end)
+        } else {
+            boundaries.into_iter().rfind(|&p| p < cursor)
+        }
+    }
+
+    /// Reference: the pre-window full-buffer `sentence_text_object`.
+    fn old_sentence_text_object<H: hjkl_engine::types::Host>(
+        ed: &Editor<hjkl_buffer::View, H>,
+        inner: bool,
+        count: usize,
+    ) -> Option<((usize, usize), (usize, usize))> {
+        let count = count.max(1);
+        let rope = hjkl_engine::types::Query::rope(ed.buffer());
+        let n_lines = rope.len_lines();
+        if n_lines == 0 {
+            return None;
+        }
+        let line_lens: Vec<usize> = (0..n_lines)
+            .map(|r| rope_line_to_str(&rope, r).chars().count())
+            .collect();
+        let pos_to_idx = |pos: (usize, usize)| -> usize {
+            let idx: usize = line_lens.iter().take(pos.0).map(|&len| len + 1).sum();
+            idx + pos.1
+        };
+        let idx_to_pos = |mut idx: usize| -> (usize, usize) {
+            for (r, &len) in line_lens.iter().enumerate() {
+                if idx <= len {
+                    return (r, idx);
+                }
+                idx -= len + 1;
+            }
+            let last = n_lines.saturating_sub(1);
+            (last, line_lens[last])
+        };
+        let mut chars: Vec<char> = rope.chars().collect();
+        if chars.last() == Some(&'\n') {
+            chars.pop();
+        }
+        if chars.is_empty() {
+            return None;
+        }
+        let cursor_idx = pos_to_idx(ed.cursor()).min(chars.len() - 1);
+        let is_terminator = |c: char| matches!(c, '.' | '?' | '!');
+        let mut start = cursor_idx;
+        while start > 0 {
+            let prev = chars[start - 1];
+            if prev.is_whitespace() {
+                let mut k = start - 1;
+                while k > 0 && chars[k - 1].is_whitespace() {
+                    k -= 1;
+                }
+                if k > 0 && is_terminator(chars[k - 1]) {
+                    break;
+                }
+            }
+            start -= 1;
+        }
+        while start < chars.len() && chars[start].is_whitespace() {
+            start += 1;
+        }
+        if start >= chars.len() {
+            return None;
+        }
+        let mut end = start;
+        while end < chars.len() {
+            if is_terminator(chars[end]) {
+                while end + 1 < chars.len() && is_terminator(chars[end + 1]) {
+                    end += 1;
+                }
+                if end + 1 >= chars.len() || chars[end + 1].is_whitespace() {
+                    break;
+                }
+            }
+            end += 1;
+        }
+        let mut rem = count - 1;
+        while rem > 0 {
+            let mut s = end + 1;
+            while s < chars.len() && chars[s].is_whitespace() {
+                s += 1;
+            }
+            if s >= chars.len() {
+                break;
+            }
+            let mut e = s;
+            while e < chars.len() {
+                if is_terminator(chars[e]) {
+                    while e + 1 < chars.len() && is_terminator(chars[e + 1]) {
+                        e += 1;
+                    }
+                    if e + 1 >= chars.len() || chars[e + 1].is_whitespace() {
+                        break;
+                    }
+                }
+                e += 1;
+            }
+            end = e;
+            rem -= 1;
+        }
+        let end_idx = (end + 1).min(chars.len());
+        let final_end = if inner {
+            end_idx
+        } else {
+            let mut e = end_idx;
+            while e < chars.len() && chars[e].is_whitespace() && chars[e] != '\n' {
+                e += 1;
+            }
+            e
+        };
+        Some((idx_to_pos(start), idx_to_pos(final_end)))
+    }
+
+    /// Cursor samples for the corpus below: every cell of every row plus
+    /// a couple of positions past each row's end (the cursor column is
+    /// not clamped, so past-EOL cursors are valid inputs too).
+    fn cursor_samples(content: &str) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        for (row, line) in content.split('\n').enumerate() {
+            let len = line.chars().count();
+            for col in 0..=len + 2 {
+                out.push((row, col));
+            }
+        }
+        out
+    }
+
+    /// Corpus covering the sentence-boundary rules: mid-line terminators,
+    /// terminator runs, closing punctuation, trailing whitespace, EOL
+    /// terminators, blank lines, all-whitespace rows, and buffers with no
+    /// terminator at all. The big-buffer case (sentence boundaries further
+    /// than the scan window from the cursor) is appended at run time so the
+    /// window-clip fallback is exercised too.
+    const CORPUS: &[&str] = &[
+        "",
+        "\n",
+        "One.",
+        "One.\n",
+        "One. Two.",
+        "One. Two.\n",
+        "One. Two. Three!",
+        "One? Two!",
+        "One.  Two.",
+        "One. \nTwo.",
+        "One.\nTwo.",
+        "One.\n\nTwo.",
+        "One.\n\n\nTwo.",
+        "One.   \n   Two.",
+        "One.   \n \n   Two.",
+        "One.) Two.",
+        "One.\" Two.",
+        "One.'] Two.",
+        "Hello world",
+        "Hello world\n",
+        "  One.  Two.  ",
+        "One. Two",
+        "Really?! Yes.",
+        "A.\nB.\nC.",
+        "First sentence. Second one.\n\nThird.",
+        "\n\n",
+        "One.\n\n",
+    ];
+
+    fn corpus_buffers() -> Vec<String> {
+        let mut bufs: Vec<String> = CORPUS.iter().map(|s| (*s).to_string()).collect();
+        // A sentence with no boundary within ±200 rows of the cursor forces
+        // the windowed scan onto its full-buffer fallback.
+        bufs.push("x\n".repeat(300) + "One. Two.\n" + &"y\n".repeat(300));
+        bufs
+    }
+
+    /// Every corpus buffer × every cursor sample × both directions: the
+    /// row-by-row scan must agree with the old full-buffer scan.
+    #[test]
+    fn sentence_boundary_matches_full_scan_on_corpus() {
+        for buf in corpus_buffers() {
+            let mut ed = make_editor(&buf);
+            for (row, col) in cursor_samples(&buf) {
+                ed.set_cursor_quiet(row, col);
+                for forward in [true, false] {
+                    assert_eq!(
+                        sentence_boundary(&ed, forward),
+                        old_sentence_boundary(&ed, forward),
+                        "buffer {:?} cursor ({row},{col}) forward={forward}",
+                        buf
+                    );
+                }
+            }
+        }
+    }
+
+    /// The same corpus: the windowed sentence scan must produce the same
+    /// ranges as the old full-buffer scan, for `is` and `as`.
+    #[test]
+    fn sentence_text_object_matches_full_scan_on_corpus() {
+        for buf in corpus_buffers() {
+            let mut ed = make_editor(&buf);
+            for (row, col) in cursor_samples(&buf) {
+                ed.set_cursor_quiet(row, col);
+                for inner in [true, false] {
+                    assert_eq!(
+                        sentence_text_object(&ed, inner, 1),
+                        old_sentence_text_object(&ed, inner, 1),
+                        "buffer {:?} cursor ({row},{col}) inner={inner}",
+                        buf
+                    );
+                }
+            }
+        }
+    }
 }

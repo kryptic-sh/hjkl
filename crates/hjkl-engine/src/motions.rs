@@ -873,13 +873,19 @@ fn move_screen_vertical<B: Cursor + Query>(
     let cursor = read_cursor(buf);
     let want = sticky_col.unwrap_or(cursor.col);
     *sticky_col = Some(want);
-    let line = read_line(buf, cursor.row);
-    let segs = wrap::wrap_segments(&line, viewport.text_width, viewport.wrap);
+    // The current row's wrap layout is computed ONCE here and threaded
+    // through `step_screen`; it is only recomputed when a step crosses
+    // into a different document row (the cross-row branches below). The
+    // old code re-read and re-wrapped the current line on EVERY step, so
+    // walking down a 10-segment wrapped line recomputed the same layout
+    // ten times per keystroke.
+    let mut line = read_line(buf, cursor.row);
+    let mut segs = wrap::wrap_segments(&line, viewport.text_width, viewport.wrap);
     let seg_idx = wrap::segment_for_col(&segs, cursor.col);
     let visual_col = cursor.col.saturating_sub(segs[seg_idx].0);
     let down = delta > 0;
     for _ in 0..delta.unsigned_abs() {
-        if !step_screen(buf, folds, viewport, down, visual_col) {
+        if !step_screen(buf, folds, viewport, down, visual_col, &mut line, &mut segs) {
             break;
         }
     }
@@ -889,48 +895,53 @@ fn move_screen_vertical<B: Cursor + Query>(
 /// One visual-row step under wrap. Returns false when stepping
 /// would leave the buffer (top of buffer for `down=false`,
 /// bottom for `down=true`).
+///
+/// `line`/`segs` are the CURRENT row's content and wrap layout,
+/// threaded from the caller (or from a previous cross-row step) so the
+/// wrap is not recomputed per step. The cross-row branches replace them
+/// with the next/prev row's layout exactly once.
 fn step_screen<B: Cursor + Query>(
     buf: &mut B,
     folds: &dyn FoldProvider,
     viewport: &hjkl_buffer::Viewport,
     down: bool,
     visual_col: usize,
+    line: &mut String,
+    segs: &mut Vec<(usize, usize)>,
 ) -> bool {
     let cursor = read_cursor(buf);
-    let line = read_line(buf, cursor.row);
-    let segs = wrap::wrap_segments(&line, viewport.text_width, viewport.wrap);
-    let seg_idx = wrap::segment_for_col(&segs, cursor.col);
+    let seg_idx = wrap::segment_for_col(segs, cursor.col);
     let row_count = content_row_count(buf);
     if down {
         if seg_idx + 1 < segs.len() {
             let (s, e) = segs[seg_idx + 1];
-            let target = clamp_to_segment(s, e, visual_col, &line);
+            let target = clamp_to_segment(s, e, visual_col, line);
             write_cursor(buf, Position::new(cursor.row, target));
             return true;
         }
         let Some(next_row) = folds.next_visible_row(cursor.row, row_count) else {
             return false;
         };
-        let next_line = read_line(buf, next_row);
-        let next_segs = wrap::wrap_segments(&next_line, viewport.text_width, viewport.wrap);
-        let (s, e) = next_segs[0];
-        let target = clamp_to_segment(s, e, visual_col, &next_line);
+        *line = read_line(buf, next_row);
+        *segs = wrap::wrap_segments(line, viewport.text_width, viewport.wrap);
+        let (s, e) = segs[0];
+        let target = clamp_to_segment(s, e, visual_col, line);
         write_cursor(buf, Position::new(next_row, target));
         true
     } else {
         if seg_idx > 0 {
             let (s, e) = segs[seg_idx - 1];
-            let target = clamp_to_segment(s, e, visual_col, &line);
+            let target = clamp_to_segment(s, e, visual_col, line);
             write_cursor(buf, Position::new(cursor.row, target));
             return true;
         }
         let Some(prev_row) = folds.prev_visible_row(cursor.row) else {
             return false;
         };
-        let prev_line = read_line(buf, prev_row);
-        let prev_segs = wrap::wrap_segments(&prev_line, viewport.text_width, viewport.wrap);
-        let (s, e) = *prev_segs.last().unwrap_or(&(0, 0));
-        let target = clamp_to_segment(s, e, visual_col, &prev_line);
+        *line = read_line(buf, prev_row);
+        *segs = wrap::wrap_segments(line, viewport.text_width, viewport.wrap);
+        let (s, e) = *segs.last().unwrap_or(&(0, 0));
+        let target = clamp_to_segment(s, e, visual_col, line);
         write_cursor(buf, Position::new(prev_row, target));
         true
     }
@@ -2107,6 +2118,29 @@ mod tests {
         {
             let f = folds(&b);
             move_screen_down(&mut b, &f, &v, 2, &mut sticky, 4);
+        }
+        assert_eq!(at(&b), Position::new(0, 8));
+    }
+
+    /// `gj` walks one screen segment at a time down a wrapped line. The
+    /// line "abcdefghijklmnop" at text_width 4 wraps into segments
+    /// (0,4), (4,8), (8,12), (12,16); from col 0 the first two steps must
+    /// land on cols 4 and 8 — the wrap layout must NOT be recomputed per
+    /// step (each step lands where the manual trace puts it).
+    #[test]
+    fn screen_down_steps_through_segments_manual_trace() {
+        let mut b = View::from_str("abcdefghijklmnop");
+        let v = make_wrap_viewport(Wrap::Char, 4);
+        b.set_cursor(Position::new(0, 0));
+        let mut sticky = None;
+        {
+            let f = folds(&b);
+            move_screen_down(&mut b, &f, &v, 1, &mut sticky, 4);
+        }
+        assert_eq!(at(&b), Position::new(0, 4));
+        {
+            let f = folds(&b);
+            move_screen_down(&mut b, &f, &v, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(0, 8));
     }
