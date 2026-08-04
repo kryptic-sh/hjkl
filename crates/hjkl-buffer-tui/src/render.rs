@@ -904,6 +904,19 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
             let mut ig_doc_row = top_row;
             let mut ig_screen_row: u16 = 0;
             while ig_doc_row < total_rows && ig_screen_row < area.height {
+                // Diff-mode filler rows (#250): the main pass paints blank
+                // tinted rows immediately above each real line and advances
+                // `screen_row` for each; advance past them here too, so
+                // guides land on the correct screen rows instead of the
+                // fillers.
+                if let Some(df) = self.diff_filler {
+                    let count = df.count_before(ig_doc_row);
+                    ig_screen_row =
+                        ig_screen_row.saturating_add(count.min(usize::from(area.height)) as u16);
+                    if ig_screen_row >= area.height {
+                        break;
+                    }
+                }
                 if folds.iter().any(|f| f.hides(ig_doc_row)) {
                     ig_doc_row += 1;
                     continue;
@@ -970,29 +983,23 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
         // concern. Overlays beyond the visible horizontal scroll are
         // skipped silently.
         if matches!(wrap_mode, Wrap::None) && !self.diag_overlays.is_empty() {
-            // Build a doc_row → screen_row map from the first pass.
-            // We re-walk the viewport range instead of storing a map to
-            // keep memory allocation proportional to the viewport.
+            // Resolve each overlay's doc row to its screen row through the
+            // doc→screen mapping the main pass already recorded in
+            // `screen_to_doc`. That mapping accounts for diff-filler rows
+            // (which push real rows down) and closed folds; rows never
+            // painted (past EOB, hidden by a fold) have no entry and their
+            // overlays are skipped. Wrap::None paints each doc row on exactly
+            // one screen row, so the lookup is unambiguous.
             let vp_top = top_row;
             let vp_bot = vp_top + area.height as usize;
             for overlay in self.diag_overlays {
                 if overlay.row < vp_top || overlay.row >= vp_bot {
                     continue;
                 }
-                // Compute screen row: count non-hidden rows from vp_top
-                // to overlay.row.
-                let mut sr: u16 = 0;
-                let mut dr = vp_top;
-                while dr < overlay.row && sr < area.height {
-                    if !folds.iter().any(|f| f.hides(dr)) {
-                        sr += 1;
-                    }
-                    dr += 1;
-                }
-                if sr >= area.height {
+                let Some(sr) = screen_to_doc.iter().position(|&d| d == Some(overlay.row)) else {
                     continue;
-                }
-                let y = text_area.y + sr;
+                };
+                let y = text_area.y + sr as u16;
                 // Paint the char columns in the overlay range, clamped
                 // to the horizontal scroll window and text area width.
                 let col_start = overlay.col_start;
@@ -4347,6 +4354,95 @@ mod tests {
         let _term = run_render(view, 10, 3);
     }
 
+    #[test]
+    fn diag_overlay_accounts_for_diff_filler_rows() {
+        // DiffFiller paints 2 blank rows immediately above doc row 5, so doc
+        // row 5 ("hello") lands at screen row 7 (rows 0-4 at 0-4, fillers at
+        // 5-6). The overlay must underline screen row 7 — NOT the filler rows.
+        let b = View::from_str("a\nb\nc\nd\ne\nhello");
+        let v = vp(20, 10);
+        let df = DiffFiller {
+            before: vec![(5, 2)],
+            style: Style::default(),
+        };
+        let overlay = DiagOverlay {
+            row: 5,
+            col_start: 0,
+            col_end: 5,
+            style: Style::default().add_modifier(Modifier::UNDERLINED),
+        };
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            cursor_line_row: None,
+            cursor_column: None,
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default().bg(Color::Blue),
+            cursor_style: Style::default().add_modifier(Modifier::REVERSED),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            search_ranges: None,
+            non_text_style: Style::default(),
+            show_eob: true,
+            diag_overlays: &[overlay],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
+            listchars: None,
+            indent_guides_enabled: false,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::Reset,
+            indent_guide_active_fg: Color::Reset,
+            indent_guide_active_col: None,
+            fold_line_bg: Style::default(),
+            folds_override: None,
+            eol_hints: &[],
+            blame_plan: None,
+            diff_filler: Some(&df),
+            background: Style::default(),
+        };
+        let term = run_render(view, 20, 10);
+
+        // Filler rows (screen 5-6) must NOT carry the overlay.
+        for y in [5u16, 6u16] {
+            assert!(
+                !term
+                    .cell((0, y))
+                    .unwrap()
+                    .modifier
+                    .contains(Modifier::UNDERLINED),
+                "filler row {y} must not carry the diag overlay"
+            );
+        }
+        // Doc row 5 ("hello") paints below the fillers at screen row 7; its
+        // cells must be underlined there.
+        for x in 0u16..5 {
+            assert!(
+                term.cell((x, 7))
+                    .unwrap()
+                    .modifier
+                    .contains(Modifier::UNDERLINED),
+                "cell ({x}, 7) must be underlined (doc row 5, below fillers)"
+            );
+        }
+        // Screen row 8 (past the buffer) must not be underlined.
+        assert!(
+            !term
+                .cell((0, 8))
+                .unwrap()
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "row 8 must not be underlined (no overlay past doc row 5)"
+        );
+    }
+
     // ── T5: dedicated sign-column tests ──────────────────────────────────────
 
     /// A sign on row 0 must render in the sign column (x=0) and NOT overwrite
@@ -4747,6 +4843,76 @@ mod tests {
             ":",
             "custom guide char ':' at col 4"
         );
+    }
+
+    #[test]
+    fn indent_guides_account_for_diff_filler_rows() {
+        // DiffFiller paints 2 blank rows immediately above doc row 5, so doc
+        // rows 5-6 (8 leading spaces, guide at col 4) land at screen rows 7-8
+        // (rows 0-4 at 0-4, fillers at 5-6). Guides must follow the same
+        // mapping — they used to paint 2 rows too high, onto the fillers.
+        let b = View::from_str("a\nb\nc\nd\ne\n        f\n        g");
+        let v = vp(20, 10);
+        let df = DiffFiller {
+            before: vec![(5, 2)],
+            style: Style::default(),
+        };
+        let view = BufferView {
+            buffer: &b,
+            viewport: &v,
+            selection: None,
+            resolver: &(no_styles as fn(u32) -> Style),
+            cursor_line_bg: Style::default(),
+            cursor_line_row: None,
+            fold_line_bg: Style::default(),
+            folds_override: None,
+            cursor_column: None,
+            cursor_column_bg: Style::default(),
+            selection_bg: Style::default(),
+            cursor_style: Style::default(),
+            gutter: None,
+            search_bg: Style::default(),
+            signs: &[],
+            conceals: &[],
+            spans: &[],
+            search_pattern: None,
+            search_ranges: None,
+            non_text_style: Style::default(),
+            show_eob: true,
+            diag_overlays: &[],
+            colorcolumn_cols: &[],
+            colorcolumn_style: Style::default(),
+            listchars: None,
+            indent_guides_enabled: true,
+            indent_guide_char: '│',
+            indent_guide_shiftwidth: 4,
+            indent_guide_fg: Color::DarkGray,
+            indent_guide_active_fg: Color::Gray,
+            indent_guide_active_col: None,
+            eol_hints: &[],
+            blame_plan: None,
+            diff_filler: Some(&df),
+            background: Style::default(),
+        };
+        let term = run_render(view, 20, 10);
+
+        // Filler rows (screen 5-6) must NOT carry guides.
+        for y in [5u16, 6u16] {
+            assert_ne!(
+                term.cell((4, y)).unwrap().symbol(),
+                "│",
+                "filler row {y} must not carry an indent guide"
+            );
+        }
+        // Doc rows 5-6 paint below the fillers at screen rows 7-8 and must
+        // carry a guide at col 4.
+        for y in [7u16, 8u16] {
+            assert_eq!(
+                term.cell((4, y)).unwrap().symbol(),
+                "│",
+                "doc row at screen {y} must carry an indent guide"
+            );
+        }
     }
 
     #[test]
