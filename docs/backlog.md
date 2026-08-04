@@ -5,6 +5,27 @@ use symbol names rather than line numbers so references survive refactors.
 
 ## 1. Open work — ranked
 
+### 1.0 v0.41.0 is published everywhere except AUR
+
+`hjkl-bin` on the AUR is still `0.40.0-1`. The `Publish hjkl-bin to AUR` job in
+run `30858075595` failed twice — both times at `git clone`, on AUR's
+`The AUR is down due to maintenance. We will be back soon.`, still down an hour
+later. Nothing in this repo is wrong and nothing is half-written: the job clones
+before it stages, and it guards its own push with `git diff --cached --quiet` →
+`exit 0`, so it is safe to re-run any number of times.
+
+To finish: `gh run rerun 30858075595 --failed`, once
+`git ls-remote ssh://aur@aur.archlinux.org/hjkl-bin.git` succeeds. Check THAT,
+not `https://aur.archlinux.org/` and not `ssh aur@aur.archlinux.org` — both
+answer normally while the git service is in maintenance, which is what made the
+first re-run premature. Verify after with the RPC:
+`curl 'https://aur.archlinux.org/rpc/v5/info?arg[]=hjkl-bin'`.
+
+Everything else in v0.41.0 landed and was verified against the registries rather
+than the job statuses: 59/59 crates at 0.41.0 on crates.io, the GitHub release
+live with 24 assets, Homebrew published, Alpine apk built, all seven build
+targets green.
+
 ### 1.1 Undo-tree follow-ups
 
 - `lowest_offpath_leaf` / `prune_root_side` still test path membership with
