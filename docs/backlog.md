@@ -74,16 +74,6 @@ targets green.
   fixes the offset anyway: `depths_from_root` recomputes from the new root on
   load. Not worth a change.
 
-### 1.2 Swap `SerTree.base` duplicates the document
-
-`crates/hjkl-app/src/swap.rs` stores the document roughly twice: once as the
-streamed body and once as `SerTree.base`. A single-node tree on a 20 000-line
-document serializes in ~99 µs; marginal node cost is only ~30–40 ns.
-
-De-duplicate `base` against the streamed body. Do not implement the append-only
-delta log paired with issue #302: it attacks node count, not the base copy or
-`fsync`. Worst measured cell is 457 µs, so urgency is low.
-
 ### 1.3 Round-2 deferred items
 
 | Item                           | Where                                                  | Why deferred                                                                                          |
@@ -98,11 +88,9 @@ delta log paired with issue #302: it attacks node count, not the base copy or
 
 ### 1.4 LSP and span follow-ups
 
-| Item                                                | Where                                       | Note                                                                                                                                                                                 |
-| --------------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| LSP full-sync still copies once                     | `hjkl-lsp/src/runtime.rs`, `server.rs`      | `Buffer::content_joined()` caches the `Arc`, so `Arc::unwrap_or_clone` cannot move. Avoiding the copy requires direct serialization instead of an intermediate `serde_json::Value`.  |
-| `attach_buffer` copies at the boundary              | `hjkl-lsp/src/manager.rs` (`attach_buffer`) | Takes `text: &str` and calls `text.to_string()`. Change the boundary ownership model.                                                                                                |
-| `styled_spans` cannot be removed — `sqeel` reads it | `hjkl-engine/src/editor.rs`                 | `sqeel-tui` pins published `hjkl-engine` and reads the field (one `mem::take`, two `clone`s). Removing it needs a supported accessor in `sqeel` first. The field documents this now. |
+| Item                                                | Where                       | Note                                                                                                                                                                                 |
+| --------------------------------------------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `styled_spans` cannot be removed — `sqeel` reads it | `hjkl-engine/src/editor.rs` | `sqeel-tui` pins published `hjkl-engine` and reads the field (one `mem::take`, two `clone`s). Removing it needs a supported accessor in `sqeel` first. The field documents this now. |
 
 **The block-row marker is a convention, not a type (2026-08-02).** A span whose
 `end_byte` is exactly one byte past its row's content means "multi-row span
@@ -315,32 +303,6 @@ caught by running `cargo test -p hjkl-syntax --lib -- --ignored` by hand.
 `incremental_path_matches_cold_for_small_edit` sat red at HEAD for the whole of
 the 2026-08-02 audit for exactly that reason (fixed 2026-08-04).
 
-### 1.4c Swap still derives its directory from the environment (2026-08-02)
-
-The trash half of this is done: `hjkl_app::trash::TrashRoot` carries an explicit
-root through `trash_path_in`, the explorer pane owns one
-(`ExplorerPane:: trash_root`), and no explorer test touches `XDG_CACHE_HOME` any
-more. `CwdGuard::set_env` is gone with them.
-
-`hjkl_app::swap` was NOT converted and still resolves
-`$XDG_CACHE_HOME/hjkl/ swap` on every call (`swap_dir`, `swap_path_for`,
-`scratch_swap_path`). One test still overrides the variable for it:
-`scratch_buffer_writes_swap_when_dirty` in `apps/hjkl/src/app/tests/ex.rs`, via
-`EnvVarGuard` — the only remaining `EnvVarGuard` user in the `hjkl` binary.
-
-It is the same shape and the same fix (a `SwapRoot` beside `TrashRoot`), but a
-wider one: the swap directory is resolved from `App::build_slot`,
-`write_swap_for_slot`, `arm_swap_on_open`, `recover_orphan_scratch_buffers` and
-`main`'s `-r` handler, so the root has to reach `App` itself rather than one
-pane. Deliberately left out of the trash change to keep its blast radius to the
-explorer.
-
-Not currently known to cause a flake: unlike the trash case, the swap override
-points at a `TempDir` that is not also an explorer root, so the directory a
-concurrent test creates inside it is never enumerated by anything. The hazard is
-the reverse direction — while that test holds the override, any other test's
-swap is written under its `TempDir` and vanishes when it drops.
-
 ### 1.5 Remaining differential-oracle divergences
 
 Every entry below was reproduced through
@@ -429,21 +391,29 @@ on its own.
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
 keys. A corpus case would need the ex layer driven some other way.
 
-**The differential fuzzer still reports 77 divergences at seed 777** (89 before
-the 2026-08-02 pass, 84 after it, then 83 with the counted-`$` failure rule, 78
-with the backward-word-motion rewrite and 77 with the blockwise-shift geometry,
-all 2026-08-04). The bulk are the known-excluded classes named in §5 (`u` / undo
-against the seeded nvim fixture, blockwise `<C-v>` non-delete operators) plus
-the entries above.
+**The differential fuzzer reports 69 distinct divergences at seed 777** (89
+before the 2026-08-02 pass, 84 after it, then 83 with the counted-`$` failure
+rule, 78 with the backward-word-motion rewrite, 77 with the blockwise-shift
+geometry, all 2026-08-04, and 69 after the harness cleared nvim's undo history
+post-seeding and enabled search / fold / `gq` tokens — the `u`/undo noise class
+is gone and the remaining `u` divergences are real post-edit undo parity). The
+bulk are the known-excluded blockwise `<C-v>` non-delete operators plus the
+entries above.
 `cargo run -p hjkl-compat-oracle --release --example difffuzz -- 400 777`
 reproduces the list; build with `--examples`, not `--example difffuzz`, or the
 other binary goes stale.
 
 ### 1.6 Cursor-move API migration
 
-`Move` and the debug invariant shipped; remaining phases are:
+`Move` and the debug invariant shipped; phase 1 (hjkl-vim's motion dispatch)
+landed 2026-08-04 — every `Motion` variant is classified (Vertical / Jump /
+Horizontal, no plain motion is Raw) and `execute_motion` + the `+`/`-`/`_`
+inline arms re-move the landed cursor through `Editor::move_cursor` instead of
+the deleted `apply_sticky_col` catch-all; the debug invariant never fired and
+the oracle divergence counts were unchanged. Remaining phases:
 
-1. Migrate remaining `hjkl-engine` motions to `Editor::move_cursor`.
+1. ~~Migrate remaining `hjkl-engine` motions to `Editor::move_cursor`.~~ (done
+   2026-08-04)
 2. Migrate `hjkl-vim` motion, command, bridge, visual, and operator paths. Fix
    insert paths first, then visual yank, then normal operators/edits; widen the
    invariant after each class is clean.
@@ -511,11 +481,6 @@ unknown.
 
 #### Smaller, unclaimed
 
-- **`:set` write-through is TUI-only.** `--headless` and `--embed` call
-  `hjkl_ex::try_dispatch` directly rather than going through `App::dispatch_ex`,
-  so a `:set` in those modes applies to the session and is never persisted.
-  Defensible for non-interactive modes, but it was an implementation call, not a
-  stated decision.
 - **Bare `:!cmd` gives the child no tty.** `hjkl-ex/src/shell.rs` runs it under
   `Command::output()`, which captures stdout and hands the child a null stdin,
   so `:!git commit` or `:!less` cannot work. Vim suspends the TUI and passes the
@@ -542,7 +507,7 @@ policy in `hjkl_fs::project`. What they left behind, none of it blocking.
 **`:set explorer.open=…` is a string match, not a registry option.** It is
 handled in `App::dispatch_ex`'s host-owned pre-pass, beside `mouse` and
 `endofline`, because the left dock is host state with no engine `Settings` field
-to hang it on. Three consequences follow, and they are the same ones `mouse` and
+to hang it on. Two consequences follow, and they are the same ones `mouse` and
 `endofline` already have — this joins that group rather than creating it:
 
 - `hjkl_engine::options_registry` does not know the name, so `:set all` omits it
@@ -550,12 +515,11 @@ to hang it on. Three consequences follow, and they are the same ones `mouse` and
 - Only `=true` / `=false` / `?` parse. `:set explorer.open` bare and
   `:set noexplorer.open` are not accepted; the dotted name makes the vim-style
   `no` prefix read badly, which is why it was left out rather than forgotten.
-- **`--headless` and `--embed` never reach the pre-pass at all.** `headless.rs`
-  and `embed.rs` call `hjkl_ex::try_dispatch` against an `Editor` directly, so
-  the token falls through to the engine's `:set` and is rejected as unknown.
-  Neither mode has an explorer, so nothing is lost today — but it is the same
-  root cause as "`:set` write-through is TUI-only" in §1.8, and one fix (routing
-  those modes through a shared host pre-pass) would close both.
+
+(The third consequence — headless/embed never reaching the pre-pass, and with it
+the §1.8 `:set` write-through item — shipped 2026-08-04: all three modes share
+one `set_tokens` interception pass, and headless/embed staying session-only is
+now a stated decision; see the Record.)
 
 **`explorer.width` still persists on interactive resize.** `<C-w><`/`<C-w>>` and
 a border drag write it immediately, while `explorer.open` now only moves on an
@@ -603,8 +567,6 @@ with ripgrep installed are unaffected.
 
 ### 1.7 Harness, coverage, and hardening
 
-- Clear nvim undo history after fixture seeding, then fuzz undo/redo. Add
-  ex/search, fold, and `gq` coverage.
 - **The Wayland mock's `reset()` does not tell the client anything
   (2026-08-02).** `MockState::reset` clears `offer_payloads` and the pending
   offers, but sends no `data_offer` teardown and no null selection, so the
@@ -778,45 +740,13 @@ with ripgrep installed are unaffected.
 
 ### 1.10 Left open by the 2026-08-04 code review
 
-- **Default-scope `:g`/`:v` still iterates the phantom trailing row.**
-  `crates/hjkl-ex/src/global.rs` default scope walks the raw `row_count()`, so a
-  default-scope `:g` runs its command on ropey's phantom empty row too. Explicit
-  `%`/`$` ranges were fixed (they now go through `content_row_count` in
-  `crates/hjkl-ex/src/range.rs`); the default-scope path was left because it was
-  out of the review's range.rs scope. Same phantom-row class as the `$` fix.
-- **`replace_all` skips the change-log emission `mutate_edit` performs.**
-  `Editor::mutate_edit` extends the change log (`editor.rs` `extend_change_log`)
-  and pushes pending content edits; the substitute path
-  (`crates/hjkl-engine/src/substitute.rs` `apply_substitute` /
-  `apply_collected_matches`) swaps content via `replace_all`, which does
-  neither. The marks/jumplist/folds rebase half of this class is fixed; the
-  change-log half is not.
 - **`nvim_buf_set_text` and `nvim_buf_get_text` clamp, never error, on rows past
   end-of-buffer.** Real nvim errors E966/E1206 for out-of-range rows; hjkl
   clamps to `line_count-1` (get_text) and slices clamped (set_text). Not fixed
   because the review found no client misbehaviour from the clamping.
 
-### 1.11 Left open by the 2026-08-04 performance review
-
-All ten ranked findings and six of the ten minor items shipped the same day
-(commits `5a644b11`..`ffb1d481`). Four minor allocation patterns were left:
-
-- **`collect_substitute_matches` allocates a String per row across the range**
-  (`hjkl-engine/src/substitute.rs` — `rope_line_str` per row). A 100k-line
-  `:%s///g` is ~100k allocs; per-command, so lower impact than the
-  keystroke-path items.
-- **`{` / `}` / `[[` / `]]` / `%` do a String/Vec alloc per row scanned**
-  (`hjkl-engine/src/motions.rs` — `read_line(row).chars().collect()` in the
-  paragraph/section/matching scans). Use `line_bytes(row) == 0` for the
-  emptiness test, as `content_row_count` already does, and rope-slice borrows
-  for `%`.
-- **`buf_line_chars` allocates a full line String just to count chars**
-  (`hjkl_engine::buf_helpers::buf_line_chars` —
-  `buf_line(b, row).chars().count()`). Called from `hjkl-vim`'s
-  motion/curswant/editor_ext paths, ~3× per `j`/`k`.
-- **`search_matches(...).to_vec()` clones the cached Vec per visible row per
-  frame** (`hjkl-engine/src/search.rs`). Return a borrow instead —
-  `warm_matches` already exists for the populate-only case.
+(The default-scope `:g`/`:v` phantom-row and `replace_all` change-log items
+shipped 2026-08-04 — see the Record.)
 
 ## 2. Blocked on platform access
 
@@ -965,12 +895,17 @@ skew between hjkl and `nvim --clean`.
 
 #### Not covered by the fuzzer
 
-- **Ex commands** (`:`), search prompts (`/`, `?`) — the in-process hjkl driver
-  cannot replay them.
-- **Undo / redo** — nvim fixture seeding over RPC creates an undoable change, so
-  `u` rolls back the fixture rather than the generated operation.
-- **Folds** (`z`) and `gq` — excluded to avoid config-skew noise.
+- **Ex commands** (`:`) — the in-process hjkl driver cannot replay them; they
+  are fuzzed separately by `examples/exfuzz.rs` (in-process `hjkl_ex` against
+  nvim RPC, 2026-08-04).
 - The app / window layer, LSP, and everything above the engine.
+
+Search (`/`, `?`, `n`, `N`), folds (`zf`/`zc`/`zo`/`zR`/`zM`) and `gq` ARE
+covered as of 2026-08-04: the vim FSM resolves the search prompt in-process, the
+engine applies fold ops to the in-tree view, and `textwidth` is pinned per-case
+for `gq`. Undo / redo are covered too — the nvim driver clears its undo history
+after RPC seeding (the seed was one undoable change), so `u` / `<C-r>` diff
+against empty undo trees on both sides.
 
 Non-ASCII is covered as of 2026-08-04: `nvim_driver` converts between nvim's
 byte columns and the corpus's char columns in both directions, so `tier1.toml`
@@ -1135,3 +1070,41 @@ names, a drop-in subprocess replacement for `nvim --headless --embed`). The
 nvim-api path (`HJKL_ORACLE_NVIM_API=1`); `known_divergences.toml` is empty
 because those cases graduated into their own tier. The spec's binding
 conventions are recorded under Standing constraints.
+
+### Backlog-work session 2026-08-04 (the items pruned from §1 above)
+
+- **Default-scope `:g` / `:v` phantom row** (`2cc64cca`) — no-range scope now
+  uses `hjkl_engine::motions::content_row_count` (made pub; hjkl-ex's inlined
+  copy deleted), so `:g/^$/d` on `"a\nb\n"` deletes nothing. Three regression
+  tests.
+- **`:s` host records** (`3248f9aa`) — both `replace_all` paths emit one coarse
+  whole-buffer Replace on the change log plus the content-reset flag, matching
+  the `set_content` whole-buffer contract; syntax/LSP/diff consumers now see
+  substitutes.
+- **Per-row alloc cuts** (`c8dbf8b1`) — the four §1.11 minors: substitute match
+  collector, paragraph/section/paren motions (`line_bytes` + rope-slice
+  borrows), `buf_line_chars`, `search_matches` borrow. Measured −18%…−40% on a
+  100k-line buffer.
+- **SwapRoot** (`49e1c1bc`) — `hjkl_app::swap::SwapRoot` beside `TrashRoot`; App
+  carries it, all swap-dir resolution routes through it, the last `EnvVarGuard`
+  is deleted. `-r` keeps the Xdg default.
+- **Shared `:set` host tokens** (`c8e76ea2`) — `set_tokens` module with a
+  `SetHost` trait used by the TUI, `--headless` and `--embed`; mouse /
+  explorer.open are no-ops in the non-TUI modes, and their `:set` staying
+  session-only is now the stated decision (was "an implementation call").
+- **Oracle harness** (`fb28145e`) — nvim's undo history is cleared after RPC
+  seeding (difffuzz 777: 77 → 69 divergences, the `u` noise gone); new `exfuzz`
+  example (19 ex shapes, 21 divergences at its seed); `/` `?` `n` `N` and
+  `zf`/`zc`/`zo`/`zR`/`zM` + `gqq`/`gqj`/`gq}` enabled in difffuzz (search
+  agrees, fold/gq surface real cursor divergences); probes in
+  `tests/harness_probes.rs`. The 69 difffuzz / 21 exfuzz divergences remain open
+  as parity work.
+- **§1.6 phase 1** (`ca31a06a`) — motion dispatch onto `Editor::move_cursor`;
+  `apply_sticky_col` deleted. Phases 2–5 remain.
+- **Swap base dedup** (`0e4e2978`) — `SerTree.base` is `Option<String>`;
+  single-node trees write `base: None` (the body IS the base) and the reader
+  re-substitutes. Undo section 1.22 MB → 26 bytes on a 20k-line tree.
+- **LSP borrowed full-doc sync** (`4838886f`) — `didOpen` / full `didChange`
+  serialize straight from the shared `Arc` (`*_borrowed` params + a Serialize
+  envelope), attach boundary carries the Arc; wire bytes unchanged, one
+  full-document copy eliminated (~1.22 MB).

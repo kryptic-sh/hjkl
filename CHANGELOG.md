@@ -55,6 +55,46 @@ patch bumps.
   kept a real column when `max_cols` was 1 and the per-column minimum was
   applied after scaling, so a 2-column table could render 13 cells wide in a
   10-cell viewport.
+- **Default-scope `:g` / `:v` no longer iterate ropey's phantom trailing row**
+  of a newline-terminated buffer. The no-range arm scanned the raw row count; it
+  now uses the same content row count the `$`/`%` range fix does, so `:g/^$/d`
+  on `"a\nb\n"` deletes nothing instead of stripping the final newline. The
+  shared helper is now `hjkl_engine::motions::content_row_count`, replacing
+  hjkl-ex's inlined copy.
+- **`:s` now emits the same host records a `mutate_edit` edit would**: one
+  coarse whole-buffer Replace on the change log plus the content-reset flag, so
+  syntax reparse, LSP and diff consumers observe the substitute. The substitute
+  path swapped content via `replace_all`, which emitted neither.
+
+### Changed
+
+- **`--headless` and `--embed` accept the host-owned `:set` tokens** (`mouse`,
+  `endofline`, `explorer.open`) instead of rejecting them as unknown options.
+  The TUI, headless and embed now share one `set_tokens` interception pass;
+  mouse and explorer.open are no-ops without a terminal or explorer, and `:set`
+  in those modes stays session-only (they load no config file) — a stated
+  decision now, not an accident.
+
+### Performance
+
+- **Cut per-row allocations on the keystroke hot paths.** The substitute match
+  collector no longer materializes a String per row across the range;
+  paragraph/section/paren motions test emptiness via `line_bytes` and borrow
+  rope chunks instead of a String + `Vec<char>` per row; `buf_line_chars` counts
+  chars through the rope; `search_matches` returns its cached row borrow instead
+  of cloning it per visible row per frame. Measured on a 100k-line buffer
+  (release): substitute −19%, paragraph −29%, section −21%, paren −40%,
+  buf_line_chars −18%, search_matches −28%.
+- **Swap files no longer store the document twice for a single-node undo tree.**
+  The undo section's root base is byte-identical to the streamed body in that
+  case, so it is dropped on write and re-derived from the body on recovery.
+  Measured on a 20k-line tree: undo section 1.22 MB → 26 bytes, whole file −1.22
+  MB, serialization 292 µs → 1.5 µs.
+- **LSP full-document sync no longer copies the buffer.** `didOpen` and full
+  `didChange` serialize the shared `content_joined()` text straight from the
+  `Arc` into the JSON-RPC frame instead of cloning it into a
+  `serde_json::Value`. Wire bytes are unchanged. Measured on a 1.2 MB document:
+  one full-document copy eliminated (−1.22 MB allocated).
 
 ## [0.41.0] - 2026-08-04
 
