@@ -16,15 +16,25 @@
 //!
 //! # Seed scan
 //!
-//! When the highlight range starts mid-buffer the pass walks up to 500
-//! lines backward (string-scan fallback) to seed the inherited colour so
-//! the first visible comment already has the right tint.
+//! When the highlight range starts mid-buffer the pass walks backward
+//! (bounded by `SEED_SCAN_CAP` lines) to seed the inherited colour so the
+//! first visible comment already has the right tint. The walk stops at the
+//! first line that decides the seed — a comment line with a marker, or a
+//! non-comment line that resets the colour — instead of always scanning the
+//! whole window.
 
 use std::ops::Range;
 use std::sync::Arc;
 
 use crate::highlighter::HighlightSpan;
 use crate::rope_slice::{ceil_char_boundary, floor_char_boundary};
+
+/// Max lines the seed scan walks backward from the first comment to find the
+/// inherited colour (and thus how far above the first comment the seed
+/// window may need to reach). Bounded so the scan never touches the whole
+/// buffer — a seed beyond the bound is simply missed, exactly as the
+/// historical fixed window already missed it.
+const SEED_SCAN_CAP: usize = 500;
 
 // ---------------------------------------------------------------------------
 // Public API types
@@ -253,101 +263,111 @@ impl CommentMarkerPass {
         spans.extend(extra);
     }
 
-    /// Scan backward from `first_comment_start` (up to 500 lines) using a
-    /// string-scan fallback to seed the inherited colour.
+    /// Scan backward from `first_comment_start` (up to [`SEED_SCAN_CAP`]
+    /// lines) using a string-scan fallback to seed the inherited colour.
+    ///
+    /// The walk goes from NEAREST line to farthest and stops at the first
+    /// line that decides the seed: a comment line with a marker (its last
+    /// marker wins) or a non-comment line (it resets the inherited colour,
+    /// so nothing above it can matter). This is exactly the decision the
+    /// historical forward walk produced — its final state is determined
+    /// solely by the suffix after its last reset — but the scan stops after
+    /// a line or two instead of always walking the whole window.
     fn seed_active<'m>(
         &'m self,
         bytes: &[u8],
         first_comment_start: usize,
     ) -> Option<&'m MarkerWord> {
-        const CAP: usize = 500;
         if first_comment_start == 0 {
             return None;
         }
-        // Walk backward from the first viewport comment via memchr's SIMD
-        // reverse newline iterator and stop after CAP+1 hits. Previously
-        // this was a per-byte linear scan of `bytes[..first_comment_start]`
-        // — on a 1.86 M-line buffer with the cursor near the bottom,
-        // that meant a ~3 MB scan per render (visible as paste lag).
-        // Bounded backward scan touches ~CAP × avg_row_len bytes
-        // regardless of where in the buffer the viewport sits.
         let prefix = &bytes[..first_comment_start];
-        let mut newline_positions: Vec<usize> =
-            memchr::memrchr_iter(b'\n', prefix).take(CAP + 1).collect();
-        // We collected from the end going back; restore forward order.
-        newline_positions.reverse();
 
-        let line_starts: Vec<usize> = {
-            // If we hit the CAP and there's earlier content we didn't
-            // scan, the very first line_start sits at the byte after the
-            // oldest newline we kept; otherwise the buffer's true start.
-            let start_at_buffer_head = newline_positions.len() <= CAP;
-            let mut v: Vec<usize> = Vec::with_capacity(newline_positions.len() + 1);
-            if start_at_buffer_head {
-                v.push(0);
-                for &nl in &newline_positions {
-                    v.push(nl + 1);
-                }
-            } else {
-                // Drop the oldest newline; its line_start would precede
-                // our scan window.
-                for &nl in &newline_positions[1..] {
-                    v.push(nl + 1);
-                }
-                // First line_start in the window is the byte after that
-                // dropped newline.
-                v.insert(0, newline_positions[0] + 1);
+        // The line containing `first_comment_start` is scanned only for its
+        // part before the comment: when the comment does not start at column
+        // 0, that prefix is a "line" of its own and a non-comment prefix
+        // resets the colour — matching the historical per-line string scan.
+        let mut start = memchr::memrchr(b'\n', prefix).map_or(0, |nl| nl + 1);
+        let mut end = first_comment_start;
+        if start == first_comment_start {
+            // Comment begins at column 0 of its own line — begin at the line
+            // above, which ends at the newline right before the comment.
+            end = start - 1;
+            start = memchr::memrchr(b'\n', &bytes[..end]).map_or(0, |nl| nl + 1);
+        }
+
+        for _ in 0..=SEED_SCAN_CAP {
+            match seed_line(&bytes[start..end], &self.markers) {
+                SeedLine::Stop(m) => return Some(m),
+                SeedLine::Reset => return None,
+                SeedLine::Inherit => {}
             }
-            // When the newline immediately preceding `first_comment_start`
-            // sits right at `first_comment_start - 1` (the common case: the
-            // viewport's first comment is the first thing on its line), the
-            // loop above pushes a spurious final entry equal to
-            // `first_comment_start` itself. That "line" is empty (its start
-            // and end coincide), so it always fails the delimiter check
-            // below and resets `active` to `None` on the very last
-            // iteration — silently discarding whatever the real preceding
-            // lines found. Drop any entry that isn't strictly before
-            // `first_comment_start`; it doesn't represent a real prior line.
-            v.retain(|&s| s < first_comment_start);
-            v
-        };
+            if start == 0 {
+                return None; // Buffer head reached — nothing further above.
+            }
+            end = start - 1;
+            start = memchr::memrchr(b'\n', &bytes[..end]).map_or(0, |nl| nl + 1);
+        }
+        None // Bound reached — anything further above is out of scope.
+    }
 
-        let mut active: Option<&'m MarkerWord> = None;
+    /// Byte offset where the seed window must start for a comment at
+    /// `first_start`: the start of the nearest line above it that carries a
+    /// marker (so the materialised window covers exactly the text the seed
+    /// scan needs), or `first_start` itself when no marker is found — a
+    /// non-comment reset or the scan bound means the seed is `None`, and the
+    /// window does not need to reach above the first comment at all.
+    ///
+    /// Reads the rows straight from the rope (one `rope.line` at a time), so
+    /// the seed scan never materialises the bytes it walks; only the span
+    /// returned here is later materialised.
+    fn seed_window_top(&self, rope: &ropey::Rope, first_start: usize) -> usize {
+        let mut scratch = String::new();
+        let first_line = rope.byte_to_line(first_start);
+        let line_start = rope.line_to_byte(first_line);
+        let mut scanned = 0usize;
 
-        for &ls in &line_starts {
-            let le = bytes[ls..]
-                .iter()
-                .position(|&b| b == b'\n')
-                .map_or(first_comment_start, |p| ls + p);
-            let le = le.min(first_comment_start);
-            let line_bytes = &bytes[ls..le];
-            // String-scan fallback: look for comment delimiters.
-            if let Some(del_off) = find_comment_delimiter(line_bytes) {
-                // Skip by the matched delimiter's actual length via
-                // `delimiter_skip` (2 bytes for `--`/`//`/`/*`, 1 byte for
-                // `#`) instead of a hardcoded `+ 2` — the hardcoded skip ate
-                // one byte of the body after a `#`, turning `#TODO:` into
-                // `ODO:` and losing the marker match.
-                let body_start = ls + delimiter_skip(line_bytes, del_off);
-                let body_end = le;
-                if body_start < body_end {
-                    let found = scan_markers(bytes, body_start, body_end, &self.markers);
-                    if let Some(last) = found.last() {
-                        active = Some(last.marker);
-                    }
-                    // else: inherit active unchanged.
-                }
-            } else {
-                // Non-comment line resets.
-                active = None;
+        // The comment's own line, up to the comment. When the comment does
+        // not start at column 0 this prefix is a "line" of its own — mirrors
+        // `seed_active`, where a non-comment prefix resets the seed. The end
+        // is floored to a char boundary: `byte_slice` panics mid-char, and
+        // the excluded bytes (continuation bytes) can never contain a
+        // delimiter or marker word, so the classification is unchanged.
+        if line_start < first_start {
+            scanned += 1;
+            let partial = rope.byte_slice(line_start..floor_char_boundary(rope, first_start));
+            match classify_rope_line(partial, &self.markers, &mut scratch) {
+                SeedLine::Stop(_) => return line_start,
+                // A reset means the seed is `None`; the window does not need
+                // to include the resetting line (or anything above it), so
+                // start at the first comment itself.
+                SeedLine::Reset => return first_start,
+                SeedLine::Inherit => {}
             }
         }
-        active
+
+        // Lines above, nearest first, bounded by SEED_SCAN_CAP lines total.
+        let mut line = first_line;
+        while line > 0 && scanned <= SEED_SCAN_CAP {
+            line -= 1;
+            scanned += 1;
+            let ls = rope.line_to_byte(line);
+            match classify_rope_line(rope.line(line), &self.markers, &mut scratch) {
+                SeedLine::Stop(_) => return ls,
+                SeedLine::Reset => return first_start,
+                SeedLine::Inherit => {}
+            }
+        }
+        // No marker within the bound (or the buffer head): seed is `None`.
+        first_start
     }
 
     /// Like [`apply`](CommentMarkerPass::apply) but reads source text from a
     /// `ropey::Rope`. Only the bytes required (a window around the comments)
-    /// are materialised — no full-document `String` allocation.
+    /// are materialised — no full-document `String` allocation. The seed scan
+    /// reads the rows above the first comment straight from the rope, so the
+    /// materialised window only reaches up to the nearest marker line (or
+    /// starts at the first comment when the seed is `None`).
     ///
     /// The algorithm is identical to `apply`; the `bytes` parameter is replaced
     /// by a window slice extracted from the rope, with absolute byte offsets
@@ -373,20 +393,28 @@ impl CommentMarkerPass {
             return;
         }
 
-        const CAP: usize = 500;
         let first_start = comments[0].start;
         let last_end = comments[comments.len() - 1].end;
         let rope_len = rope.len_bytes();
 
-        // Materialise a window: from up to CAP lines before the first comment
-        // (for the seed scan) through the last comment's end byte.
-        // We use a fixed byte cap of CAP * 200 (≈ 100 KB) as a safe upper bound
-        // instead of scanning newlines from the rope, which avoids a second pass.
-        // Both edges are snapped outward to char boundaries: the fixed byte cap
-        // (and untrusted span ends) can land mid-way through a multi-byte char,
-        // and `Rope::byte_slice` panics on non-char-boundary indices.
-        let window_start =
-            floor_char_boundary(rope, first_start.saturating_sub(CAP * 200).min(first_start));
+        // Materialise a window covering the comment spans, plus the text the
+        // seed scan needs above the first comment. The seed scan reads the
+        // rows above the first comment straight from the rope
+        // (`seed_window_top`), so the window only has to reach up to the
+        // nearest marker line it found — the old fixed `CAP * 200`-byte
+        // (~100 KB) window above the first comment is gone. When no marker
+        // is found the seed is `None` and the window starts at the first
+        // comment itself.
+        // Both edges are snapped outward to char boundaries: the seed window
+        // start (and untrusted span ends) can land mid-way through a
+        // multi-byte char, and `Rope::byte_slice` panics on non-char-boundary
+        // indices.
+        let seed_window_start = if self.inheritance && first_start > 0 && first_start <= rope_len {
+            self.seed_window_top(rope, first_start)
+        } else {
+            first_start
+        };
+        let window_start = floor_char_boundary(rope, seed_window_start.min(rope_len));
         let window_end = ceil_char_boundary(rope, last_end.min(rope_len));
 
         let window_str: String = rope.byte_slice(window_start..window_end).to_string();
@@ -621,6 +649,52 @@ fn find_comment_delimiter(line_bytes: &[u8]) -> Option<usize> {
         return line_bytes.iter().position(|&b| b == b'#');
     }
     None
+}
+
+/// What a single line contributes to the seed walk.
+enum SeedLine<'m> {
+    /// Comment line with at least one marker — `m` (the line's LAST marker)
+    /// is the seed and the walk can stop.
+    Stop(&'m MarkerWord),
+    /// Not a comment line — the inherited colour resets and the walk can
+    /// stop, because nothing above the reset can matter.
+    Reset,
+    /// Comment line without markers — the inherited colour is unchanged and
+    /// the walk keeps going up.
+    Inherit,
+}
+
+/// Classify one line for the seed walk; see [`SeedLine`].
+fn seed_line<'m>(line_bytes: &[u8], markers: &'m [MarkerWord]) -> SeedLine<'m> {
+    let Some(del_off) = find_comment_delimiter(line_bytes) else {
+        return SeedLine::Reset;
+    };
+    let body_start = delimiter_skip(line_bytes, del_off);
+    if body_start < line_bytes.len()
+        && let Some(last) = scan_markers(line_bytes, body_start, line_bytes.len(), markers).last()
+    {
+        SeedLine::Stop(last.marker)
+    } else {
+        SeedLine::Inherit
+    }
+}
+
+/// Like [`seed_line`], but reads the line from a rope slice — borrowing the
+/// bytes when the slice is contiguous, collecting into `scratch` when it
+/// spans chunks.
+fn classify_rope_line<'m>(
+    slice: ropey::RopeSlice<'_>,
+    markers: &'m [MarkerWord],
+    scratch: &mut String,
+) -> SeedLine<'m> {
+    match slice.as_str() {
+        Some(s) => seed_line(s.as_bytes(), markers),
+        None => {
+            scratch.clear();
+            scratch.extend(slice.chunks());
+            seed_line(scratch.as_bytes(), markers)
+        }
+    }
 }
 
 /// Return `true` when the two comment spans are on directly adjacent lines:
@@ -1135,5 +1209,90 @@ mod tests {
             spans.iter().any(|s| s.capture() == "comment.marker.todo"),
             "expected TODO marker span: {spans:#?}"
         );
+    }
+
+    /// Regression: the seed scan must stop at the NEAREST preceding comment
+    /// with a marker. A walk that keeps going to the top of the window and
+    /// returns the farthest marker (or the first marker found from the top)
+    /// would surface the FIXME above instead of the nearer TODO.
+    #[test]
+    fn seed_active_returns_nearest_preceding_marker() {
+        let src = b"// FIXME: far above\n// filler comment\n// TODO: near\n// next line\n";
+        let first_comment_start = src.len() - b"// next line\n".len();
+        let pass = CommentMarkerPass::new();
+        let active = pass.seed_active(src, first_comment_start);
+        assert_eq!(
+            active.map(|m| m.word),
+            Some("TODO"),
+            "nearest preceding marker must seed the colour, got {:?}",
+            active.map(|m| m.word)
+        );
+    }
+
+    /// A non-comment line between the marker and the comment resets the
+    /// colour: the seed must be `None` even though a marker exists further
+    /// up — "nearest" is only meaningful across consecutive comment lines.
+    #[test]
+    fn seed_active_reset_between_marker_and_comment_kills_seed() {
+        let src = b"// FIXME: far above\nlet x = 1;\n// next line\n";
+        let first_comment_start = src.len() - b"// next line\n".len();
+        let pass = CommentMarkerPass::new();
+        assert_eq!(
+            pass.seed_active(src, first_comment_start).map(|m| m.word),
+            None,
+            "a non-comment line between the marker and the comment must reset the seed"
+        );
+    }
+
+    /// Regression: `apply_rope` must emit byte-for-byte the same spans as the
+    /// bytes-based `apply` for a buffer whose first comment sits below marker
+    /// lines, and the exact spans are pinned. The first comment carries its
+    /// own marker, so a broken seed window — one that mis-slices, skips the
+    /// comment (window start past the comment), or panics — changes the
+    /// emitted spans; the markers above the comment must not add anything.
+    #[test]
+    fn apply_rope_matches_apply_with_markers_above() {
+        let src = "// FIXME: far above\n// TODO: near\n// next TODO line\n";
+        let bytes = src.as_bytes();
+        let rope = ropey::Rope::from_str(src);
+        let first_comment_start = src.len() - "// next TODO line\n".len();
+        let comment_span = HighlightSpan {
+            byte_range: first_comment_start..src.len(),
+            capture: Arc::from("comment"),
+            metadata: None,
+        };
+        // Expected marker spans for the first comment's own TODO: label
+        // `41..46` (TODO), trail `46..47` (the space after the word), tail
+        // `47..52` (the rest of the line) — pinned exactly.
+        let expected = vec![
+            comment_span.clone(),
+            HighlightSpan {
+                byte_range: 41..46,
+                capture: Arc::from("comment.marker.todo"),
+                metadata: None,
+            },
+            HighlightSpan {
+                byte_range: 46..47,
+                capture: Arc::from("comment.marker.todo"),
+                metadata: None,
+            },
+            HighlightSpan {
+                byte_range: 47..52,
+                capture: Arc::from("comment.marker.tail.todo"),
+                metadata: None,
+            },
+        ];
+
+        let mut spans_bytes = vec![comment_span.clone()];
+        CommentMarkerPass::new().apply(&mut spans_bytes, bytes);
+
+        let mut spans_rope = vec![comment_span.clone()];
+        CommentMarkerPass::new().apply_rope(&mut spans_rope, &rope);
+
+        assert_eq!(
+            spans_bytes, spans_rope,
+            "apply and apply_rope must emit identical spans in the same order"
+        );
+        assert_eq!(spans_rope, expected, "exact spans pinned");
     }
 }

@@ -23,6 +23,7 @@
 //!   re-parses only the region it touched.
 
 use std::collections::{BTreeMap, HashMap};
+use std::hash::{DefaultHasher, Hasher};
 use std::ops::Range;
 use std::sync::{Arc, LazyLock, RwLock};
 
@@ -332,6 +333,79 @@ pub fn extract_fold_ranges_rope(
     extract_fold_ranges_rope_with_injections(tree, grammar, rope, None, &mut cache, |_| None)
 }
 
+/// Full-document text materialisation for the fold query pass, reused across
+/// reparses whose content is unchanged.
+///
+/// `QueryCursor::matches` needs a `TextProvider` over contiguous bytes, and a
+/// rope cannot provide one directly, so the fold pass materialises the whole
+/// document as one `String`. The materialisation is cached keyed by a content
+/// hash: the fold pass runs per reparse, but the text only changes when the
+/// buffer changes, so a reparse that did not edit the text (a viewport-only
+/// re-render, or an edit elsewhere that the reparse left byte-identical)
+/// skips the rebuild entirely. Keying on content rather than rope identity
+/// also means two ropes with identical text share the materialisation.
+#[derive(Default)]
+struct TextCache {
+    /// Content hash of the text currently in `text`.
+    hash: Option<u64>,
+    /// Last materialised full-document text.
+    text: String,
+}
+
+impl TextCache {
+    /// The rope's text as contiguous bytes, materialising only when the
+    /// content changed since the last call.
+    fn materialise(&mut self, rope: &ropey::Rope) -> &[u8] {
+        let hash = hash_rope(rope);
+        if self.hash != Some(hash) {
+            self.text = rope.to_string();
+            self.hash = Some(hash);
+            text_materialization_counter::increment();
+        }
+        self.text.as_bytes()
+    }
+}
+
+/// Content hash of the rope's bytes — chunk-boundary independent, so two
+/// ropes with identical text hash alike regardless of their internal chunk
+/// layout. FNV-style is unnecessary; `DefaultHasher` (as in
+/// [`crate::highlighter::hash_bytes`]) is plenty for a cache key.
+fn hash_rope(rope: &ropey::Rope) -> u64 {
+    let mut h = DefaultHasher::new();
+    for chunk in rope.chunks() {
+        h.write(chunk.as_bytes());
+    }
+    h.finish()
+}
+
+/// Thread-local count of full-document text materialisations in the fold
+/// pass (i.e. memo misses). Test instrumentation, like
+/// [`injected_parse_counter`]: it is the only way to tell a cached-text reuse
+/// from a recompute, since both produce identical fold ranges. Compiled in
+/// all modes, hidden from the docs.
+#[doc(hidden)]
+pub mod text_materialization_counter {
+    use std::cell::Cell;
+
+    thread_local! {
+        static COUNT: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(super) fn increment() {
+        COUNT.with(|c| c.set(c.get() + 1));
+    }
+
+    /// Read the current counter value.
+    pub fn get() -> u64 {
+        COUNT.with(Cell::get)
+    }
+
+    /// Reset the counter to zero.
+    pub fn reset() {
+        COUNT.with(|c| c.set(0));
+    }
+}
+
 /// Per-buffer memo of the folds an injected region produced, keyed by
 /// `(language, content hash)` and holding **region-relative** rows.
 ///
@@ -346,9 +420,15 @@ pub fn extract_fold_ranges_rope(
 ///
 /// After each extraction the map is pruned to the keys that extraction
 /// actually used, so it cannot outgrow the document's live injection set.
+///
+/// The cache also holds the full-document text materialisation ([`TextCache`])
+/// so the fold pass does not rebuild the document `String` on every reparse.
 #[derive(Default)]
 pub struct InjectedFoldCache {
     entries: HashMap<(String, u64), Vec<(usize, usize)>>,
+    /// Full-document text materialisation, reused while the content is
+    /// unchanged.
+    text: TextCache,
 }
 
 impl InjectedFoldCache {
@@ -421,7 +501,9 @@ pub mod injected_parse_counter {
 /// **Cost**, once per reparse and never per frame: one extra query pass over
 /// the host tree to find the regions, plus — for each region that is not
 /// already in `cache` — one parse of that region's bytes. See
-/// [`InjectedFoldCache`] for the measured numbers.
+/// [`InjectedFoldCache`] for the measured numbers. The full-document text the
+/// query reads is materialised once per CONTENT change, not once per reparse
+/// ([`TextCache`]).
 pub fn extract_fold_ranges_rope_with_injections<F>(
     tree: &tree_sitter::Tree,
     grammar: &Grammar,
@@ -434,11 +516,12 @@ where
     F: FnMut(&str) -> Option<Arc<Grammar>>,
 {
     // `QueryCursor::matches` needs a `TextProvider`; for a rope that means one
-    // contiguous materialisation. O(N) once per reparse (not per frame), and
-    // the same buffer is reused for the injection query and every region
-    // slice below.
-    let text = rope.to_string();
-    let source = text.as_bytes();
+    // contiguous materialisation. Reused across reparses whose content is
+    // unchanged (`TextCache`), so the full-document `String` is not rebuilt
+    // per edit. The same buffer is reused for the injection query and every
+    // region slice below.
+    let InjectedFoldCache { entries, text } = cache;
+    let source = text.materialise(rope);
 
     let mut by_start: BTreeMap<usize, usize> = BTreeMap::new();
     collect_folds_into(&mut by_start, tree, grammar, source, 0);
@@ -483,7 +566,7 @@ where
         // still lands correctly after rows are inserted above it.
         let row_offset = rope.byte_to_line(range.start);
 
-        if !cache.entries.contains_key(&key) {
+        if !entries.contains_key(&key) {
             let entry = match parsers.get_mut(&key.0) {
                 Some(e) => e,
                 None => {
@@ -504,13 +587,11 @@ where
             };
             let mut region_folds: BTreeMap<usize, usize> = BTreeMap::new();
             collect_folds_into(&mut region_folds, &sub_tree, child, sub, 0);
-            cache
-                .entries
-                .insert(key.clone(), region_folds.into_iter().collect());
+            entries.insert(key.clone(), region_folds.into_iter().collect());
         }
 
         // Unwrap-free: just inserted above when it was missing.
-        if let Some(region_folds) = cache.entries.get(&key) {
+        if let Some(region_folds) = entries.get(&key) {
             for &(s, e) in region_folds {
                 let (s, e) = (s + row_offset, e + row_offset);
                 by_start
@@ -527,7 +608,7 @@ where
     }
 
     // Bound the memo at this document's live injection set.
-    cache.entries.retain(|k, _| live.contains(k));
+    entries.retain(|k, _| live.contains(k));
 
     by_start.into_iter().collect()
 }
@@ -1296,6 +1377,60 @@ mod tests {
             got,
             vec![(0, 4)],
             "largest span must win at shared start_row"
+        );
+    }
+
+    // ── Full-document text cache (grammar-free — run in the normal lane) ─────
+
+    /// The fold pass materialises the whole document as one `String` per
+    /// reparse (`QueryCursor::matches` needs contiguous bytes; a rope can't
+    /// provide them directly). That materialisation is cached keyed by
+    /// content, so a second call with an unchanged rope must NOT rebuild it:
+    /// the counter distinguishes a cached reuse from a recompute, and the
+    /// bytes must be identical across the two calls.
+    ///
+    /// The full `extract_fold_ranges_rope_with_injections` entry point can't
+    /// be driven here without a real grammar + tree (network + compiler —
+    /// those tests are `#[ignore]`d), so this exercises the exact
+    /// materialisation path that function uses, through the same
+    /// `InjectedFoldCache`.
+    #[test]
+    fn fold_text_cache_materialises_once_for_unchanged_rope() {
+        let rope = ropey::Rope::from_str("fn a() {\n    1\n}\nfn b() {\n    2\n}\n");
+        let mut cache = InjectedFoldCache::default();
+
+        text_materialization_counter::reset();
+        let first = cache.text.materialise(&rope).to_vec();
+        let second = cache.text.materialise(&rope).to_vec();
+
+        assert_eq!(first, second, "unchanged rope must yield identical text");
+        assert_eq!(
+            text_materialization_counter::get(),
+            1,
+            "two calls with an unchanged rope must materialise the text exactly once"
+        );
+    }
+
+    /// The cache must invalidate on content change: a mutated rope forces a
+    /// fresh materialisation with the new bytes. Without this, a hash check
+    /// that never fires (or a cache that never updates) would pass the
+    /// unchanged-rope test above while serving stale text forever.
+    #[test]
+    fn fold_text_cache_invalidates_on_content_change() {
+        let mut rope = ropey::Rope::from_str("fn a() {\n    1\n}\n");
+        let mut cache = InjectedFoldCache::default();
+
+        text_materialization_counter::reset();
+        let first = cache.text.materialise(&rope).to_vec();
+
+        rope.insert(0, "// leading comment\n");
+        let second = cache.text.materialise(&rope).to_vec();
+
+        assert_ne!(first, second, "changed rope must yield changed text");
+        assert_eq!(
+            text_materialization_counter::get(),
+            2,
+            "a content change must re-materialise"
         );
     }
 }
