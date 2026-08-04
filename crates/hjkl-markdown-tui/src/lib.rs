@@ -366,7 +366,7 @@ impl Renderer<'_> {
         let mut rows: Vec<Vec<String>> = rows.to_vec();
         let mut aligns: Vec<ColumnAlign> = aligns.to_vec();
         if ncols > max_cols {
-            let keep = max_cols.saturating_sub(1).max(1); // reserve last col for "…"
+            let keep = max_cols.saturating_sub(1); // reserve last col for "…"
             header.truncate(keep);
             header.push("\u{2026}".to_string());
             for r in rows.iter_mut() {
@@ -395,14 +395,23 @@ impl Renderer<'_> {
         }
 
         // Fit to the available width: each column has 2 padding spaces plus a
-        // border, and one trailing border.
+        // border, and one trailing border.  Reserve the MIN_COL floor per
+        // column up front and scale only the excess, so the floor (applied
+        // after scaling) can never push the total past `budget`; in a viewport
+        // too narrow for ncols minimum-width columns, the fit wins and the
+        // floor is dropped.
         let overhead = 3 * ncols + 1;
         let budget = self.inner_width().saturating_sub(overhead).max(ncols);
         let total: usize = col_w.iter().sum();
         if total > budget && total > 0 {
+            let share = budget.saturating_sub(MIN_COL * ncols);
             for w in col_w.iter_mut() {
-                *w = (((*w as f64) / total as f64) * budget as f64).floor() as usize;
-                *w = (*w).max(3);
+                *w = MIN_COL + (((*w as f64) / total as f64) * share as f64).floor() as usize;
+            }
+            if col_w.iter().sum::<usize>() > budget {
+                for w in col_w.iter_mut() {
+                    *w = (((*w as f64) / total as f64) * budget as f64).floor() as usize;
+                }
             }
         }
 
@@ -654,6 +663,26 @@ mod tests {
                 .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
                 .sum();
             assert!(w <= 24, "table row overflows viewport ({w} > 24): {out}");
+        }
+    }
+
+    #[test]
+    fn table_fits_viewport_with_min_column_floor() {
+        // Regression: the per-column MIN_COL floor was applied after
+        // proportional scaling, so the floored widths could exceed the width
+        // budget — two 4-wide columns in a 10-cell viewport rendered 13 cells
+        // wide, violating the "never wider than the viewport" invariant.
+        let md = "| aaaa | bbbb |\n|---|---|\n| 1 | 2 |\n";
+        let lines = to_lines(&parse(md), &MdTheme::default(), 10);
+        let out = flat(&lines);
+        assert!(!lines.is_empty(), "no lines rendered");
+        for l in &lines {
+            let w: usize = l
+                .spans
+                .iter()
+                .map(|s| UnicodeWidthStr::width(s.content.as_ref()))
+                .sum();
+            assert!(w <= 10, "table row overflows viewport ({w} > 10): {out}");
         }
     }
 
