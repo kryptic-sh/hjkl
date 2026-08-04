@@ -9,10 +9,16 @@
 //!   cargo run -p hjkl-compat-oracle --release --example difffuzz -- [CASES] [SEED]
 //!
 //! Deliberate exclusions (harness limits, not engine bugs):
-//!   - `:` / `/` / `?` prompts — the in-process hjkl driver can't replay them.
-//!   - `z` folds — hjkl defaults foldmethod=expr, nvim --clean defaults manual.
-//!   - `gq` — depends on textwidth, pinned per-case in the real corpus.
+//!   - `:` ex commands — the in-process hjkl driver can't dispatch them
+//!     (see `examples/exfuzz.rs` for ex-command fuzzing).
 //!   - non-ASCII — hjkl reports char-cols, nvim byte-cols; only equal on ASCII.
+//!
+//! Search (`/` / `?` / `n` / `N`), folds (`zf` / `zc` / `zo` / `zR` / `zM`)
+//! and reflow (`gq`) ARE enabled: the vim FSM resolves the search prompt
+//! in-process, the engine applies fold ops to the in-tree view itself, and
+//! `textwidth=20` is pinned per-case whenever the generated tokens contain a
+//! `gq`. The nvim driver clears its undo history after seeding, so `u` /
+//! `<C-r>` diff against empty undo trees on both sides.
 
 use hjkl_compat_oracle::{OracleCase, hjkl_driver, nvim_driver};
 
@@ -121,7 +127,7 @@ fn gen_token(rng: &mut Rng) -> String {
         String::new()
     };
 
-    match rng.below(10) {
+    match rng.below(13) {
         0..=2 => format!("{count}{}", rng.pick(MOTIONS)),
         3..=4 => {
             let op = rng.pick(OPERATORS);
@@ -141,6 +147,29 @@ fn gen_token(rng: &mut Rng) -> String {
         5..=6 => format!("{count}{}", rng.pick(SIMPLE_EDITS)),
         7 => format!("{}{}<Esc>", rng.pick(INSERT_ENTRIES), rng.pick(INSERT_TEXT)),
         8 => format!("{count}r{}", rng.pick(&["Z", "x", " ", ")"])),
+        9 => {
+            // Search: `/pat<CR>` / `?pat<CR>` jump to a match, `n` / `N`
+            // repeat it. Plain self-contained tokens, no count — a count on
+            // a search would need engine support we don't want to assume.
+            match rng.below(4) {
+                0 => format!("/{}<CR>", rng.pick(WORDS)),
+                1 => format!("?{}<CR>", rng.pick(WORDS)),
+                _ => rng.pick(&["n", "N"]).to_string(),
+            }
+        }
+        10 => {
+            // Folds (foldmethod=manual, pinned in `make_case`): `zf{motion}`
+            // creates a fold — needed for `zc`/`zo`/`zR`/`zM` to mean
+            // anything — then the plain fold ops. The engine applies fold
+            // ops to the in-tree view itself, so the in-process driver needs
+            // no host machinery.
+            if rng.chance(2) {
+                format!("zf{}", rng.pick(&["j", "G"]))
+            } else {
+                rng.pick(&["zc", "zo", "zR", "zM"]).to_string()
+            }
+        }
+        11 => rng.pick(&["gqq", "gqj", "gq}"]).to_string(),
         _ => {
             // Visual: enter, move, act.
             let enter = rng.pick(&["v", "V", "<C-v>"]);
@@ -177,7 +206,15 @@ fn make_case(name: &str, buffer: &str, cursor: (usize, usize), tokens: &[String]
         // so a divergence means an engine bug rather than config skew.
         shiftwidth: Some(4),
         expandtab: Some(true),
-        textwidth: None,
+        // textwidth is pinned (20) only for cases that actually reflow (`gq`):
+        // nvim auto-wraps insert-mode typing past textwidth while hjkl does
+        // not, so a global pin would drown every case that inserts past col 20
+        // in insert-wrap divergence noise.
+        textwidth: if tokens.iter().any(|t| t.starts_with("gq")) {
+            Some(20)
+        } else {
+            None
+        },
         autoindent: Some(false),
         foldmethod: Some("manual".to_string()),
     }

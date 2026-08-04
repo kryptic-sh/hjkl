@@ -15,7 +15,7 @@ use std::path::Path;
 pub mod diff;
 pub mod hjkl_driver;
 pub mod nvim_driver;
-mod test_host;
+pub mod test_host;
 
 pub use diff::{CaseResult, CaseStatus, run_oracle};
 pub use hjkl_driver::HjklOutcome;

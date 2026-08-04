@@ -1424,6 +1424,7 @@ dependencies = [
  "async-trait",
  "hjkl-buffer",
  "hjkl-engine",
+ "hjkl-ex",
  "hjkl-vim",
  "nvim-rs",
  "serde",

@@ -56,11 +56,50 @@ pub fn nvim_available() -> bool {
 /// Returns an error if nvim fails to spawn, if any RPC call fails, or if the
 /// mode / register values cannot be extracted from the msgpack response.
 pub async fn run_case(case: &OracleCase) -> anyhow::Result<NvimOutcome> {
+    let (nvim, child) = spawn_nvim().await?;
+    let result = run_case_inner(&nvim, case).await;
+    shutdown_nvim(&nvim, child).await;
+    result
+}
+
+/// Run `commands` through a freshly-spawned headless neovim — one
+/// `nvim_command` RPC per command — and return the state.
+///
+/// The ex-command arm of [`run_case`]: seeding (buffer, cursor, option pins,
+/// undo-history clearing) and the read-back are identical, only the middle
+/// step differs (`nvim.command` per command instead of `nvim.input` over a
+/// key string). Used by `examples/exfuzz.rs` to diff ex commands.
+///
+/// # Errors
+///
+/// Same error surface as [`run_case`]; additionally any RPC error from a
+/// command (e.g. an unknown ex command) propagates.
+pub async fn run_commands(case: &OracleCase, commands: &[&str]) -> anyhow::Result<NvimOutcome> {
+    let (nvim, child) = spawn_nvim().await?;
+    let result = async {
+        seed_case(&nvim, case).await?;
+        for cmd in commands {
+            nvim.command(cmd).await?;
+        }
+        // Each `nvim.command` is its own RPC round-trip, so the awaited
+        // response already implies the previous command has settled — no
+        // extra sync barrier needed (unlike `nvim.input`).
+        let cur_buf = nvim.get_current_buf().await?;
+        let cur_win = nvim.get_current_win().await?;
+        read_outcome(&nvim, case, &cur_buf, &cur_win).await
+    }
+    .await;
+    shutdown_nvim(&nvim, child).await;
+    result
+}
+
+/// Spawn nvim in headless embedded mode.
+///
+/// `--cmd "set modeline modelines=5"`: nvim --clean disables modeline by
+/// default; re-enable so modeline oracle cases match vim's behaviour.
+async fn spawn_nvim() -> anyhow::Result<(Neovim<Compat<ChildStdin>>, tokio::process::Child)> {
     use tokio::process::Command;
 
-    // 1. Spawn nvim in headless embedded mode.
-    // --cmd "set modeline modelines=5": nvim --clean disables modeline by
-    // default; re-enable so modeline oracle cases match vim's behaviour.
     let mut cmd = Command::new("nvim");
     cmd.args([
         "--headless",
@@ -72,12 +111,13 @@ pub async fn run_case(case: &OracleCase) -> anyhow::Result<NvimOutcome> {
     ]);
     // Reap the child even if this future is cancelled mid-case.
     cmd.kill_on_drop(true);
-    let (nvim, _io_handle, mut child) = create::new_child_cmd(&mut cmd, NoopHandler).await?;
+    let (nvim, _io_handle, child) = create::new_child_cmd(&mut cmd, NoopHandler).await?;
+    Ok((nvim, child))
+}
 
-    let result = run_case_inner(&nvim, case).await;
-
-    // Cleanly quit nvim; ignore shutdown errors. If nvim ignores `qa!` (e.g.
-    // a desynced RPC stream), don't hang the test run on `wait()` — kill.
+/// Cleanly quit nvim; ignore shutdown errors. If nvim ignores `qa!` (e.g.
+/// a desynced RPC stream), don't hang the test run on `wait()` — kill.
+async fn shutdown_nvim(nvim: &Neovim<Compat<ChildStdin>>, mut child: tokio::process::Child) {
     let _ = nvim.command("qa!").await;
     if tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
         .await
@@ -85,15 +125,45 @@ pub async fn run_case(case: &OracleCase) -> anyhow::Result<NvimOutcome> {
     {
         let _ = child.kill().await;
     }
-
-    result
 }
 
 async fn run_case_inner(
     nvim: &Neovim<Compat<ChildStdin>>,
     case: &OracleCase,
 ) -> anyhow::Result<NvimOutcome> {
-    // 2. Set buffer content.
+    seed_case(nvim, case).await?;
+
+    // 4. Apply keystrokes.
+    //    `nvim_input` reads `<` as the start of a key-notation token (`<Esc>`,
+    //    `<C-w>`, ...) and *blocks* waiting for the closing `>` if one never
+    //    arrives — so a literal `<` (e.g. the `<<` outdent operator) would hang
+    //    the RPC. Escape any `<` that does not open a valid token to `<lt>`.
+    if !case.keys.is_empty() {
+        nvim.input(&escape_literal_lt(&case.keys)).await?;
+    }
+
+    // 5. Synchronisation barrier — a round-trip ensures the previous input is
+    //    fully processed before we read back state.
+    nvim.command("echo 1").await?;
+
+    let cur_buf = nvim.get_current_buf().await?;
+    let cur_win = nvim.get_current_win().await?;
+    read_outcome(nvim, case, &cur_buf, &cur_win).await
+}
+
+/// Seed nvim from `case`: buffer content, cursor, per-case option pins, then
+/// clear nvim's undo history.
+///
+/// The RPC `set_lines` below records ONE undoable change in nvim, so a
+/// replayed `u` would roll the buffer back to the pre-seed empty state while
+/// hjkl's in-process editor (whose `View::from_str` seeding records nothing)
+/// has an empty undo tree. Clearing here makes both engines start with empty
+/// undo trees, so `u` / `<C-r>` diff honestly. Recipe, verified against nvim
+/// 0.12.4: with 'undolevels' = -1 no change is recorded, the dummy no-op
+/// `setline(1, getline(1))` wipes the tree, and restoring 1000 leaves the
+/// buffer byte-identical.
+async fn seed_case(nvim: &Neovim<Compat<ChildStdin>>, case: &OracleCase) -> anyhow::Result<()> {
+    // 1. Set buffer content.
     //    nvim expects lines WITHOUT a trailing empty entry even when the content
     //    ends with '\n' (the implicit final newline is part of every vim buffer).
     let has_trailing_newline = case.initial_buffer.ends_with('\n');
@@ -104,9 +174,9 @@ async fn run_case_inner(
     }
 
     let cur_buf = nvim.get_current_buf().await?;
-    cur_buf.set_lines(0, -1, false, lines.clone()).await?;
+    cur_buf.set_lines(0, -1, false, lines).await?;
 
-    // 3. Set initial cursor. The corpus counts columns in CHARS (hjkl's own
+    // 2. Set initial cursor. The corpus counts columns in CHARS (hjkl's own
     //    encoding); nvim's `set_cursor` wants a 1-based row and a 0-based
     //    BYTE column.
     let (init_row, init_col) = case.initial_cursor;
@@ -116,7 +186,7 @@ async fn run_case_inner(
         .set_cursor((init_row as i64 + 1, init_byte_col as i64))
         .await?;
 
-    // 3b. Apply per-case indent settings so `>>` / `<<` match hjkl's output.
+    // 3. Apply per-case indent settings so `>>` / `<<` match hjkl's output.
     //     `nvim --clean` defaults to noexpandtab / shiftwidth=8, which diverge
     //     from hjkl's defaults; the corpus pins both sides explicitly.
     //     `startofline` is set whenever indent settings are pinned: nvim
@@ -154,20 +224,25 @@ async fn run_case_inner(
         nvim.command(&format!("set foldmethod={fdm}")).await?;
     }
 
-    // 4. Apply keystrokes.
-    //    `nvim_input` reads `<` as the start of a key-notation token (`<Esc>`,
-    //    `<C-w>`, ...) and *blocks* waiting for the closing `>` if one never
-    //    arrives — so a literal `<` (e.g. the `<<` outdent operator) would hang
-    //    the RPC. Escape any `<` that does not open a valid token to `<lt>`.
-    if !case.keys.is_empty() {
-        nvim.input(&escape_literal_lt(&case.keys)).await?;
-    }
+    // 3c. Clear the undo history created by the seeding above (see the
+    //     function doc comment).
+    nvim.command("set undolevels=-1").await?;
+    nvim.command("call setline(1, getline(1))").await?;
+    nvim.command("set undolevels=1000").await?;
 
-    // 5. Synchronisation barrier — a round-trip ensures the previous input is
-    //    fully processed before we read back state.
-    nvim.command("echo 1").await?;
+    Ok(())
+}
 
+/// Read back nvim's post-replay state. Mirrors [`crate::HjklOutcome`]'s
+/// field-for-field comparison surface: buffer, cursor, mode, registers.
+async fn read_outcome(
+    nvim: &Neovim<Compat<ChildStdin>>,
+    case: &OracleCase,
+    cur_buf: &nvim_rs::Buffer<Compat<ChildStdin>>,
+    cur_win: &nvim_rs::Window<Compat<ChildStdin>>,
+) -> anyhow::Result<NvimOutcome> {
     // 6. Read back buffer.
+    let has_trailing_newline = case.initial_buffer.ends_with('\n');
     let raw_lines = cur_buf.get_lines(0, -1, false).await?;
     let mut buf_str = raw_lines.join("\n");
     // Re-apply the trailing newline that the original buffer had — but only
