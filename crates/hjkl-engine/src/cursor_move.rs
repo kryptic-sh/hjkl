@@ -66,8 +66,8 @@ pub enum Move {
     /// code owns `curswant` for the duration, i.e.:
     ///
     /// - the clamped write inside a vertical motion itself
-    ///   (`hjkl_vim::vim::motion::apply_sticky_col`), which must preserve the
-    ///   un-clamped want it just stored;
+    ///   ([`Move::Vertical`]'s internal write, which must preserve the
+    ///   un-clamped want it just stored);
     /// - restoring a position saved earlier in the same operation (operator
     ///   bodies that park the cursor, run an edit, then put it back), where
     ///   the cursor is semantically where it already was;

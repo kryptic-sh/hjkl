@@ -1995,9 +1995,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// there are four of them across two crates (`App::commit_search`, the
     /// `+/pattern` startup search, the vim search prompt, and the `n`/`N`
     /// motion) and only the last happened to be correct — it runs through the
-    /// vim motion dispatch, which ends in `apply_sticky_col`. Putting it here
-    /// makes the guarantee structural instead of remembered; the motion path
-    /// then re-sets the same value, which is a no-op.
+    /// vim motion dispatch, which ends in a `move_cursor` call that sets
+    /// `sticky_col`. Putting it here makes the guarantee structural instead of
+    /// remembered; the motion path then re-sets the same value, which is a
+    /// no-op.
     fn sync_sticky_col_to_cursor(&mut self) {
         let pos = buf_cursor_pos(&self.buffer);
         let line = buf_line(&self.buffer, pos.row).unwrap_or_default();

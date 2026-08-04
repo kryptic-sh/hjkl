@@ -8,12 +8,10 @@ use hjkl_engine::input::{Input, Key};
 
 use super::*;
 use crate::vim_state::{vim, vim_mut};
-use hjkl_engine::Editor;
 use hjkl_engine::buf_helpers::{
     buf_cursor_pos, buf_line, buf_line_chars, buf_row_count, buf_set_cursor_rc,
 };
-
-use hjkl_buffer::{char_col_to_visual_col, visual_col_to_char_col};
+use hjkl_engine::{Editor, Move};
 
 /// Parse the first key of a normal/visual-mode motion. Returns `None` for
 /// keys that don't start a motion (operator keys, command keys, etc.).
@@ -113,13 +111,37 @@ pub fn execute_motion<H: hjkl_engine::types::Host>(
         other => other,
     };
     let pre_pos = ed.cursor();
-    let pre_col = pre_pos.1;
     apply_motion_cursor(ed, &motion, count);
     let post_pos = ed.cursor();
     if is_big_jump(&motion) && pre_pos != post_pos {
         ed.push_jump(pre_pos);
     }
-    apply_sticky_col(ed, &motion, pre_col);
+    // Phase 1 (backlog §1.6): the motion names its own curswant semantics.
+    // The landed cursor is re-moved through the matching `Move` variant —
+    // for the cursor itself this is a no-op (the motion already landed and
+    // clamped), and it rewrites `sticky_col` to the class's rule, replacing
+    // the old post-hoc `apply_sticky_col` catch-all.
+    match motion_class(&motion) {
+        MotionClass::Vertical => {
+            // Re-run the sticky clamp on the landed row. The vertical motion
+            // fns already clamped there, so this only confirms the
+            // un-clamped want stays stored for the next vertical motion.
+            ed.move_cursor(Move::Vertical { row: ed.cursor().0 });
+        }
+        MotionClass::Jump => {
+            // Re-jump to the landed spot; `jump_cursor` sets sticky to the
+            // landed column (vim resets curswant on every explicit jump).
+            let pos = ed.cursor();
+            ed.move_cursor(Move::Jump {
+                row: pos.0,
+                col: pos.1,
+            });
+        }
+        MotionClass::Horizontal => {
+            // Sticky tracks the landed column.
+            ed.move_cursor(Move::Horizontal { col: ed.cursor().1 });
+        }
+    }
     // Phase 7b: keep the migration buffer's cursor + viewport in
     // lockstep with the textarea after every motion. Once 7c lands
     // (motions ported onto the buffer's API), this flips: the
@@ -193,18 +215,22 @@ pub fn apply_motion_kind<H: hjkl_engine::types::Host>(
         }
         hjkl_engine::MotionKind::FirstNonBlankDown => {
             // `+`: move down `count` lines then land on first non-blank.
-            // Not a big-jump (no jump-list entry), sticky col set to the
-            // landed column (first non-blank). Mirrors scroll_cursor_rows
-            // semantics but goes through the fold-aware buffer motion path.
+            // Not a big-jump (no jump-list entry). The landed first
+            // non-blank column becomes the sticky target — vim's `+` sets
+            // curswant to where it lands (jump class). Mirrors
+            // scroll_cursor_rows semantics but goes through the fold-aware
+            // buffer motion path.
             let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
             let tabstop = ed.settings().tabstop;
             hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, count, &mut sticky, tabstop);
             ed.set_sticky_col(sticky);
             hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-            let pos = buf_cursor_pos(ed.buffer());
-            let line = buf_line(ed.buffer(), pos.row).unwrap_or_default();
-            ed.set_sticky_col(Some(char_col_to_visual_col(&line, pos.col, tabstop)));
+            let pos = ed.cursor();
+            ed.move_cursor(Move::Jump {
+                row: pos.0,
+                col: pos.1,
+            });
             ed.sync_buffer_from_textarea();
         }
         hjkl_engine::MotionKind::FirstNonBlankUp => {
@@ -216,9 +242,11 @@ pub fn apply_motion_kind<H: hjkl_engine::types::Host>(
             hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, count, &mut sticky, tabstop);
             ed.set_sticky_col(sticky);
             hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-            let pos = buf_cursor_pos(ed.buffer());
-            let line = buf_line(ed.buffer(), pos.row).unwrap_or_default();
-            ed.set_sticky_col(Some(char_col_to_visual_col(&line, pos.col, tabstop)));
+            let pos = ed.cursor();
+            ed.move_cursor(Move::Jump {
+                row: pos.0,
+                col: pos.1,
+            });
             ed.sync_buffer_from_textarea();
         }
         hjkl_engine::MotionKind::WordForward => {
@@ -354,60 +382,90 @@ pub fn apply_motion_kind<H: hjkl_engine::types::Host>(
         _ => {}
     }
 }
-/// Restore the cursor to the sticky column after vertical motions and
-/// sync the sticky column to the current column after horizontal ones.
-/// `pre_col` is the cursor column captured *before* the motion — used
-/// to bootstrap the sticky value on the very first motion.
-pub fn apply_sticky_col<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::View, H>,
-    motion: &Motion,
-    pre_col: usize,
-) {
-    if is_vertical_motion(motion) {
-        // sticky_col now stores a display column (vim's curswant).
-        // `pre_col` is a char index captured before the motion — convert
-        // to display on the current line when sticky hasn't been set yet.
-        let want = ed.sticky_col().unwrap_or_else(|| {
-            let (row, _) = ed.cursor();
-            let line = buf_line(ed.buffer(), row).unwrap_or_default();
-            char_col_to_visual_col(&line, pre_col, ed.settings().tabstop)
-        });
-        // Record the desired column so the next vertical motion sees
-        // it even if we currently clamped to a shorter row.
-        ed.set_sticky_col(Some(want));
-        let (row, _) = ed.cursor();
-        let line = buf_line(ed.buffer(), row).unwrap_or_default();
-        // Convert the display column to a char index on this row,
-        // then clamp to the last char (vim normal-mode never parks
-        // one past end of line).
-        let char_col = visual_col_to_char_col(&line, want, ed.settings().tabstop);
-        let line_len = buf_line_chars(ed.buffer(), row);
-        let max_col = line_len.saturating_sub(1);
-        let target = char_col.min(max_col);
-        // raw primitive: this function MUST preserve the un-clamped `want`
-        // already stored in `ed.sticky_col()`; `jump_cursor` would overwrite
-        // it with the clamped `target`.
-        buf_set_cursor_rc(ed.buffer_mut(), row, target);
-    } else {
-        // Horizontal motion or non-motion: sticky column tracks the
-        // new cursor column so the *next* vertical motion aims there.
-        let (row, col) = ed.cursor();
-        let line = buf_line(ed.buffer(), row).unwrap_or_default();
-        ed.set_sticky_col(Some(char_col_to_visual_col(
-            &line,
-            col,
-            ed.settings().tabstop,
-        )));
-    }
+/// Which of the three `Move` curswant classes a plain motion belongs to
+/// (backlog §1.6 phase 1). Each variant names its own curswant semantics,
+/// replacing the old post-hoc `apply_sticky_col` catch-all;
+/// `execute_motion` re-moves the landed cursor through the matching `Move`
+/// variant.
+///
+/// There is deliberately no `Raw` class: `Move::Raw` is for pure
+/// repositions owned by surrounding code (operator park/restore, host
+/// state sync), and no plain motion is one — every motion either preserves
+/// the sticky column (Vertical) or syncs it to the landed column (Jump /
+/// Horizontal). The match below is exhaustive, so a Motion variant added
+/// later must be classified here to compile.
+///
+/// See [`hjkl_engine::Move`] for the semantics of each class.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MotionClass {
+    /// `j` / `k` and their screen-line equivalents — preserve the sticky
+    /// column across rows.
+    Vertical,
+    /// Explicit jumps — the landing column is a target, not a relative
+    /// step; vim resets curswant to the landed column.
+    Jump,
+    /// Relative moves within a row (or a row-relative target like `$`, `^`,
+    /// `f`) — sticky tracks the landed column.
+    Horizontal,
 }
-pub fn is_vertical_motion(motion: &Motion) -> bool {
-    // Only j / k preserve the sticky column. Everything else (search,
-    // gg / G, word jumps, etc.) lands at the match's own column so the
-    // sticky value should sync to the new cursor column.
-    matches!(
-        motion,
-        Motion::Up | Motion::Down | Motion::ScreenUp | Motion::ScreenDown
-    )
+
+fn motion_class(motion: &Motion) -> MotionClass {
+    use MotionClass::*;
+    match motion {
+        // Vertical: only these preserve the sticky column. Everything else
+        // (search, gg / G, word jumps, ...) lands at the match's own column
+        // so the sticky value syncs to the new cursor column.
+        Motion::Up | Motion::Down | Motion::ScreenUp | Motion::ScreenDown => Vertical,
+        // Jump: explicit target landings — `gg`/`G`, `%`, `[(`/`])`,
+        // `*`/`#`, `n`/`N`, `H`/`M`/`L`, `{`/`}`, `(`/`)`, `[[`/`]]`/
+        // `[]`/`][`, and the first-non-blank linewise motions `+`/`-`/`_`
+        // (vim sets curswant to the landed first-non-blank column).
+        Motion::FileTop
+        | Motion::FileBottom
+        | Motion::MatchBracket
+        | Motion::UnmatchedBracket { .. }
+        | Motion::WordAtCursor { .. }
+        | Motion::SearchNext { .. }
+        | Motion::ViewportTop
+        | Motion::ViewportMiddle
+        | Motion::ViewportBottom
+        | Motion::ParagraphPrev
+        | Motion::ParagraphNext
+        | Motion::SentencePrev
+        | Motion::SentenceNext
+        | Motion::SectionBackward
+        | Motion::SectionForward
+        | Motion::SectionEndBackward
+        | Motion::SectionEndForward
+        | Motion::FirstNonBlankNextLine
+        | Motion::FirstNonBlankPrevLine
+        | Motion::FirstNonBlankLine => Jump,
+        // Horizontal: moves whose landed column is the sticky target on the
+        // same row. `FindRepeat` is resolved to `Find` (or the sneak
+        // early-return) before it ever reaches the classifier.
+        Motion::Left
+        | Motion::Right
+        | Motion::SpaceFwd
+        | Motion::BackspaceBack
+        | Motion::WordFwd
+        | Motion::BigWordFwd
+        | Motion::WordBack
+        | Motion::BigWordBack
+        | Motion::WordEnd
+        | Motion::BigWordEnd
+        | Motion::WordEndBack
+        | Motion::BigWordEndBack
+        | Motion::LineStart
+        | Motion::FirstNonBlank
+        | Motion::LineEnd
+        | Motion::Find { .. }
+        | Motion::FindRepeat { .. }
+        | Motion::LastNonBlank
+        | Motion::LineMiddle
+        | Motion::ScreenLineMiddle
+        | Motion::GotoColumn => Horizontal,
+        // No Motion variant classifies Raw — see the enum docs.
+    }
 }
 pub fn apply_motion_cursor<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
@@ -467,9 +525,9 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             }
         }
         Motion::Up => {
-            // Final col is set by `apply_sticky_col` below — push the
-            // post-move row to the textarea and let sticky tracking
-            // finish the work.
+            // Final col is clamped by the `Move::Vertical` re-move in
+            // `execute_motion` below — push the post-move row to the
+            // textarea and let the vertical clamp finish the work.
             let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut sticky = ed.sticky_col();
             let tabstop = ed.settings().tabstop;

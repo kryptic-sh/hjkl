@@ -82,7 +82,7 @@ fn holds<H: hjkl_engine::Host>(ed: &Editor<hjkl_buffer::View, H>) -> bool {
 /// # The rule
 ///
 /// Already documented on `Editor::jump_cursor` and
-/// `crate::vim::motion::apply_sticky_col`:
+/// `crate::vim::motion::motion_class`:
 ///
 /// - **vertical** motions (`j`, `k`, and the `<C-e>`/`<C-y>` screen
 ///   equivalents) READ `sticky_col`, clamp the landing column to the row's
