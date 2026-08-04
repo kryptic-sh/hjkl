@@ -3,6 +3,27 @@
 Single source for open findings, deferred decisions, and blocked work. Findings
 use symbol names rather than line numbers so references survive refactors.
 
+**Docs consolidation 2026-08-04.** Folded in and deleted: `docs/code-review.md`,
+`docs/performance-review.md`, `docs/embed-rpc.md` — read `git log` for what they
+said before this. All 14 code-review findings and all ten perf findings shipped
+the same day they were written; the four perf minors still open are §1.11; the
+`--embed` / `--nvim-api` design record's binding conventions are under Standing
+constraints.
+
+**Corrections made during the merge:**
+
+- `buf_line_chars` moved since the perf review cited it (`hjkl-buffer`
+  `buf_helpers.rs` → `hjkl_engine::buf_helpers`); the open item records its
+  current home.
+- The reviews' cited line numbers were re-verified against the current tree;
+  those that had shifted (notably `hjkl-buffer-tui`'s render restructure) are
+  recorded by symbol, per this backlog's convention.
+- The five code-review "Cleared" candidates and the two perf "confirmed fine"
+  notes are summarized in the Record, not carried with full repros; the perf
+  minor for buffer-impl's find-next/find-prev row allocation was a
+  cross-reference to finding #2, not a separate item, and was merged into it.
+- Coverage GAPs from both reviews are compressed into the §1.7 coverage note.
+
 ## 1. Open work — ranked
 
 ### 1.0 v0.41.0 is published everywhere except AUR
@@ -612,6 +633,27 @@ with ripgrep installed are unaffected.
   `hjkl-icons`, `hjkl-splash(-tui)`, `hjkl-info-popup(-tui)`, `hjkl-vim-tui`,
   `hjkl-vim-types`, `hjkl-xdg`, and the remaining `-tui` siblings. Stated as a
   gap, not a plan.
+
+  The 2026-08-04 review and perf passes re-covered `hjkl-vim`, `hjkl-vim-tui`,
+  `hjkl-vim-types`, `hjkl-buffer`, `hjkl-buffer-tui`, `hjkl-picker`,
+  `hjkl-completion`, `hjkl-fuzzy`, `hjkl-fs`, `hjkl-fs-watch`, `hjkl-css`,
+  `hjkl-markdown(-tui)`, `hjkl-layout`, `hjkl-syntax`, `hjkl-config`,
+  `hjkl-engine-tui`, `hjkl-editor-tui`, `hjkl-syntax-tui`, `hjkl-clipboard`
+  core, parts of `hjkl-bonsai` (comment_markers, hex_color, rope_slice,
+  predicate, rainbow, highlighter 772-1460) and parts of `hjkl-ex` (range,
+  parse, global, builtins 617-1414, registry, effect, complete 187-316, setopt
+  1-200); partial reads touched which-key, tabs, lsp, mangler, xdg, kitty,
+  statusline, theme color, compat-oracle, hover-tui, holler-tui, prompt-tui,
+  editor-tui, menu, and form. Their GAPs (never examined): the `apps/hjkl`
+  non-app files — the planned review agent for that slice was never spawned —
+  most of `app/`'s remainder, engine `editor.rs` / `substitute.rs` /
+  `options_registry` / `policy` / `discipline` ranges, ex `builtins.rs` 1-617
+  and 1415-5190 plus shell/listings/setopt remainder, bonsai highlighter 1-772
+  and 1461-2583 plus `runtime/*`, clipboard backends, remaining `hjkl-buffer`
+  (folds, geom, listchars, motion, search, selection, span) and engine (abbrev,
+  discipline, input, keymap_motion, selection_shift, tag) modules, and every
+  `tests/` directory.
+
 - Stabilize flaky PTY e2e cases. Cache/CWD/color isolation landed in `ca3852b2`;
   the explorer `dd` tests that failed under `cargo test`'s thread pool are
   fixed. Unspecified PTY flakes may remain.
@@ -753,6 +795,28 @@ with ripgrep installed are unaffected.
   end-of-buffer.** Real nvim errors E966/E1206 for out-of-range rows; hjkl
   clamps to `line_count-1` (get_text) and slices clamped (set_text). Not fixed
   because the review found no client misbehaviour from the clamping.
+
+### 1.11 Left open by the 2026-08-04 performance review
+
+All ten ranked findings and six of the ten minor items shipped the same day
+(commits `5a644b11`..`ffb1d481`). Four minor allocation patterns were left:
+
+- **`collect_substitute_matches` allocates a String per row across the range**
+  (`hjkl-engine/src/substitute.rs` — `rope_line_str` per row). A 100k-line
+  `:%s///g` is ~100k allocs; per-command, so lower impact than the
+  keystroke-path items.
+- **`{` / `}` / `[[` / `]]` / `%` do a String/Vec alloc per row scanned**
+  (`hjkl-engine/src/motions.rs` — `read_line(row).chars().collect()` in the
+  paragraph/section/matching scans). Use `line_bytes(row) == 0` for the
+  emptiness test, as `content_row_count` already does, and rope-slice borrows
+  for `%`.
+- **`buf_line_chars` allocates a full line String just to count chars**
+  (`hjkl_engine::buf_helpers::buf_line_chars` —
+  `buf_line(b, row).chars().count()`). Called from `hjkl-vim`'s
+  motion/curswant/editor_ext paths, ~3× per `j`/`k`.
+- **`search_matches(...).to_vec()` clones the cached Vec per visible row per
+  frame** (`hjkl-engine/src/search.rs`). Return a borrow instead —
+  `warm_matches` already exists for the populate-only case.
 
 ## 2. Blocked on platform access
 
@@ -990,3 +1054,84 @@ Violation classes still relevant to the §1.6 migration:
 
 The ~186 sites expose the migration's classification cost. A mechanical
 translation to `Raw` would compile while preserving the bug class.
+
+## 6. Standing constraints
+
+Decisions from completed work that still govern new work.
+
+### `--embed` / `--nvim-api` conventions (2026-08-04, from `docs/embed-rpc.md`)
+
+- **Buffer ids start at 1** and increment per buffer; a `Nil`, missing, or `0`
+  handle means "current buffer". Enforced since 2026-08-04 (`bf05733d`) — the
+  initial buffer's id is 1, never 0.
+- **Window ids are 0-based indices** into the window table; id `0` is a real
+  window and is NOT remapped to "current" — only `Nil`/missing means current.
+- **Tabpage ids are 0-based indices**, not stable handles — they shift when a
+  tab is closed.
+- **Ext-type handles**: tag `0` = buffer, `1` = window, `2` = tabpage; the
+  payload is the msgpack encoding of the id integer itself. Raw integers are
+  accepted anywhere a handle is expected.
+- **Wire framing**: bare msgpack values, no length-prefix framing; responses
+  flushed after each message; EOF on stdin → exit code `0`. Notifications (no
+  `id`) are dispatched but produce no response.
+- **`nvim_buf_set_lines` / `nvim_buf_set_text` rebuild the buffer and reset undo
+  history** — a deliberate divergence from nvim, documented in the method table.
+- **`nvim_exec2` is not a vimscript interpreter**: it splits `src` on newlines
+  and runs each non-empty line as one standalone ex command; output capture is
+  unimplemented (`{"output": ""}`).
+- **`nvim_get_mode` emits only the five modes the engine has** — `"n"`, `"i"`,
+  `"v"`, `"V"`, `"\x16"`; `blocking` is always `false`.
+- **`nvim_create_buf(listed, scratch)` ignores both arguments** — always makes a
+  real buffer.
+- **`nvim_set_keymap` honours only `noremap`** — `silent`, `expr`, `desc`,
+  `nowait`, `unique`, `callback` are ignored; unknown mode strings fall back to
+  the unprefixed `map` / `noremap`.
+
+## 7. Record — closed efforts
+
+Shipped or disproved work, kept so a later pass does not re-report it. Full
+detail (repros, cited lines, per-item status) is in `git log` for the folded
+files.
+
+### 2026-08-04 code review (`docs/code-review.md`)
+
+All 14 findings shipped the same day (commits `09fcf484`..`0e328c36`): ex
+`$`/`%` phantom-row addresses, `ensure_cursor_visible` underflow on a stale
+cursor, multibyte `n` skip, `nvim_get_current_buf` id-0 collision (buffer ids
+now start at 1), `N` wrap at buffer byte 0, `w`/`W`/`e` off the phantom row, `s`
+unnamed-register, visual-block `A` pad, `:s` mark rebase, inverted
+`nvim_buf_get_text`, comment-marker span boundaries, filler-unaware indent
+guides/diag overlays, markdown table width, `HexColorPass::apply_range` left
+boundary. The three hardening items shipped with them: ex ranges and word
+motions now share `content_row_count`, buffer ids start at 1, and the
+`replace_all` call sites document the marks/jumplist/folds invariant. What the
+review left open is §1.10.
+
+Five candidate findings were disproved against real nvim and dropped:
+`[count]iw` run-counting, `dgn` one-past-match-end, visual-block empty `I`/`A`
+cursor placement, fuzzy-score fast path, and `hjkl-fs-watch` debounce truncation
+— each verified to match or exceed nvim's behaviour.
+
+### 2026-08-04 performance review (`docs/performance-review.md`)
+
+All ten ranked findings shipped the same day (commits `5a644b11`..`ffb1d481`):
+O(distance) wrapped scrolloff, borrowed rope rows in search, windowed
+sentence/tag text objects, picker candidate caches, viewport-math rope borrows,
+per-frame fold/sign/diag precompute, early-stop comment seed scan, fold-text
+cache, idle-draw skip, per-window diag overlay. Six of the ten minor items
+shipped with them; the four that remain are §1.11. Two confirmed-fine notes:
+`SearchState::matches` invalidation is viewport-bounded and acceptable, and the
+undo-tree / `content_joined` / `wrap_segments` / `line_bytes` / lock choices
+were confirmed fine. The cost figures were traced from the code, not profiled —
+the §4 Gates note that performance items require measured before/after results
+still applies to the shipped fixes.
+
+### `--embed` and `--nvim-api` (2026-08-02 design record, `docs/embed-rpc.md`)
+
+Both phases of issue #26 shipped: `hjkl --embed` (JSON-RPC 2.0 over
+stdin/stdout) and `hjkl --nvim-api` (msgpack-rpc with nvim-compatible method
+names, a drop-in subprocess replacement for `nvim --headless --embed`). The
+`hjkl-compat-oracle` `nvim_api_tier_passes` test drives the corpus through the
+nvim-api path (`HJKL_ORACLE_NVIM_API=1`); `known_divergences.toml` is empty
+because those cases graduated into their own tier. The spec's binding
+conventions are recorded under Standing constraints.
