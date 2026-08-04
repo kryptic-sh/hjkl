@@ -118,6 +118,22 @@ pub struct Picker {
     /// Offset added to gutter line numbers in the preview (for windowed
     /// snapshots like buffer picker).
     preview_line_offset: usize,
+    /// Per-candidate case-fold cache: `(lowercased match text, folded→source
+    /// char map)` for source item index `i`. `refresh()` re-runs on every
+    /// keystroke, and recomputing these (two allocations plus a char walk
+    /// per candidate) for the whole item vec each time dominated the filter.
+    /// Entries stay valid while the source's item vec only grows, which
+    /// `PickerLogic` guarantees: an index once present never changes,
+    /// `item_count()` only increases during a scan, and re-enumeration
+    /// (which can reassign indices) happens only for `RequeryMode::Spawn`
+    /// sources, whose refresh path never scores. The cache is therefore
+    /// only extended — or cleared, if a source ever shrank — when the
+    /// candidate count changes; a fold for an already-seen index is never
+    /// recomputed.
+    lower_cache: Vec<(String, Vec<usize>)>,
+    /// Reused across keystrokes so the scored-sort buffer doesn't
+    /// re-allocate on every refresh.
+    scored_buf: Vec<(i64, usize, Vec<usize>)>,
 }
 
 impl Picker {
@@ -151,6 +167,8 @@ impl Picker {
             preview_top_row: 0,
             preview_match_row: None,
             preview_line_offset: 0,
+            lower_cache: Vec::new(),
+            scored_buf: Vec::new(),
         };
         // Block briefly for the first batch of items so the first
         // render already has a populated list and a loaded preview.
@@ -291,18 +309,31 @@ impl Picker {
         }
 
         let q_lower = q.to_lowercase();
-        let mut scored: Vec<(i64, usize, String, Vec<usize>)> = Vec::new();
-        for i in 0..count {
+        // Extend the fold cache to the new candidate count. Indices already
+        // seen are append-only (see `lower_cache` docs), so only the
+        // newcomers need folding; a shrink invalidates everything, and no
+        // real source shrinks mid-scan.
+        if count < self.lower_cache.len() {
+            self.lower_cache.clear();
+        }
+        self.lower_cache.reserve(count - self.lower_cache.len());
+        for i in self.lower_cache.len()..count {
             let m = self.source.match_text(i);
             // Case-fold char-by-char, tracking each folded char's source index.
             // `to_lowercase()` can change char count (e.g. 'İ' → "i̇", 'ẞ' → "ss"),
             // which would otherwise shift match positions off the original text
             // and highlight the wrong characters.
-            let (m_lower, index_map) = lower_with_map(&m);
+            self.lower_cache.push(lower_with_map(&m));
+        }
+
+        self.scored_buf.clear();
+        self.scored_buf.reserve(count);
+        for i in 0..count {
+            let (m_lower, index_map) = &self.lower_cache[i];
             let (sc, positions) = if q.is_empty() {
                 (0i64, Vec::new())
             } else {
-                match score(&m_lower, &q_lower) {
+                match score(m_lower, &q_lower) {
                     Some((sc, folded_pos)) => {
                         // Translate folded-char positions back to original
                         // char indices so highlights land on the right chars.
@@ -316,15 +347,20 @@ impl Picker {
                     None => continue,
                 }
             };
-            scored.push((sc, i, m_lower, positions));
+            self.scored_buf.push((sc, i, positions));
         }
         // Score desc; ties broken by lowercased match text asc.
-        scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.2.cmp(&b.2)));
-        scored.truncate(500);
-        self.filtered = scored
-            .into_iter()
-            .map(|(_, idx, _, matches)| FilteredEntry { idx, matches })
-            .collect();
+        self.scored_buf.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| self.lower_cache[a.1].0.cmp(&self.lower_cache[b.1].0))
+        });
+        self.scored_buf.truncate(500);
+        self.filtered.clear();
+        self.filtered.extend(
+            self.scored_buf
+                .drain(..)
+                .map(|(_, idx, matches)| FilteredEntry { idx, matches }),
+        );
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
         }
@@ -604,6 +640,102 @@ mod filter_tests {
             positions.contains(&1),
             "positions {positions:?} miss index 1"
         );
+    }
+
+    /// A `FilterInMemory` source the test can grow mid-session, counting
+    /// `match_text` calls so the fold cache is observable directly.
+    struct GrowingSource {
+        items: Arc<std::sync::Mutex<Vec<String>>>,
+        match_text_calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl PickerLogic for GrowingSource {
+        fn title(&self) -> &str {
+            "grow"
+        }
+        fn item_count(&self) -> usize {
+            self.items.lock().map_or(0, |g| g.len())
+        }
+        fn label(&self, idx: usize) -> String {
+            self.items
+                .lock()
+                .ok()
+                .and_then(|g| g.get(idx).cloned())
+                .unwrap_or_default()
+        }
+        fn match_text(&self, idx: usize) -> String {
+            self.match_text_calls.fetch_add(1, Ordering::Relaxed);
+            self.label(idx)
+        }
+        fn select(&self, _idx: usize) -> PickerAction {
+            PickerAction::None
+        }
+        fn enumerate(
+            &mut self,
+            _query: Option<&str>,
+            _cancel: Arc<AtomicBool>,
+        ) -> Option<JoinHandle<()>> {
+            None
+        }
+    }
+
+    #[test]
+    fn fold_cache_preserves_exact_results_and_tracks_source_growth() {
+        let items = Arc::new(std::sync::Mutex::new(vec![
+            "Zebra".to_string(),
+            "apple".to_string(),
+            "APPLE".to_string(),
+        ]));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut p = Picker::new_with_query(
+            Box::new(GrowingSource {
+                items: Arc::clone(&items),
+                match_text_calls: Arc::clone(&calls),
+            }),
+            "ap",
+        );
+
+        // The initial populate folds each candidate exactly once.
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+
+        // A keystroke with a different query must reuse the folds, not
+        // recompute them. The ranked order is the pre-cache one: equal
+        // scores tie-break on the lowercased match text, stably.
+        p.query.set_text("z");
+        p.refresh();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            3,
+            "a keystroke must reuse the per-candidate fold cache"
+        );
+        let z: Vec<String> = p.visible_entries().into_iter().map(|(l, _)| l).collect();
+        assert_eq!(z, vec!["Zebra"]);
+
+        // Same query twice (a different one in between forces a full
+        // re-score) yields an identical filtered list.
+        p.query.set_text("ap");
+        p.refresh();
+        let ap_first: Vec<String> = p.visible_entries().into_iter().map(|(l, _)| l).collect();
+        assert_eq!(ap_first, vec!["apple", "APPLE"]);
+        p.query.set_text("z");
+        p.refresh();
+        p.query.set_text("ap");
+        p.refresh();
+        let ap_second: Vec<String> = p.visible_entries().into_iter().map(|(l, _)| l).collect();
+        assert_eq!(ap_first, ap_second);
+
+        // A streamed-in candidate extends the cache (one new fold) instead
+        // of recomputing, and filters correctly.
+        items.lock().unwrap().push("Apricot".to_string());
+        p.query.set_text("apr");
+        p.refresh();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            4,
+            "only the newcomer may be folded again"
+        );
+        let apr: Vec<String> = p.visible_entries().into_iter().map(|(l, _)| l).collect();
+        assert_eq!(apr, vec!["Apricot"]);
     }
 }
 

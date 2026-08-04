@@ -116,6 +116,16 @@ pub struct Completion {
     /// highlight in the on-screen direction the user pressed. `Cell` so the
     /// view can record it through a shared `&Completion` borrow.
     flipped: std::cell::Cell<bool>,
+    /// Per-item fold cache: `(lowercased filter text, char vec)` for fuzzy
+    /// matching. `set_prefix` re-runs on every keystroke, and re-lowercasing
+    /// and re-chunking every item each time dominated the cost. The item
+    /// list is fixed for a popup's lifetime — consumers build a fresh
+    /// `Completion` per item fetch — so the cache is rebuilt only when
+    /// `all_items` changes size.
+    lower_cache: Vec<(String, Vec<char>)>,
+    /// `all_items.len()` the cache was built for; a mismatch triggers a
+    /// rebuild.
+    lower_cache_len: usize,
 }
 
 impl Completion {
@@ -142,6 +152,8 @@ impl Completion {
             selected: 0,
             prefix: String::new(),
             flipped: std::cell::Cell::new(false),
+            lower_cache: Vec::new(),
+            lower_cache_len: 0,
         }
     }
 
@@ -154,18 +166,31 @@ impl Completion {
     /// best match is auto-selected.
     pub fn set_prefix(&mut self, prefix: &str) {
         self.prefix = prefix.to_string();
+        // Rebuild the per-item fold cache only when the item list changed;
+        // the folds don't depend on the prefix, so every keystroke after the
+        // first reuses them (see `lower_cache` docs).
+        if self.lower_cache_len != self.all_items.len() {
+            self.lower_cache = self
+                .all_items
+                .iter()
+                .map(|item| {
+                    let haystack = item
+                        .filter_text
+                        .as_deref()
+                        .unwrap_or(&item.label)
+                        .to_lowercase();
+                    let chars: Vec<char> = haystack.chars().collect();
+                    (haystack, chars)
+                })
+                .collect();
+            self.lower_cache_len = self.all_items.len();
+        }
         let needle = prefix.to_lowercase();
-        let mut scored: Vec<(usize, i32)> = self
-            .all_items
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, item)| {
-                let haystack = item
-                    .filter_text
-                    .as_deref()
-                    .unwrap_or(&item.label)
-                    .to_lowercase();
-                match_score(&haystack, &needle).map(|score| (idx, score))
+        let needle_chars: Vec<char> = needle.chars().collect();
+        let mut scored: Vec<(usize, i32)> = (0..self.all_items.len())
+            .filter_map(|idx| {
+                let (haystack, chars) = &self.lower_cache[idx];
+                match_score_chars(haystack, chars, &needle, &needle_chars).map(|score| (idx, score))
             })
             .collect();
         // Higher score first; on a tie fall back to the original index so the
@@ -248,8 +273,12 @@ impl Default for Completion {
 }
 
 /// Fuzzy match score for `needle` against `haystack` (both already
-/// case-folded by the caller). Returns `None` when `needle` is not a
-/// subsequence of `haystack`; otherwise a score where **higher is better**.
+/// case-folded by the caller). `h` is the pre-collected char vec of
+/// `haystack` and `needle_chars` the pre-collected char vec of `needle`,
+/// both hoisted out of the per-item loop by [`Completion::set_prefix`] so
+/// repeated keystrokes don't re-chunk every candidate. Returns `None` when
+/// `needle` is not a subsequence of `haystack`; otherwise a score where
+/// **higher is better**.
 ///
 /// Heuristics, roughly in order of weight:
 /// - exact equality is the strongest signal,
@@ -260,12 +289,16 @@ impl Default for Completion {
 ///
 /// An empty `needle` matches everything with a neutral score, leaving the
 /// original ordering untouched.
-fn match_score(haystack: &str, needle: &str) -> Option<i32> {
+fn match_score_chars(
+    haystack: &str,
+    h: &[char],
+    needle: &str,
+    needle_chars: &[char],
+) -> Option<i32> {
     if needle.is_empty() {
         return Some(0);
     }
 
-    let h: Vec<char> = haystack.chars().collect();
     let mut needle_iter = needle.chars();
     let mut want = needle_iter.next();
     let mut score: i32 = 0;
@@ -300,7 +333,7 @@ fn match_score(haystack: &str, needle: &str) -> Option<i32> {
     if let Some(f) = first_match {
         score -= f as i32; // earlier first match is better
     }
-    if h == needle.chars().collect::<Vec<_>>() {
+    if h == needle_chars {
         score += 1000; // exact match
     } else if haystack.starts_with(needle) {
         score += 100; // prefix match
@@ -424,6 +457,48 @@ mod tests {
         assert_eq!(c.visible.len(), 1);
         c.set_prefix("");
         assert_eq!(c.visible.len(), 3);
+    }
+
+    #[test]
+    fn set_prefix_cache_preserves_results_and_invalidates_on_growth() {
+        let mut c = popup(&["foo_bar", "foobar", "baz", "FooBar"]);
+        c.set_prefix("fb");
+        let first: Vec<String> = c
+            .visible
+            .iter()
+            .map(|&i| c.all_items[i].label.clone())
+            .collect();
+        assert_eq!(first, vec!["foo_bar", "foobar", "FooBar"]);
+
+        // A different prefix must not leak cached state; results are the
+        // pre-cache matcher's.
+        c.set_prefix("baz");
+        let baz: Vec<String> = c
+            .visible
+            .iter()
+            .map(|&i| c.all_items[i].label.clone())
+            .collect();
+        assert_eq!(baz, vec!["baz"]);
+
+        // Same prefix again → identical item set and order.
+        c.set_prefix("fb");
+        let second: Vec<String> = c
+            .visible
+            .iter()
+            .map(|&i| c.all_items[i].label.clone())
+            .collect();
+        assert_eq!(first, second);
+
+        // An item-list change invalidates the cache: the new item joins the
+        // match and previously-ranked items keep their relative order.
+        c.all_items.push(make_item("foo_bar2"));
+        c.set_prefix("fb");
+        let third: Vec<String> = c
+            .visible
+            .iter()
+            .map(|&i| c.all_items[i].label.clone())
+            .collect();
+        assert_eq!(third, vec!["foo_bar", "foo_bar2", "foobar", "FooBar"]);
     }
 
     #[test]
