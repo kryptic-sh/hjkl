@@ -302,7 +302,7 @@ impl Search for RopeBuffer {
         // wrapping or not invoking the trait at all.
         let wrap = true;
         let rope = self.rope();
-        let from_line = hjkl_buffer::rope_line_str(&rope, start.row);
+        let from_line = crate::viewport_math::rope_line_slice(&rope, start.row);
         let from_byte = start.byte_offset(&from_line).min(from_line.len());
         if let Some(m) = pat.find_at(&from_line, from_byte) {
             return Some(byte_range_to_pos_range(
@@ -322,7 +322,7 @@ impl Search for RopeBuffer {
             if !wrap && row <= start.row {
                 break;
             }
-            let line = hjkl_buffer::rope_line_str(&rope, row);
+            let line = crate::viewport_math::rope_line_slice(&rope, row);
             if let Some(m) = pat.find(&line) {
                 return Some(byte_range_to_pos_range(row, m.start(), row, m.end(), &line));
             }
@@ -346,7 +346,7 @@ impl Search for RopeBuffer {
         // start <= from-byte on the from-row, then walk previous rows
         // taking the last match per row.
         let rope = self.rope();
-        let from_line = hjkl_buffer::rope_line_str(&rope, start.row);
+        let from_line = crate::viewport_math::rope_line_slice(&rope, start.row);
         let from_byte = start.byte_offset(&from_line).min(from_line.len());
         let mut best: Option<(usize, usize)> = None;
         for m in pat.find_iter(&from_line) {
@@ -374,7 +374,7 @@ impl Search for RopeBuffer {
             if !wrap && row >= start.row {
                 break;
             }
-            let line = hjkl_buffer::rope_line_str(&rope, row);
+            let line = crate::viewport_math::rope_line_slice(&rope, row);
             let last = pat.find_iter(&line).last();
             if let Some(m) = last {
                 return Some(byte_range_to_pos_range(row, m.start(), row, m.end(), &line));
@@ -915,6 +915,28 @@ mod tests {
         let pat = Regex::new("abc").unwrap();
         let r = Search::find_prev(&b, Pos::new(0, 11), &pat).unwrap();
         assert_eq!(r, Pos::new(0, 8)..Pos::new(0, 11));
+    }
+
+    /// Regression for the borrow swap in `find_next`/`find_prev`: the
+    /// per-row `String` became a `Cow<str>` borrow of the rope chunk
+    /// (`crate::viewport_math::rope_line_slice`). Content is identical,
+    /// but the byte→char column translation in
+    /// `byte_range_to_pos_range` must survive — a match on a row past
+    /// the from-row with multibyte content (whose byte offsets differ
+    /// from char columns) must resolve to the same char range as the
+    /// old `String` path.
+    #[test]
+    fn search_cross_row_multibyte_borrow_swap() {
+        let b = RopeBuffer::from_str("héllo\nwörld\n🎉 fóo\nbar");
+        let pat = Regex::new("fóo").unwrap();
+        // Match on row 2, at-or-after (0, 0): "🎉 fóo" is 5 chars
+        // ('🎉',' ','f','ó','o'); 'f' sits at byte 5, and the prefix
+        // `line[..5]` ("🎉 ") is 2 chars, so the match spans cols 2..5.
+        let r = Search::find_next(&b, Pos::new(0, 0), &pat).unwrap();
+        assert_eq!(r, Pos::new(2, 2)..Pos::new(2, 5));
+        // find_prev from a row past the match.
+        let r = Search::find_prev(&b, Pos::new(3, 0), &pat).unwrap();
+        assert_eq!(r, Pos::new(2, 2)..Pos::new(2, 5));
     }
 
     #[test]

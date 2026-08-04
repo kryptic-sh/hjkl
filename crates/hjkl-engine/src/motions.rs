@@ -1014,11 +1014,15 @@ fn char_kind(c: char, big: bool, iskeyword: &KeywordSpec) -> CharKind {
 ///
 /// Word scans (`w`/`b`/`e`/`ge`) step one character at a time and mostly
 /// stay within a row before crossing to the next, so a single `(row,
-/// String)` slot collapses what used to be one whole-line clone *per
-/// character examined* down to one clone *per row*. Every accessor
-/// mirrors [`read_line`] exactly — an out-of-bounds row yields an empty
-/// string — so lookups are byte-for-byte identical to the old
-/// `read_line_opt(..)?.chars()…` path (`chars().nth(col)` on an empty
+/// Vec<char>)` slot collapses what used to be one whole-line clone *per
+/// character examined* down to one clone *per row*. The row's chars are
+/// materialized once (`read_line` + `collect()`), then both accessors are
+/// O(1): `char_count` is the `Vec` length and `char_at` is a direct index
+/// — the old `chars().nth(col)` re-decoded the line from its start on
+/// EVERY step, making a `w` across a long line O(line²) in char decodes.
+/// Every accessor mirrors [`read_line`] exactly — an out-of-bounds row
+/// yields an empty `Vec`, so lookups are byte-for-byte identical to the
+/// old `read_line_opt(..)?.chars()…` path (`chars().nth(col)` on an empty
 /// string is `None`, matching the old early-return on an OOB row). The
 /// cache holds an owned copy independent of `buf`, so it stays valid
 /// across the cursor writes between counted iterations (word motions
@@ -1026,34 +1030,34 @@ fn char_kind(c: char, big: bool, iskeyword: &KeywordSpec) -> CharKind {
 #[derive(Default)]
 struct LineCache {
     row: usize,
-    line: String,
+    chars: Vec<char>,
     loaded: bool,
 }
 
 impl LineCache {
-    /// Borrow row `row`'s text, refreshing the slot when the scan
+    /// Borrow row `row`'s chars, refreshing the slot when the scan
     /// crosses to a different row. Mirrors [`read_line`].
     #[inline]
-    fn line<B: Query + ?Sized>(&mut self, buf: &B, row: usize) -> &str {
+    fn chars<B: Query + ?Sized>(&mut self, buf: &B, row: usize) -> &[char] {
         if !self.loaded || self.row != row {
-            self.line = read_line(buf, row);
+            self.chars = read_line(buf, row).chars().collect();
             self.row = row;
             self.loaded = true;
         }
-        &self.line
+        &self.chars
     }
 
     /// Char count of row `row` — mirrors `line_chars(&read_line(buf, row))`.
     #[inline]
     fn char_count<B: Query + ?Sized>(&mut self, buf: &B, row: usize) -> usize {
-        line_chars(self.line(buf, row))
+        self.chars(buf, row).len()
     }
 
     /// Char at `pos`, or `None` past end-of-line / out-of-bounds row.
     /// Byte-for-byte identical to the pre-cache free `char_at`.
     #[inline]
     fn char_at<B: Query + ?Sized>(&mut self, buf: &B, pos: Position) -> Option<char> {
-        self.line(buf, pos.row).chars().nth(pos.col)
+        self.chars(buf, pos.row).get(pos.col).copied()
     }
 }
 
@@ -1618,6 +1622,22 @@ mod tests {
         b.set_cursor(Position::new(0, 2));
         move_word_fwd(&mut b, false, 1, ISK);
         assert_eq!(at(&b), Position::new(1, 0));
+    }
+
+    /// `w` across a very long line. The old `LineCache::char_at` ran
+    /// `chars().nth(col)`, re-decoding the line from its start on every
+    /// step — a 2000-char walk was O(line²) char decodes. The per-row
+    /// `Vec<char>` cache indexes in O(1); this pins the landing position
+    /// (the word start past the whitespace at the far end) so the
+    /// refactor cannot drift the walk.
+    #[test]
+    fn move_word_fwd_across_long_line_lands_correctly() {
+        let mut line = "word ".repeat(400); // 2000 chars
+        line.push_str("target");
+        let mut b = View::from_str(&line);
+        // 400 `w` steps: one per "word", landing on "target"'s start.
+        move_word_fwd(&mut b, false, 400, ISK);
+        assert_eq!(at(&b), Position::new(0, 2000));
     }
 
     /// `e` / `E` from the last word of a trailing-`\n` buffer stays on the
