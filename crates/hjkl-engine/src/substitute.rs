@@ -537,7 +537,8 @@ pub fn collect_substitute_matches<H: crate::types::Host>(
 
     if start <= clamp_end {
         for row in start..=clamp_end {
-            let line = hjkl_buffer::rope_line_str(&rope, row);
+            // Borrow the rope chunk instead of materializing a String per row.
+            let line = crate::viewport_math::rope_line_slice(&rope, row);
             // Strip trailing newline so byte offsets refer to printable content.
             let line = line.trim_end_matches('\n');
 

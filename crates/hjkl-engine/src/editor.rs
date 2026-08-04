@@ -3887,8 +3887,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         }
         let dgen = crate::types::Query::dirty_gen(&self.buffer);
         crate::search::search_matches(&self.buffer, &mut self.search_state, dgen, row)
-            .into_iter()
-            .map(|(start, end)| Highlight {
+            .iter()
+            .map(|&(start, end)| Highlight {
                 range: Pos {
                     line,
                     col: start as u32,

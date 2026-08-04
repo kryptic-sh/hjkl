@@ -281,7 +281,7 @@ fn find_paragraph<B: Query + ?Sized>(
         let mut did_skip = false;
         let mut first = true;
         loop {
-            let empty = read_line(buf, curr as usize).is_empty();
+            let empty = buf.line_bytes(curr as usize) == 0;
             if !empty {
                 did_skip = true;
             }
@@ -345,12 +345,13 @@ pub fn move_section_backward<B: Cursor + Query>(buf: &mut B, count: usize) {
     let cursor = read_cursor(buf);
     let mut row = cursor.row;
     let mut found = 0;
+    let rope = Query::rope(buf);
     while found < count.max(1) {
         if row == 0 {
             break;
         }
         row -= 1;
-        if read_line(buf, row).starts_with('{') {
+        if crate::viewport_math::rope_line_slice(&rope, row).starts_with('{') {
             found += 1;
         }
     }
@@ -364,12 +365,13 @@ pub fn move_section_forward<B: Cursor + Query>(buf: &mut B, count: usize) {
     let last = read_row_count(buf).saturating_sub(1);
     let mut row = cursor.row;
     let mut found = 0;
+    let rope = Query::rope(buf);
     while found < count.max(1) {
         if row >= last {
             break;
         }
         row += 1;
-        if read_line(buf, row).starts_with('{') {
+        if crate::viewport_math::rope_line_slice(&rope, row).starts_with('{') {
             found += 1;
         }
     }
@@ -382,12 +384,13 @@ pub fn move_section_end_backward<B: Cursor + Query>(buf: &mut B, count: usize) {
     let cursor = read_cursor(buf);
     let mut row = cursor.row;
     let mut found = 0;
+    let rope = Query::rope(buf);
     while found < count.max(1) {
         if row == 0 {
             break;
         }
         row -= 1;
-        if read_line(buf, row).starts_with('}') {
+        if crate::viewport_math::rope_line_slice(&rope, row).starts_with('}') {
             found += 1;
         }
     }
@@ -401,12 +404,13 @@ pub fn move_section_end_forward<B: Cursor + Query>(buf: &mut B, count: usize) {
     let last = read_row_count(buf).saturating_sub(1);
     let mut row = cursor.row;
     let mut found = 0;
+    let rope = Query::rope(buf);
     while found < count.max(1) {
         if row >= last {
             break;
         }
         row += 1;
-        if read_line(buf, row).starts_with('}') {
+        if crate::viewport_math::rope_line_slice(&rope, row).starts_with('}') {
             found += 1;
         }
     }
@@ -664,22 +668,24 @@ pub fn matching_bracket_pos<B: Cursor + Query>(
     };
     let mut depth: i32 = 0;
     let row_count = read_row_count(buf);
+    // One rope snapshot per query; each row borrows its chunk with no alloc.
+    let rope = Query::rope(buf);
     if forward {
         let mut r = row;
         let mut c = col;
         loop {
-            let chars: Vec<char> = read_line(buf, r).chars().collect();
-            while c < chars.len() {
-                let here = chars[c];
+            let line = crate::viewport_math::rope_line_slice(&rope, r);
+            // `enumerate().skip(c)` yields the char's index within the line:
+            // the first row starts at the cursor col, later rows at 0.
+            for (i, here) in line.chars().enumerate().skip(c) {
                 if here == open {
                     depth += 1;
                 } else if here == close {
                     depth -= 1;
                     if depth == 0 {
-                        return Some((r, c));
+                        return Some((r, i));
                     }
                 }
-                c += 1;
             }
             if r + 1 >= row_count {
                 return None;
@@ -691,24 +697,35 @@ pub fn matching_bracket_pos<B: Cursor + Query>(
         let mut r = row;
         let mut c = col as isize;
         loop {
-            let chars: Vec<char> = read_line(buf, r).chars().collect();
-            while c >= 0 {
-                let here = chars[c as usize];
+            let line = crate::viewport_math::rope_line_slice(&rope, r);
+            let n = line.chars().count();
+            // Walk chars at original indices c, c-1, …, 0: reverse the line's
+            // chars and skip the ones past `c`. `i` is the offset from the
+            // walk start, so the char position is `c - i`. No allocation.
+            for (i, here) in line
+                .chars()
+                .rev()
+                .skip(n.saturating_sub(c as usize + 1))
+                .enumerate()
+            {
                 if here == close {
                     depth += 1;
                 } else if here == open {
                     depth -= 1;
                     if depth == 0 {
-                        return Some((r, c as usize));
+                        let here_pos = c - i as isize;
+                        return Some((r, here_pos as usize));
                     }
                 }
-                c -= 1;
             }
             if r == 0 {
                 return None;
             }
             r -= 1;
-            c = read_line(buf, r).chars().count() as isize - 1;
+            c = crate::viewport_math::rope_line_slice(&rope, r)
+                .chars()
+                .count()
+                .saturating_sub(1) as isize;
         }
     }
 }

@@ -81,9 +81,24 @@ pub fn buf_line<B: Query + ?Sized>(b: &B, row: usize) -> Option<String> {
 /// sites that previously did
 /// `buf.line(r).map(|l| l.chars().count()).unwrap_or(0)` collapse to
 /// one call.
+///
+/// Counts through a rope snapshot ([`Query::rope`] is an O(1) Arc-clone
+/// for the canonical [`hjkl_buffer::View`]) borrowed via
+/// [`crate::viewport_math::rope_line_slice`], so no per-row `String` is
+/// materialized. This runs on every `j`/`k` from the vim motion /
+/// curswant / editor-ext paths.
 #[inline]
 pub fn buf_line_chars<B: Query + ?Sized>(b: &B, row: usize) -> usize {
-    buf_line(b, row).map_or(0, |l| l.chars().count())
+    let rope = Query::rope(b);
+    // `rope_line_slice` panics out-of-bounds (ropey contract); guard like the
+    // old `buf_line`'s `row >= line_count` check. A trailing `\n` synthesizes
+    // a phantom final empty row, same as `Query::line_count`.
+    if row >= rope.len_lines() {
+        return 0;
+    }
+    crate::viewport_math::rope_line_slice(&rope, row)
+        .chars()
+        .count()
 }
 
 /// Length (bytes) of `row`. Returns 0 for out-of-bounds rows. The
@@ -130,4 +145,22 @@ pub fn apply_buffer_edit(
     edit: hjkl_buffer::Edit,
 ) -> hjkl_buffer::Edit {
     buf.apply_edit(edit)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hjkl_buffer::View;
+
+    /// `buf_line_chars` answers 0 for out-of-bounds rows — the old
+    /// `buf_line(b, row).map_or(0, |l| l.chars().count())` contract —
+    /// rather than panicking the rope.
+    #[test]
+    fn buf_line_chars_out_of_bounds_row_is_zero() {
+        let b = View::from_str("foo\nbar");
+        assert_eq!(buf_line_chars(&b, 0), 3);
+        assert_eq!(buf_line_chars(&b, 1), 3);
+        assert_eq!(buf_line_chars(&b, 2), 0);
+        assert_eq!(buf_line_chars(&b, 999), 0);
+    }
 }

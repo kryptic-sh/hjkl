@@ -39,8 +39,15 @@ use crate::types::{Cursor, FoldProvider, Query};
 /// materializing a `String` per dropped row.
 pub fn rope_line_slice<'a>(rope: &'a ropey::Rope, r: usize) -> std::borrow::Cow<'a, str> {
     let start = rope.line_to_byte(r);
-    rope.byte_slice(start..start + hjkl_buffer::rope_line_bytes(rope, r))
-        .into()
+    // Content end, separator excluded — mirrors `rope_line_content_end` (the
+    // final row runs to `len_bytes`). Computed inline so the row's start byte
+    // is resolved once instead of again inside `rope_line_bytes`.
+    let end = if r + 1 >= rope.len_lines() {
+        rope.len_bytes()
+    } else {
+        hjkl_buffer::floor_char_boundary(rope, rope.line_to_byte(r + 1).saturating_sub(1))
+    };
+    rope.byte_slice(start..end).into()
 }
 
 /// Bring the cursor into the visible viewport, scrolling by the

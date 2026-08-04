@@ -593,24 +593,24 @@ pub fn search_backward<B: Cursor + Query + Search>(
 /// Match positions on `row` as `(byte_start, byte_end)`. Used by
 /// the engine's highlight pipeline. Reads through the cache so a
 /// steady-state buffer doesn't re-scan every frame.
-pub fn search_matches<B: Query>(
+///
+/// Returns a borrow of the per-row cache (no per-call `Vec` clone).
+pub fn search_matches<'a, B: Query>(
     buf: &B,
-    state: &mut SearchState,
+    state: &'a mut SearchState,
     dirty_gen: u64,
     row: usize,
-) -> Vec<(usize, usize)> {
+) -> &'a [(usize, usize)] {
     if state.pattern.is_none() {
-        return Vec::new();
+        return &[];
     }
     let line_count = buf.line_count() as usize;
     if row >= line_count {
-        return Vec::new();
+        return &[];
     }
     // Materialize the line lazily — only when the cache misses. A warm
     // steady-state cache skips the per-row allocation entirely.
-    state
-        .matches_for(row, dirty_gen, || buf.line(row as u32))
-        .to_vec()
+    state.matches_for(row, dirty_gen, || buf.line(row as u32))
 }
 
 /// Warm the per-row match cache for `row` without producing a result.
@@ -1029,7 +1029,7 @@ mod tests {
         s.set_pattern(Some(re("bar")));
         let dgen = b.dirty_gen();
         let initial = search_matches(&b, &mut s, dgen, 0);
-        assert_eq!(initial, vec![(4, 7)]);
+        assert_eq!(initial, &[(4, 7)][..]);
     }
 
     // ── CaseMode::from_options matrix ────────────────────────────────────────
