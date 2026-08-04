@@ -734,6 +734,26 @@ with ripgrep installed are unaffected.
   passes for the wrong reason) in CI would look like flake. Check what the job
   actually reports before trusting either side.
 
+### 1.10 Left open by the 2026-08-04 code review
+
+- **Default-scope `:g`/`:v` still iterates the phantom trailing row.**
+  `crates/hjkl-ex/src/global.rs` default scope walks the raw `row_count()`, so a
+  default-scope `:g` runs its command on ropey's phantom empty row too. Explicit
+  `%`/`$` ranges were fixed (they now go through `content_row_count` in
+  `crates/hjkl-ex/src/range.rs`); the default-scope path was left because it was
+  out of the review's range.rs scope. Same phantom-row class as the `$` fix.
+- **`replace_all` skips the change-log emission `mutate_edit` performs.**
+  `Editor::mutate_edit` extends the change log (`editor.rs` `extend_change_log`)
+  and pushes pending content edits; the substitute path
+  (`crates/hjkl-engine/src/substitute.rs` `apply_substitute` /
+  `apply_collected_matches`) swaps content via `replace_all`, which does
+  neither. The marks/jumplist/folds rebase half of this class is fixed; the
+  change-log half is not.
+- **`nvim_buf_set_text` and `nvim_buf_get_text` clamp, never error, on rows past
+  end-of-buffer.** Real nvim errors E966/E1206 for out-of-range rows; hjkl
+  clamps to `line_count-1` (get_text) and slices clamped (set_text). Not fixed
+  because the review found no client misbehaviour from the clamping.
+
 ## 2. Blocked on platform access
 
 | Finding                                                      | Location                                                         | Blocker                                                                             |

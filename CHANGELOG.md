@@ -8,6 +8,54 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`n` (and `*`) no longer gets stuck on a match starting with a multi-byte
+  char.** `search_forward`'s skip-current step advanced one _byte_, and
+  `pos_at_byte` rounds a mid-char byte down to the char's start, so on `éé` the
+  first `n` re-found the current match forever. It now steps by the full char
+  width.
+- **`N` wraps to the last match when the current match starts at buffer
+  byte 0.** The skip-current branch returned `None` for a match at byte 0 and
+  never wrapped; it now queries `find_prev` from end-of-buffer.
+- **`w`/`W`/`e` no longer land on ropey's phantom trailing row** of a
+  newline-terminated buffer. The word-motion step helpers bounded the wrap by
+  the raw row count; they now use `content_row_count`, and `end_of_buffer`
+  anchors one past the last real char, so `yw` still yanks through it.
+- **`:s` with a newline in the replacement now rebases marks, global marks,
+  folds and the jumplist below the change.** The substitute applied content via
+  `replace_all`, which never reaches `mutate_edit`'s `shift_marks_after_edit`,
+  leaving positions stale.
+- **Ex range `$` and `%` resolve to the last real content line** instead of
+  ropey's phantom trailing row on newline-terminated buffers — `:$d`, `:$-1d`,
+  `:$y` and `%` no longer act one line past vim's last line.
+- **`ensure_cursor_visible` no longer underflow-panics** when another view
+  shrank the shared buffer and this view's cursor is stale: the soft-wrap scroll
+  loop is bounded by the clamped cursor row.
+- **Visual-block `A` with nothing typed no longer leaves phantom padding
+  spaces** in the buffer. The eager top-row pad is removed byte-for-byte on an
+  empty Esc (never via `ed.undo()`, which would have left the pad on the redo
+  stack), and the no-op undo boundary is consumed.
+- **`s` (substitute char) now writes the deleted text to the unnamed register**,
+  matching `x`/`X`, so `p` after `s` pastes the substituted char.
+- **The first buffer in `--nvim-api` mode gets id 1, not 0.** A 0 handle means
+  "current buffer" on the wire, so an id-0 initial buffer could never be
+  refocused by its own handle.
+- **`nvim_buf_get_text` rejects an inverted range** (start after end, including
+  same-row `start_col > end_col`, which previously panicked on the slice)
+  instead of silently returning `[]`.
+- **Comment-marker highlight spans no longer start or end mid-multi-byte-char**
+  when the char before/after a marker word is non-ASCII; both the bytes and rope
+  paths snap to UTF-8 boundaries.
+- **`HexColorPass::apply_range` now checks the left boundary at the range
+  start**, matching `apply_range_rope`.
+- **Indent guides and diagnostic overlays account for diff-filler rows** and no
+  longer paint N rows too high in a diff pair.
+- **Markdown tables never render wider than the viewport.** The column elision
+  kept a real column when `max_cols` was 1 and the per-column minimum was
+  applied after scaling, so a 2-column table could render 13 cells wide in a
+  10-cell viewport.
+
 ## [0.41.0] - 2026-08-04
 
 ### Added
