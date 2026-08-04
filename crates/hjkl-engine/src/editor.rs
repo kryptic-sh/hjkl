@@ -4161,14 +4161,15 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// A closed fold collapses its body to one screen row, so the cursor's
     /// screen row is the count of *visible* rows above it — not the doc-row
     /// delta. Instead of re-walking that count on every candidate `top_row`
-    /// (the incremental [`Self::ensure_scrolloff_vertical`], O(n²) on a big
-    /// jump like `G` over a fold-heavy file), compute the valid `top_row`
-    /// window directly: at most `height-1-margin` visible rows may sit above
-    /// the cursor (bottom edge) and at least `margin` (top edge). Walk those
-    /// two bounds up from the cursor via `prev_visible_row`, clamp the current
-    /// `top_row` into the window, then clamp to `max_top_for_height` so the
-    /// buffer's bottom never leaves blank rows. Each walk is bounded by
-    /// `height`, so the whole thing is O(height) regardless of jump distance.
+    /// (the pre-0.0.43 [`Self::ensure_scrolloff_vertical`], O(distance²) on
+    /// a big jump like `G` over a fold-heavy file), compute the valid
+    /// `top_row` window directly: at most `height-1-margin` visible rows may
+    /// sit above the cursor (bottom edge) and at least `margin` (top edge).
+    /// Walk those two bounds up from the cursor via `prev_visible_row`,
+    /// clamp the current `top_row` into the window, then clamp to
+    /// `max_top_for_height` so the buffer's bottom never leaves blank rows.
+    /// Each walk is bounded by `height`, so the whole thing is O(height)
+    /// regardless of jump distance.
     fn ensure_scrolloff_folds_nowrap(&mut self, height: usize, margin: usize) {
         let cursor_row = buf_cursor_row(&self.buffer);
         let max_csr = height.saturating_sub(1).saturating_sub(margin);
@@ -4221,6 +4222,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// margin around a fold. Horizontal (column) scroll is the caller's
     /// job — this only moves `top_row`.
     fn ensure_scrolloff_vertical(&mut self, height: usize, margin: usize) {
+        use crate::types::FoldProvider;
         let cursor_row = buf_cursor_row(&self.buffer);
         // Step 1 — cursor above viewport: snap top to cursor row,
         // then we'll fix up the margin below.
@@ -4238,56 +4240,99 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // a `&Viewport` parameter; the host owns the viewport, so the
         // disjoint `(self.host, self.buffer)` borrows split cleanly.
         let max_csr = height.saturating_sub(1).saturating_sub(margin);
-        loop {
-            let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
-            let top = self.host.viewport().top_row;
-            let csr = crate::viewport_math::cursor_screen_row_from(
-                &self.buffer,
-                &folds,
-                self.host.viewport(),
-                top,
-            )
-            .unwrap_or(0);
-            if csr <= max_csr {
-                break;
+        // The cursor's screen row from the current top, computed ONCE (one
+        // linear pass) and then adjusted per dropped/added visible row —
+        // the incremental walk [`crate::viewport_math::ensure_cursor_visible`]
+        // uses. Re-running `cursor_screen_row_from` (itself O(distance))
+        // per candidate `top_row` made a big soft-wrapped jump O(distance²);
+        // subtracting/adding one row's wrap height per step keeps it
+        // O(distance). `None` mirrors the old `unwrap_or(0)`: a cursor above
+        // `top_row` (a stale per-window cursor past EOF, or a hidden cursor
+        // row) reads as screen row 0, so step 2 no-ops and step 3 pulls
+        // `top_row` back until the cursor enters the window.
+        let row_count = buf_row_count(&self.buffer);
+        let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
+        let rope = crate::types::Query::rope(&self.buffer);
+        let v = *self.host.viewport();
+        let mut screen = crate::viewport_math::cursor_screen_row_from(
+            &self.buffer,
+            &folds,
+            self.host.viewport(),
+            self.host.viewport().top_row,
+        );
+        // Step 2 — push top forward until cursor's screen row is
+        // within the bottom margin (`csr <= height - 1 - margin`).
+        if let Some(mut s) = screen {
+            while s > max_csr {
+                let top = self.host.viewport().top_row;
+                let next =
+                    <crate::buffer_impl::BufferFoldProvider<'_> as crate::types::FoldProvider>::next_visible_row(&folds, top, row_count);
+                let Some(next) = next else {
+                    break;
+                };
+                // Don't walk past the cursor's row. Only reachable when
+                // `top` already equals the cursor's row (a visible cursor
+                // row at-or-after `top` bounds `next_visible_row`), so the
+                // screen value stays valid for step 3.
+                if next > cursor_row {
+                    self.host.viewport_mut().top_row = cursor_row;
+                    break;
+                }
+                // Removing rows [top, next) from the top of the range drops
+                // their visible heights (hidden rows contribute 0); after
+                // this `s` equals `cursor_screen_row_from(..., next)`.
+                for r in top..next {
+                    if !folds.is_row_hidden(r) {
+                        let line = crate::viewport_math::rope_line_slice(&rope, r);
+                        s -= hjkl_buffer::wrap::wrap_segments(&line, v.text_width, v.wrap).len();
+                    }
+                }
+                self.host.viewport_mut().top_row = next;
             }
-            let row_count = buf_row_count(&self.buffer);
-            let next = {
-                let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
-                <crate::buffer_impl::BufferFoldProvider<'_> as crate::types::FoldProvider>::next_visible_row(&folds, top, row_count)
-            };
-            let Some(next) = next else {
-                break;
-            };
-            // Don't walk past the cursor's row.
-            if next > cursor_row {
-                self.host.viewport_mut().top_row = cursor_row;
-                break;
-            }
-            self.host.viewport_mut().top_row = next;
+            screen = Some(s);
         }
         // Step 3 — pull top backward until cursor's screen row is
-        // past the top margin (`csr >= margin`).
+        // past the top margin (`csr >= margin`). The same incremental walk,
+        // run in reverse: `prev_visible_row` lands on the nearest visible
+        // row above `top` (the rows between are hidden and contribute 0), so
+        // pulling `top_row` back to `prev` adds exactly `prev`'s wrap height
+        // back to the cursor's screen row.
+        let clamped_cursor_row = cursor_row.min(row_count.saturating_sub(1));
         loop {
-            let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
-            let top = self.host.viewport().top_row;
-            let csr = crate::viewport_math::cursor_screen_row_from(
-                &self.buffer,
-                &folds,
-                self.host.viewport(),
-                top,
-            )
-            .unwrap_or(0);
-            if csr >= margin {
-                break;
+            match screen {
+                Some(s) if s >= margin => break,
+                // `None` reads as screen row 0: a zero margin satisfies
+                // `csr >= margin` immediately, as in the old loop.
+                None if margin == 0 => break,
+                _ => {}
             }
-            let prev = {
-                let folds = crate::buffer_impl::BufferFoldProvider::new(&self.buffer);
-                <crate::buffer_impl::BufferFoldProvider<'_> as crate::types::FoldProvider>::prev_visible_row(&folds, top)
-            };
+            let top = self.host.viewport().top_row;
+            // A `None` screen means the (clamped) cursor still sits above
+            // the window; once `top` walks down to it, recompute the screen
+            // row once and continue incrementally from there. A visible
+            // clamped cursor row guarantees the recompute succeeds.
+            if screen.is_none()
+                && top <= clamped_cursor_row
+                && !folds.is_row_hidden(clamped_cursor_row)
+            {
+                screen = crate::viewport_math::cursor_screen_row_from(
+                    &self.buffer,
+                    &folds,
+                    self.host.viewport(),
+                    top,
+                );
+                continue;
+            }
+            let prev =
+                <crate::buffer_impl::BufferFoldProvider<'_> as crate::types::FoldProvider>::prev_visible_row(&folds, top);
             let Some(prev) = prev else {
                 break;
             };
+            if let Some(s) = screen {
+                let line = crate::viewport_math::rope_line_slice(&rope, prev);
+                screen =
+                    Some(s + hjkl_buffer::wrap::wrap_segments(&line, v.text_width, v.wrap).len());
+            }
             self.host.viewport_mut().top_row = prev;
         }
         // Step 4 — clamp top so the buffer's bottom doesn't leave
@@ -7376,5 +7421,161 @@ mod options_conversion_tests {
         assert_eq!(ed.settings().signcolumn, SignColumnMode::No);
         // `Settings`-only field: not in `Options` at all, so untouched.
         assert_eq!(ed.settings().diagnostics_inline, DiagInlineMode::Off);
+    }
+}
+
+// ---- Wrapped-scrolloff tests (incremental screen-row walk) --------------
+//
+// `ensure_scrolloff_vertical` computes the cursor's screen row ONCE and
+// adjusts it per dropped/added visible row instead of re-running
+// `cursor_screen_row_from` (itself O(distance)) per candidate `top_row`.
+// These tests pin the behavior the incremental walk must preserve — they
+// pass on the old O(n²) loop and must keep passing on the rewrite.
+
+#[cfg(test)]
+mod scrolloff_wrap_tests {
+    use super::*;
+    use crate::types::{DefaultHost, Host, Options};
+    use hjkl_buffer::{Position, View, Wrap};
+    use std::sync::Arc;
+
+    /// Editor over a wrapped buffer with the viewport + scrolloff set up so
+    /// `ensure_cursor_in_scrolloff` dispatches to the screen-row walk
+    /// (`wrap != Wrap::None`, `viewport_height > 0`).
+    fn wrapped_editor(
+        content: &str,
+        height: u16,
+        width: u16,
+        scrolloff: usize,
+    ) -> Editor<View, DefaultHost> {
+        let mut ed = Editor::new(
+            View::from_str(content),
+            DefaultHost::default(),
+            Options::default(),
+        );
+        ed.set_viewport_height(height);
+        let vp = ed.host_mut().viewport_mut();
+        vp.width = width;
+        vp.height = height;
+        vp.text_width = width;
+        vp.wrap = Wrap::Char;
+        ed.settings_mut().scrolloff = scrolloff;
+        ed
+    }
+
+    /// Cursor's screen row from the current `top_row`, through the same
+    /// fold provider the scrolloff walk uses.
+    fn csr(ed: &Editor<View, DefaultHost>) -> usize {
+        let folds = crate::buffer_impl::BufferFoldProvider::new(ed.buffer());
+        crate::viewport_math::cursor_screen_row_from(
+            ed.buffer(),
+            &folds,
+            ed.host().viewport(),
+            ed.host().viewport().top_row,
+        )
+        .unwrap_or(0)
+    }
+
+    /// `n` doc rows × 30 chars — at text_width 10 each row wraps to exactly
+    /// 3 screen rows.
+    fn wrapped_rows(n: usize) -> String {
+        let mut content = String::new();
+        for _ in 0..n {
+            content.push_str(&"x".repeat(30));
+            content.push('\n');
+        }
+        content.pop();
+        content
+    }
+
+    /// Step 2 regression: a big wrapped jump (`G`) must push `top_row`
+    /// forward one visible doc row at a time until the cursor's screen row
+    /// enters the bottom margin. The old loop recomputed the screen row per
+    /// candidate top; the incremental walk must land on the same `top_row`.
+    /// 30 rows × 3 screen rows = 90; height 9 with scrolloff 2 keeps the
+    /// cursor's screen row in [2, 6], i.e. `top_row` 17 for row 19. The
+    /// cursor is NOT on the last row, so `max_top_for_height` (27) cannot
+    /// mask a walk that overshoots: a broken subtraction lands above 17 and
+    /// stays there.
+    #[test]
+    fn big_wrapped_jump_lands_in_bottom_margin() {
+        let content = wrapped_rows(30);
+        let mut ed = wrapped_editor(&content, 9, 10, 2);
+        ed.jump_cursor(19, 0);
+        ed.ensure_cursor_in_scrolloff();
+        assert_eq!(ed.host().viewport().top_row, 17);
+        assert!(
+            (2..=6).contains(&csr(&ed)),
+            "cursor screen row {} outside [2, 6]",
+            csr(&ed)
+        );
+    }
+
+    /// Step 3 regression: with the cursor at the very top of the window
+    /// (screen row 0 < margin), the backward walk must pull `top_row` up
+    /// one visible row at a time — each row added to the top of the window
+    /// adds its own wrap height back to the cursor's screen row. Cursor on
+    /// row 8 of a 30-row buffer with top 8: one pull-back lands on 7
+    /// (screen row 3), far below `max_top_for_height` (27) so the bottom
+    /// clamp cannot mask a broken walk.
+    #[test]
+    fn cursor_at_top_of_window_pulls_top_back_to_margin() {
+        let content = wrapped_rows(30);
+        let mut ed = wrapped_editor(&content, 9, 10, 2);
+        ed.jump_cursor(8, 0);
+        ed.host_mut().viewport_mut().top_row = 8; // cursor at screen row 0
+        ed.ensure_cursor_in_scrolloff();
+        assert_eq!(ed.host().viewport().top_row, 7);
+        assert!(
+            (2..=6).contains(&csr(&ed)),
+            "cursor screen row {} outside [2, 6]",
+            csr(&ed)
+        );
+    }
+
+    /// Fold handling: a closed fold hides its body rows from the walk —
+    /// `next_visible_row` jumps over them, and dropped rows only contribute
+    /// their wrap height when visible. 12 rows × 30 chars, fold hiding
+    /// rows 5..=6; cursor on row 10 (not the last row, so the bottom clamp
+    /// at `max_top_for_height` = 9 does not mask the walk). Step 2 drops
+    /// rows 0..3, then jumps 4 → 7 over the fold body (only row 4's 3
+    /// screen rows subtracted), then 7 → 8: top 8, screen row 6.
+    #[test]
+    fn wrapped_scrolloff_skips_closed_fold_body() {
+        let content = wrapped_rows(12);
+        let mut ed = wrapped_editor(&content, 9, 10, 2);
+        ed.buffer_mut().add_fold(4, 6, true);
+        ed.jump_cursor(10, 0);
+        ed.ensure_cursor_in_scrolloff();
+        assert_eq!(ed.host().viewport().top_row, 8);
+    }
+
+    /// A stale per-window cursor past EOF (another view shrank the shared
+    /// content) makes `cursor_screen_row_from` return None. The walk must
+    /// treat that as screen row 0 — step 2 no-ops, step 3 pulls `top_row`
+    /// back until the cursor's screen row reaches the top margin — and must
+    /// not panic.
+    #[test]
+    fn stale_cursor_past_eof_does_not_advance_or_panic() {
+        let seed = View::from_str("a\nb\nc\nd\ne\nf\ng");
+        let arc = seed.content_arc();
+        let mut view_b = View::new_view(Arc::clone(&arc));
+        view_b.set_cursor(Position::new(6, 0));
+        // A sibling view shrinks the shared document; view_b's cursor row 6
+        // is now past EOF.
+        let mut view_a = View::new_view(Arc::clone(&arc));
+        view_a.replace_all("a\nb\nc");
+        let mut ed = Editor::new(view_b, DefaultHost::default(), Options::default());
+        ed.set_viewport_height(5);
+        let vp = ed.host_mut().viewport_mut();
+        vp.width = 10;
+        vp.height = 5;
+        vp.text_width = 10;
+        vp.wrap = Wrap::Char;
+        vp.top_row = 50;
+        ed.settings_mut().scrolloff = 2;
+        ed.ensure_cursor_in_scrolloff(); // must not panic
+        assert_eq!(ed.host().viewport().top_row, 0);
+        assert_eq!(csr(&ed), 2);
     }
 }

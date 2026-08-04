@@ -23,6 +23,26 @@ use hjkl_buffer::{Viewport, Wrap};
 
 use crate::types::{Cursor, FoldProvider, Query};
 
+/// No-alloc-when-possible borrow of row `r`'s content (trailing separator
+/// excluded) — [`hjkl_buffer::rope_line_str`]'s slice, minus the
+/// unconditional `.to_string()`. ropey's `From<RopeSlice> for Cow<str>`
+/// borrows the chunk when the line is contiguous (the common case: any
+/// line shorter than a rope chunk, ~256 bytes) and only falls back to an
+/// owned `String` for multi-chunk lines. Rows come from a caller-owned
+/// rope snapshot (one `Query::rope` clone per walk).
+///
+/// `r` must be in-bounds: `ropey` panics otherwise, matching the
+/// `Query::line` contract this replaces.
+///
+/// `pub` inside the crate-private `viewport_math` module so the engine's
+/// scrolloff walk (`editor.rs`) reuses the same borrow instead of
+/// materializing a `String` per dropped row.
+pub fn rope_line_slice<'a>(rope: &'a ropey::Rope, r: usize) -> std::borrow::Cow<'a, str> {
+    let start = rope.line_to_byte(r);
+    rope.byte_slice(start..start + hjkl_buffer::rope_line_bytes(rope, r))
+        .into()
+}
+
 /// Bring the cursor into the visible viewport, scrolling by the
 /// minimum amount needed. When `viewport.wrap != Wrap::None` and
 /// `viewport.text_width > 0`, scrolling is screen-line aware:
@@ -69,6 +89,7 @@ where
         viewport.top_col = 0;
         return;
     };
+    let rope = Query::rope(buf);
     while screen >= height {
         let mut next = viewport.top_row + 1;
         while next <= cursor_row && folds.is_row_hidden(next) {
@@ -83,7 +104,7 @@ where
         // equals `cursor_screen_row_from(..., next)`.
         for r in viewport.top_row..next {
             if !folds.is_row_hidden(r) {
-                let line = Query::line(buf, r as u32);
+                let line = rope_line_slice(&rope, r);
                 screen -= hjkl_buffer::wrap::wrap_segments(&line, v.text_width, v.wrap).len();
             }
         }
@@ -120,12 +141,13 @@ where
     let mut total = 0usize;
     let mut row = last;
     let v = *viewport;
+    let rope = Query::rope(buf);
     loop {
         if !folds.is_row_hidden(row) {
             total += if matches!(v.wrap, Wrap::None) || v.text_width == 0 {
                 1
             } else {
-                let line = Query::line(buf, row as u32);
+                let line = rope_line_slice(&rope, row);
                 hjkl_buffer::wrap::wrap_segments(&line, v.text_width, v.wrap).len()
             };
         }
@@ -166,12 +188,13 @@ where
         return None;
     }
     let v = *viewport;
+    let rope = Query::rope(buf);
     let mut screen = 0usize;
     for r in top..=cursor_row {
         if folds.is_row_hidden(r) {
             continue;
         }
-        let line = Query::line(buf, r as u32);
+        let line = rope_line_slice(&rope, r);
         let segs = hjkl_buffer::wrap::wrap_segments(&line, v.text_width, v.wrap);
         if r == cursor_row {
             let seg_idx = hjkl_buffer::wrap::segment_for_col(&segs, cursor_col);
@@ -236,5 +259,31 @@ mod tests {
         // tops into `cursor_screen_row_from`.
         let mut vp2 = vp_wrap(4, 3);
         ensure_cursor_visible(&view_b, &folds, &mut vp2); // must not panic
+    }
+
+    /// The screen-row walks borrow each row's content without materializing
+    /// a `String`, mirroring `rope_line_str`'s content end exactly. The two
+    /// separator shapes where a naive borrow diverges: ropey's multi-byte
+    /// line separators (stepping back one byte into U+2028 would panic on a
+    /// non-char boundary) and CRLF (where the `\r` legitimately stays in the
+    /// content). Row 0 of `"abc\u{2028}def\nXYZ"` is `"abc"` — one segment
+    /// at width 3 — so the cursor on row 1 sits at screen row 1; including
+    /// the separator would report 2. `"abcd\r\nXY"`'s row 0 is `"abcd\r"` —
+    /// two segments at width 3 — so the cursor on row 1 sits at screen row 2.
+    #[test]
+    fn wrap_heights_use_rope_line_str_content_end() {
+        let folds = NoopFoldProvider;
+        for (text, want) in [("abc\u{2028}def\nXYZ", 1), ("abcd\r\nXY", 2)] {
+            let seed = View::from_str(text);
+            let arc = seed.content_arc();
+            let mut view = View::new_view(Arc::clone(&arc));
+            view.set_cursor(Position::new(1, 0));
+            let vp = vp_wrap(3, 3);
+            assert_eq!(
+                cursor_screen_row_from(&view, &folds, &vp, 0),
+                Some(want),
+                "row 0 of {text:?} must wrap with its separator excluded"
+            );
+        }
     }
 }
