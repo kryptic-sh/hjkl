@@ -1391,7 +1391,7 @@ impl App {
             if self.slots[idx].swap_path.is_none() {
                 let pid = std::process::id();
                 let buffer_id = self.slots[idx].buffer_id;
-                match swap::scratch_swap_path(pid, buffer_id) {
+                match swap::scratch_swap_path_in(&self.swap_root, pid, buffer_id) {
                     Ok(p) => self.slots[idx].swap_path = Some(p),
                     Err(e) => {
                         tracing::debug!(err = %e, "scratch_swap_path failed");
@@ -1537,7 +1537,8 @@ impl App {
     /// NOT switched (user navigates to them via `:bnext` / buffer picker).
     ///
     /// The `_from(dir)` variant accepts a directory for testability without real
-    /// XDG I/O.  `recover_orphan_scratch_buffers` calls the real `swap_dir()`.
+    /// XDG I/O.  `recover_orphan_scratch_buffers` scans the app's swap root
+    /// (`self.swap_root`).
     ///
     /// NOTE: auto-loads all orphans (MVP). A picker UI for many orphans is
     /// out of scope for issue #185.
@@ -1656,11 +1657,11 @@ impl App {
         true
     }
 
-    /// Convenience wrapper: scan the real `swap_dir()`.
+    /// Convenience wrapper: scan the app's swap root (`self.swap_root`).
     ///
     /// Called once from `main` after construction — NOT from `App::new`.
     pub(crate) fn recover_orphan_scratch_buffers(&mut self) -> usize {
-        match hjkl_app::swap::swap_dir() {
+        match self.swap_root.dir() {
             Ok(d) => self.recover_orphan_scratch_buffers_from(&d),
             Err(_) => 0,
         }

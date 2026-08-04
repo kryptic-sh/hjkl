@@ -603,6 +603,7 @@ impl App {
             Some(path),
             &self.config,
             live_modeline,
+            &self.swap_root,
         )?;
         self.slots.push(slot);
         let idx = self.slots.len() - 1;

@@ -3270,13 +3270,14 @@ fn locked_secondary_slot_is_readonly_not_removed() {
 
 // ── Scratch-buffer swap tests (issue #185) ────────────────────────────────────
 
-/// A scratch buffer with content gets a swap file written lazily in an isolated
-/// cache directory.
+/// A scratch buffer with content gets a swap file written lazily under an
+/// injected [`hjkl_app::swap::SwapRoot`] — no `XDG_CACHE_HOME` override, so
+/// the swap lands in the temp dir, never the real cache.
 #[test]
 fn scratch_buffer_writes_swap_when_dirty() {
     let td = tempfile::tempdir().unwrap();
-    let _cache = crate::test_cwd::EnvVarGuard::set("XDG_CACHE_HOME", td.path());
     let mut app = App::new(None, false, None, None).unwrap();
+    app.swap_root = hjkl_app::swap::SwapRoot::At(td.path().to_path_buf());
     seed_buffer(&mut app, "unsaved work");
 
     app.write_swap_for_slot(0);
@@ -3285,6 +3286,10 @@ fn scratch_buffer_writes_swap_when_dirty() {
         .swap_path
         .clone()
         .expect("swap_path must be Some after write for non-empty scratch");
+    assert!(
+        swap_path.starts_with(td.path()),
+        "swap must live under the injected root, got {swap_path:?}"
+    );
     assert!(swap_path.exists(), "swap file must exist at {swap_path:?}");
 
     let (header, body) = hjkl_app::swap::read_swap(&swap_path).unwrap();
@@ -3295,7 +3300,7 @@ fn scratch_buffer_writes_swap_when_dirty() {
     );
     assert_eq!(body, "unsaved work", "swap body must match buffer content");
 
-    // Clean up the swap we wrote into the real swap dir.
+    // Clean up the swap we wrote into the injected temp root.
     let _ = hjkl_app::swap::remove_swap(&swap_path);
 }
 

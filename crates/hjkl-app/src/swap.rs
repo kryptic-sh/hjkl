@@ -5,6 +5,13 @@
 //! Scratch (never-saved) buffers get `scratch_<pid>_<bufid>.swp` in the same
 //! directory; their header has `canonical_path = ""`.
 //!
+//! Where the swap directory lives is a parameter, not a lookup: [`SwapRoot`]
+//! is either `Xdg` (the production default, resolved on every use) or an
+//! explicit directory. Every path helper has an `_in` variant taking one.
+//! Tests use the explicit variant rather than overriding `XDG_CACHE_HOME` —
+//! that variable is process-global, so an override is visible to every thread
+//! in the binary and not just to the test that set it.
+//!
 //! Format (v3):
 //! - 4 bytes  magic `b"HSWP"`
 //! - then a postcard-encoded `SwapHeader` length-prefixed by a `u32` LE
@@ -107,6 +114,56 @@ pub struct SwapUndo {
     pub current_seq: u64,
 }
 
+// ── Where swap files live ─────────────────────────────────────────────────────
+
+/// Which directory swap files are written into.
+///
+/// Production uses [`SwapRoot::Xdg`], which resolves `<XDG_CACHE_HOME>/hjkl/
+/// swap/` on every use exactly as before. [`SwapRoot::At`] names the directory
+/// outright, which is what lets a test point the swap directory at its own
+/// `TempDir` **without** `std::env::set_var("XDG_CACHE_HOME", …)`.
+///
+/// That distinction is the whole point. The environment is process-global, so a
+/// test that overrides `XDG_CACHE_HOME` changes it for every other thread in the
+/// same test binary — `set_var` is `unsafe` in Rust 2024 for exactly this
+/// reason. A `Mutex` around the mutation only serializes the tests that agreed
+/// to take it; every unrelated test that merely *reads* the variable (any of the
+/// many that construct an `App`, and so resolve a swap directory) still observes
+/// the override and creates `<the overriding test's temp dir>/hjkl/` under it.
+/// When that temp dir is also an explorer root, a stray `hjkl/` row appears in
+/// the tree and the next `dd` deletes the wrong line. An explicit root cannot
+/// collide with anything, because nothing else can name it.
+///
+/// Same shape as [`crate::trash::TrashRoot`], for the same reason.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum SwapRoot {
+    /// `<XDG_CACHE_HOME>/hjkl/swap/`, resolved on each use — the production
+    /// default.
+    #[default]
+    Xdg,
+    /// An explicit directory, created on first use with the same owner-only
+    /// mode as the XDG one.
+    At(PathBuf),
+}
+
+impl SwapRoot {
+    /// Resolve to a concrete directory, creating it (owner-only) if needed.
+    ///
+    /// Both variants go through [`hjkl_fs::ensure_private_dir`], so the
+    /// permissions of an injected root match the XDG one — swap files hold
+    /// unsaved buffer contents (potentially credentials, private keys, etc.),
+    /// and that is not for other local users to read in either case.
+    pub fn dir(&self) -> std::io::Result<PathBuf> {
+        match self {
+            Self::Xdg => hjkl_fs::private_cache_subdir("hjkl", "swap"),
+            Self::At(dir) => {
+                hjkl_fs::ensure_private_dir(dir)?;
+                Ok(dir.clone())
+            }
+        }
+    }
+}
+
 // ── Directory helpers ─────────────────────────────────────────────────────────
 
 /// Return (and auto-create) `<XDG_CACHE_HOME>/hjkl/swap/`.
@@ -114,8 +171,22 @@ pub struct SwapUndo {
 /// Owner-only: swap files hold unsaved buffer contents (potentially credentials,
 /// private keys, etc.), so other local users must not be able to enumerate or
 /// read them.
+///
+/// Shorthand for `SwapRoot::Xdg.dir()`.
 pub fn swap_dir() -> std::io::Result<PathBuf> {
-    hjkl_fs::private_cache_subdir("hjkl", "swap")
+    SwapRoot::Xdg.dir()
+}
+
+/// [`swap_path_for`] against an explicit [`SwapRoot`].
+///
+/// The `_in` half of the pair, mirroring `hjkl_anvil::store`'s `*_in` helpers:
+/// every behaviour below is identical, only the directory is named by the
+/// caller instead of read off the process environment.
+pub fn swap_path_in(root: &SwapRoot, canonical_path: &Path) -> std::io::Result<PathBuf> {
+    let path_str = canonical_path.to_string_lossy();
+    let hash = fnv1a64(path_str.as_bytes());
+    let name = format!("{hash:016x}.swp");
+    Ok(root.dir()?.join(name))
 }
 
 /// Stable swap path for a file: `swap_dir()/<hash16>.swp`
@@ -123,19 +194,28 @@ pub fn swap_dir() -> std::io::Result<PathBuf> {
 /// `canonical_path` should be an already-canonicalized absolute path.
 /// The hash is the first 16 hex chars of FNV-1a-64 over the UTF-8 bytes of
 /// the path string — build-stable, cross-platform.
+///
+/// Shorthand for `swap_path_in(&SwapRoot::Xdg, …)`.
 pub fn swap_path_for(canonical_path: &Path) -> std::io::Result<PathBuf> {
-    let path_str = canonical_path.to_string_lossy();
-    let hash = fnv1a64(path_str.as_bytes());
-    let name = format!("{hash:016x}.swp");
-    Ok(swap_dir()?.join(name))
+    swap_path_in(&SwapRoot::Xdg, canonical_path)
+}
+
+/// [`scratch_swap_path`] against an explicit [`SwapRoot`].
+///
+/// The `_in` half of the pair: the filename is identical, only the directory
+/// is named by the caller instead of read off the process environment.
+pub fn scratch_swap_path_in(root: &SwapRoot, pid: u32, buffer_id: u64) -> std::io::Result<PathBuf> {
+    Ok(root.dir()?.join(format!("scratch_{pid}_{buffer_id}.swp")))
 }
 
 /// Swap path for an unnamed/scratch buffer: `swap_dir()/scratch_<pid>_<bufid>.swp`
 ///
 /// The filename is stable for a given (pid, buffer_id) pair within a session,
 /// so the same slot always writes to the same path.
+///
+/// Shorthand for `scratch_swap_path_in(&SwapRoot::Xdg, …)`.
 pub fn scratch_swap_path(pid: u32, buffer_id: u64) -> std::io::Result<PathBuf> {
-    Ok(swap_dir()?.join(format!("scratch_{pid}_{buffer_id}.swp")))
+    scratch_swap_path_in(&SwapRoot::Xdg, pid, buffer_id)
 }
 
 /// A recoverable orphan scratch swap discovered by [`scan_orphan_scratch_swaps_in`].

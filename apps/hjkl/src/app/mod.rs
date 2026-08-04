@@ -387,6 +387,12 @@ pub struct App {
     /// XDG-merged value via [`Self::with_config`] before entering the
     /// event loop.
     pub config: hjkl_app::config::Config,
+    /// Explicit swap directory (mirrors [`hjkl_app::trash::TrashRoot`]).
+    /// Production default is [`hjkl_app::swap::SwapRoot::Xdg`] —
+    /// `<XDG_CACHE_HOME>/hjkl/swap/`, resolved on each use. Tests inject
+    /// [`hjkl_app::swap::SwapRoot::At`] so the swap dir never touches the
+    /// process-global `XDG_CACHE_HOME` environment variable.
+    pub swap_root: hjkl_app::swap::SwapRoot,
     /// Animated start screen shown when no file argument was given.
     /// Cleared (set to `None`) on the first keypress, or by
     /// [`Self::expire_start_screen`] once [`START_SCREEN_TTL`] has passed.
@@ -843,6 +849,7 @@ pub fn build_slot(
     path: Option<PathBuf>,
     config: &hjkl_app::config::Config,
     live_modeline: Option<(bool, u32)>,
+    swap_root: &hjkl_app::swap::SwapRoot,
 ) -> Result<BufferSlot, String> {
     let mut buffer = View::new();
     let mut is_new_file = false;
@@ -932,10 +939,12 @@ pub fn build_slot(
     // redundant work discarded when the eventual window editor is built.
 
     // Compute swap path for named files (best-effort; ignore errors here —
-    // the write path handles errors per-write).
+    // the write path handles errors per-write). `swap_root` names the
+    // directory: production passes the app's `SwapRoot::Xdg`, tests inject
+    // an explicit one so no swap file lands under the real XDG cache.
     let swap_path = if let Some(ref p) = path {
         let canonical = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-        hjkl_app::swap::swap_path_for(&canonical).ok()
+        hjkl_app::swap::swap_path_in(swap_root, &canonical).ok()
     } else {
         None
     };
@@ -2251,10 +2260,21 @@ impl App {
         // `apply_options` after `with_config`.
         let bootstrap_config = hjkl_app::config::Config::default();
         let no_file = filename.is_none();
+        // The app's default swap root: XDG, resolved per use. Tests replace
+        // `app.swap_root` with an explicit root after construction; the first
+        // slot's swap path (computed here) uses this same default.
+        let swap_root = hjkl_app::swap::SwapRoot::Xdg;
         // No editor exists yet, so there is no live value to carry — the
         // config's own is the right seed for the first slot.
-        let mut slot = build_slot(&mut syntax, buffer_id, filename, &bootstrap_config, None)
-            .map_err(|s| anyhow::anyhow!(s))?;
+        let mut slot = build_slot(
+            &mut syntax,
+            buffer_id,
+            filename,
+            &bootstrap_config,
+            None,
+            &swap_root,
+        )
+        .map_err(|s| anyhow::anyhow!(s))?;
 
         // App-wide shared banks — one `Arc` for the whole session, wired
         // into every window editor identically by `reconcile_window_editors`
@@ -2386,6 +2406,7 @@ impl App {
             last_signature_us: 0,
             last_synced_syntax_view: None,
             config: hjkl_app::config::Config::default(),
+            swap_root,
             start_screen,
             lsp: None,
             lsp_state: HashMap::new(),

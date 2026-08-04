@@ -1351,7 +1351,7 @@ impl super::App {
         }
         self.slots[idx].last_swap_dirty_gen = None;
         let canonical = std::fs::canonicalize(&new_path).unwrap_or_else(|_| new_path.clone());
-        self.slots[idx].swap_path = hjkl_app::swap::swap_path_for(&canonical).ok();
+        self.slots[idx].swap_path = hjkl_app::swap::swap_path_in(&self.swap_root, &canonical).ok();
 
         self.slots[idx].filename = Some(new_path.clone());
         self.slots[idx].git_repo_present = None; // re-probe for new path
