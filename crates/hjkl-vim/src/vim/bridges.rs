@@ -178,17 +178,29 @@ pub fn substitute_char_bridge<H: hjkl_engine::types::Host>(
     let register = vim(ed).pending_register;
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
+    // vim's `s` is `cl`: the deleted text lands in the unnamed register, so
+    // `p` right after `s` pastes the substituted char. Collect it from each
+    // delete's inverse (same shape as `do_char_delete` for `x`/`X`).
+    let mut deleted = String::new();
     for _ in 0..count.max(1) {
         let cursor = buf_cursor_pos(ed.buffer());
         let line_chars = buf_line_chars(ed.buffer(), cursor.row);
         if cursor.col >= line_chars {
             break;
         }
-        ed.mutate_edit(Edit::DeleteRange {
+        let inverse = ed.mutate_edit(Edit::DeleteRange {
             start: cursor,
             end: Position::new(cursor.row, cursor.col + 1),
             kind: MotionKind::Char,
         });
+        if let Edit::InsertStr { text, .. } = inverse {
+            deleted.push_str(&text);
+        }
+    }
+    if !deleted.is_empty() {
+        ed.record_yank_to_host(deleted.clone());
+        let target = vim_mut(ed).pending_register.take();
+        ed.record_delete(deleted, false, target);
     }
     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
     if !vim(ed).replaying {
@@ -538,4 +550,42 @@ pub fn word_search_bridge<H: hjkl_engine::types::Host>(
     count: usize,
 ) {
     word_at_cursor_search(ed, forward, whole_word, count.max(1));
+}
+#[cfg(test)]
+mod substitute_char_tests {
+    use hjkl_buffer::View;
+    use hjkl_engine::{DefaultHost, Input, Key, Options};
+
+    fn inp(key: Key) -> Input {
+        Input {
+            key,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        }
+    }
+
+    /// `yy` then `s<Esc>`: vim's `s` is `cl`, so the substituted char must
+    /// overwrite the unnamed register (nvim parity — `p` after `s` pastes it).
+    /// The `yy` primes the register with a linewise yank so this proves `s`
+    /// REPLACES prior register content rather than merely leaving it alone.
+    #[test]
+    fn substitute_char_writes_deleted_text_to_unnamed_register() {
+        let mut ed = crate::vim::vim_editor(
+            View::from_str("ab\ncd"),
+            DefaultHost::new(),
+            Options::default(),
+        );
+        // `s` maps to sneak by default — disable it so `s` substitutes.
+        ed.settings_mut().motion_sneak = false;
+        crate::dispatch_input(&mut ed, inp(Key::Char('y')));
+        crate::dispatch_input(&mut ed, inp(Key::Char('y')));
+        crate::dispatch_input(&mut ed, inp(Key::Char('s')));
+        crate::dispatch_input(&mut ed, inp(Key::Esc));
+        assert_eq!(
+            ed.with_registers(|r| r.unnamed.text.clone()),
+            "a",
+            "s must put the substituted char in the unnamed register"
+        );
+    }
 }

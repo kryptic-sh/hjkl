@@ -538,6 +538,19 @@ pub enum InsertReason {
         col: usize,
         pad: bool,
         cursor_col: usize,
+        /// Top row's char count BEFORE the `A` pad was applied. Recorded at
+        /// construction so `finish_insert_session` can remove exactly the
+        /// pad's bytes (`pre_pad_len..col`) on an empty Esc — the pad itself
+        /// is never recorded as an undo step, so its range must be stashed
+        /// here rather than derived from the (already padded) live buffer.
+        pre_pad_len: usize,
+        /// Undo-stack depth recorded just before the caller's `push_undo` for
+        /// this block command. An empty block-`A` pushes a no-op undo
+        /// boundary; when it is still the most recent one (depth == this + 1
+        /// at Esc — nothing else pushed mid-session, and the push was not
+        /// suppressed by an enclosing undo group), `finish_insert_session`
+        /// consumes it so the no-op command leaves the undo tree untouched.
+        undo_depth_before: usize,
     },
     /// `c` from VisualBlock: block content deleted, then user types
     /// replacement text replicated across all block rows on Esc. Cursor

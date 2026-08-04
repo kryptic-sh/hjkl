@@ -1698,6 +1698,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     fn visual_block_insert_at_left(&mut self, top: usize, bot: usize, col: usize, count: usize) {
         self.jump_cursor(top, col);
         crate::vim_state::vim_mut(self).mode = FsmMode::Normal;
+        let undo_depth_before = self.undo_stack_len();
         crate::vim::begin_insert(
             self,
             count,
@@ -1715,6 +1716,10 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 // existing case started at col 0, where the step-back's
                 // `col > 0` guard happened to no-op and masked this).
                 cursor_col: col + 1,
+                // `I` never pads (`pad: false`), so both fields are dead
+                // here; record the honest values anyway.
+                pre_pad_len: hjkl_engine::buf_helpers::buf_line_chars(self.buffer(), top),
+                undo_depth_before,
             },
         );
     }
@@ -1739,6 +1744,12 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         // checkpoint ourselves before padding, then use
         // `begin_insert_noundo` — mirrors the `Operator::Change` block
         // path (push_undo, mutate, begin_insert_noundo) in `visual_ops`.
+        // Record the undo depth just before the push: an EMPTY block-`A`
+        // leaves that checkpoint as a no-op boundary, and
+        // `finish_insert_session` consumes it on Esc (when it is still the
+        // most recent one) so a no-op command leaves the undo tree
+        // untouched.
+        let undo_depth_before = self.undo_stack_len();
         self.push_undo();
         let line_len = hjkl_engine::buf_helpers::buf_line_chars(self.buffer(), top);
         if col > line_len {
@@ -1762,6 +1773,11 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 // land exactly there" convention as `visual_block_insert_
                 // at_left` — see its comment.
                 cursor_col: left + 1,
+                // The top row's length before padding — the pad occupies
+                // `pre_pad_len..col` of the row, which is exactly the range
+                // to remove on an empty Esc.
+                pre_pad_len: line_len,
+                undo_depth_before,
             },
         );
     }

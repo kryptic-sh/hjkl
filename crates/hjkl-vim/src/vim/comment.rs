@@ -218,6 +218,8 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
         col,
         pad,
         cursor_col,
+        pre_pad_len,
+        undo_depth_before,
     } = session.reason
     {
         // `I` / `A` from VisualBlock: replicate text across rows; cursor
@@ -260,6 +262,37 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
                 to_eol,
                 append: pad,
             });
+        } else if inserted.is_empty() && pad && !vim(ed).replaying {
+            // Block `A` with nothing typed (`<C-v>...A<Esc>`): nvim reverts
+            // the whole no-op change, so the pad `visual_block_append_at_right`
+            // pre-applied to the top row must not survive. Remove exactly the
+            // pad's bytes — its range `pre_pad_len..col` was recorded before
+            // padding, so no `ed.undo()` is needed (and none is safe: undo
+            // would walk the tree back past the pre-`A` snapshot, reverting
+            // edits made before the block command and leaving the pad on the
+            // redo stack). The buffer clamps the delete to the row's current
+            // length, so a row the user shrank below `col` mid-session still
+            // loses only the remaining pad.
+            use hjkl_buffer::{Edit, MotionKind, Position};
+            if pre_pad_len < col {
+                ed.mutate_edit(Edit::DeleteRange {
+                    start: Position::new(top, pre_pad_len),
+                    end: Position::new(top, col),
+                    kind: MotionKind::Char,
+                });
+            }
+            // The empty block-A still pushed its pre-`A` undo boundary. If it
+            // is still the most recent one (exactly one boundary was added
+            // since `undo_depth_before`, so no `undobreak` motion break or
+            // word-granularity break fired mid-session and the push was not
+            // suppressed by an enclosing undo group), it is a no-op that
+            // exactly matches the live state — consume it so the no-op
+            // command leaves the undo tree untouched. Otherwise keep it: the
+            // extra entries are real boundaries the user's own keystrokes
+            // created.
+            if ed.undo_stack_len() == undo_depth_before + 1 {
+                ed.buffer().pop_committed();
+            }
         }
         return;
     }
@@ -790,5 +823,125 @@ mod comment_toggle_tests {
         ed.toggle_comment_range(0, 0);
         // Should be unchanged — no comment string for "".
         assert_eq!(line(&ed, 0), "hello");
+    }
+}
+#[cfg(test)]
+mod block_edge_insert_tests {
+    use hjkl_buffer::View;
+    use hjkl_engine::{DefaultHost, Editor, Input, Key, Options};
+
+    fn inp(key: Key) -> Input {
+        Input {
+            key,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        }
+    }
+
+    fn ctrl(key: Key) -> Input {
+        Input {
+            key,
+            ctrl: true,
+            alt: false,
+            shift: false,
+        }
+    }
+
+    fn lines_of(ed: &Editor<View, DefaultHost>) -> Vec<String> {
+        ed.buffer()
+            .rope()
+            .lines()
+            .map(|s| {
+                let s = s.to_string();
+                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
+            })
+            .collect()
+    }
+
+    /// Block `A` with nothing typed (`<C-v>kA<Esc>`) must leave the buffer
+    /// exactly as it was (nvim parity): the pad `visual_block_append_at_right`
+    /// pre-applied to the top row is removed on the empty Esc. The pad is
+    /// removed byte-for-byte (its range `pre_pad_len..col` is recorded before
+    /// padding) — NEVER via `ed.undo()`, which walks the undo tree back past
+    /// the pre-`A` snapshot. That means edits made BEFORE the block command
+    /// survive, and the undo tree ends up untouched: no no-op `u` entry, no
+    /// padded state on the redo stack.
+    #[test]
+    fn empty_block_append_esc_restores_buffer_and_undo() {
+        let mut ed = crate::vim::vim_editor(
+            View::from_str("ab\nabcdef"),
+            DefaultHost::new(),
+            Options::default(),
+        );
+        // Scenario 1 — fresh buffer. Block rows 0..1 at column 5: the top row
+        // "ab" (2 chars) is shorter than the append column 6, so `A` pads it
+        // to "ab    " before the insert session starts. Nothing typed, Esc.
+        ed.jump_cursor(1, 5);
+        crate::dispatch_input(&mut ed, ctrl(Key::Char('v')));
+        crate::dispatch_input(&mut ed, inp(Key::Char('k')));
+        crate::dispatch_input(&mut ed, inp(Key::Char('A')));
+        crate::dispatch_input(&mut ed, inp(Key::Esc));
+        assert_eq!(
+            lines_of(&ed),
+            ["ab".to_string(), "abcdef".to_string()],
+            "empty block A must leave the buffer byte-identical to pre-A (pad removed)"
+        );
+        assert_eq!(
+            ed.undo_stack_len(),
+            0,
+            "empty block A must not leave a no-op undo entry"
+        );
+        assert!(
+            ed.buffer().redo_stack_is_empty(),
+            "empty block A must not leave the pad on the redo stack"
+        );
+
+        // Scenario 2 — prior edits before the block command. Type `x` at the
+        // start of row 0 and exit insert, then run the same empty block-A.
+        // The typed `x` is NOT part of the block-A operation and must survive:
+        // the flawed `ed.undo()` fix reverted it together with the pad.
+        ed.jump_cursor(0, 0);
+        crate::dispatch_input(&mut ed, inp(Key::Char('i')));
+        crate::dispatch_input(&mut ed, inp(Key::Char('x')));
+        crate::dispatch_input(&mut ed, inp(Key::Esc));
+        assert_eq!(
+            lines_of(&ed),
+            ["xab".to_string(), "abcdef".to_string()],
+            "sanity: the prior edit landed"
+        );
+        assert_eq!(
+            ed.undo_stack_len(),
+            1,
+            "sanity: one undo boundary for the x edit"
+        );
+        ed.jump_cursor(1, 5);
+        crate::dispatch_input(&mut ed, ctrl(Key::Char('v')));
+        crate::dispatch_input(&mut ed, inp(Key::Char('k')));
+        crate::dispatch_input(&mut ed, inp(Key::Char('A')));
+        crate::dispatch_input(&mut ed, inp(Key::Esc));
+        assert_eq!(
+            lines_of(&ed),
+            ["xab".to_string(), "abcdef".to_string()],
+            "the prior edit must survive the empty block A"
+        );
+        assert_eq!(
+            ed.undo_stack_len(),
+            1,
+            "empty block A must consume its own undo boundary, leaving only the prior edit's"
+        );
+        assert!(
+            ed.buffer().redo_stack_is_empty(),
+            "empty block A must not leave the pad on the redo stack"
+        );
+        // One `u` reverts exactly the prior edit — proof the block-A command
+        // left no trace in the undo history.
+        ed.undo();
+        assert_eq!(
+            lines_of(&ed),
+            ["ab".to_string(), "abcdef".to_string()],
+            "one undo must revert exactly the prior edit"
+        );
+        assert_eq!(ed.undo_stack_len(), 0);
     }
 }
