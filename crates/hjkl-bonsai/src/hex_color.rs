@@ -76,9 +76,24 @@ impl HexColorPass {
     ) {
         let start = range.start.min(bytes.len());
         let end = range.end.min(bytes.len()).max(start);
-        let slice = &bytes[start..end];
-        for (hit, rgb) in scan_color_literals(slice) {
-            let abs_hit = (hit.start + start)..(hit.end + start);
+        // Include one byte on each side so left/right boundary checks work
+        // (same as `apply_range_rope`); without the left byte a `#` at the
+        // exact range start slips past `try_scan_hex`'s look-behind. The ±1
+        // offsets are safe on a raw byte slice (no char-boundary snapping
+        // needed); `saturating_sub` avoids underflow at the document head.
+        let win_start = start.saturating_sub(1);
+        let win_end = end.saturating_add(1).min(bytes.len());
+        let window = &bytes[win_start..win_end];
+        // Hits whose `#` falls on the widened left byte belong to
+        // `range.start - 1`; only literals starting at or after `range.start`
+        // are emitted (their left boundary was still checked against the real
+        // preceding byte).
+        let scan_start = start - win_start;
+        for (hit, rgb) in scan_color_literals(window) {
+            if hit.start < scan_start {
+                continue;
+            }
+            let abs_hit = (win_start + hit.start)..(win_start + hit.end);
             let bg_hex = rgb_to_hex(rgb);
             let fg_hex = contrasting_fg_rgb(rgb);
             let mut meta = std::collections::HashMap::new();
@@ -1018,6 +1033,33 @@ mod tests {
         HexColorPass::new().apply_range_rope(&mut spans, &rope, 0..4);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].byte_range, 0..4);
+    }
+
+    /// Regression: `apply_range` must apply the left-boundary check to a `#`
+    /// at the exact start of the range. The old code scanned only
+    /// `&bytes[start..]`, so `try_scan_hex` treated the slice start as a
+    /// boundary and a `#` preceded by a real hex digit slipped through —
+    /// disagreeing with `apply_range_rope`, which widens by one byte.
+    #[test]
+    fn apply_range_checks_left_boundary_at_range_start() {
+        // 'c' before '#' is a hex digit → must not match. The old code
+        // emitted a span for the range-start `#`.
+        let bytes = b"abc#fff";
+        let mut spans: Vec<HighlightSpan> = Vec::new();
+        HexColorPass::new().apply_range(&mut spans, bytes, 3..7);
+        assert!(
+            spans.is_empty(),
+            "# preceded by a hex digit must not match; got {spans:?}"
+        );
+
+        // Control: ' ' before '#' is not a hex digit → must match. The range
+        // ends one byte before the last 'f', so the widened right edge is
+        // what lets the full literal be scanned. The old code emitted nothing.
+        let bytes = b"ab #fff";
+        let mut spans: Vec<HighlightSpan> = Vec::new();
+        HexColorPass::new().apply_range(&mut spans, bytes, 2..6);
+        assert_eq!(spans.len(), 1, "expected #fff literal; got {spans:?}");
+        assert_eq!(spans[0].byte_range, 3..7);
     }
 
     /// Smoke: `apply_range_rope` produces identical spans to `apply_range`

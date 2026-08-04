@@ -198,7 +198,11 @@ impl CommentMarkerPass {
             let mut cursor = body_start;
             for m in &found {
                 // Tail from cursor to just before this marker's label start.
-                let label_start = m.word_start.saturating_sub(1).max(body_start);
+                // `word_start - 1` is a raw byte offset; when the char before
+                // the word is multi-byte it lands mid-char, so snap back to
+                // the enclosing char boundary.
+                let label_start = floor_char_boundary_bytes(bytes, m.word_start.saturating_sub(1))
+                    .max(body_start);
                 if let Some(mw) = active
                     && cursor < label_start
                 {
@@ -216,7 +220,9 @@ impl CommentMarkerPass {
                 });
                 // Trail char after the word (e.g. ':').
                 let trail_end = if m.word_end < body_end {
-                    m.word_end + 1
+                    // `word_end + 1` can land mid-char when the char after the
+                    // word is multi-byte — snap forward to the char boundary.
+                    ceil_char_boundary_bytes(bytes, m.word_end + 1)
                 } else {
                     m.word_end
                 };
@@ -468,7 +474,11 @@ impl CommentMarkerPass {
                 // Translate window-relative marker positions to absolute.
                 let abs_word_start = window_start + m.word_start;
                 let abs_word_end = window_start + m.word_end;
-                let label_start = abs_word_start.saturating_sub(1).max(body_start);
+                // `word_start - 1` is a raw byte offset; snap back to the
+                // enclosing char boundary when the preceding char is
+                // multi-byte.
+                let label_start =
+                    floor_char_boundary(rope, abs_word_start.saturating_sub(1)).max(body_start);
                 let win_cursor_abs = window_start + cursor;
                 if let Some(mw) = active
                     && win_cursor_abs < label_start
@@ -485,7 +495,9 @@ impl CommentMarkerPass {
                     metadata: None,
                 });
                 let trail_end = if abs_word_end < body_end {
-                    abs_word_end + 1
+                    // `word_end + 1` can land mid-char when the char after the
+                    // word is multi-byte — snap forward to the char boundary.
+                    ceil_char_boundary(rope, abs_word_end + 1)
                 } else {
                     abs_word_end
                 };
@@ -634,6 +646,29 @@ fn is_consecutive(bytes: &[u8], prev_end: usize, next_start: usize) -> bool {
         }
     }
     newlines == 1
+}
+
+/// Largest UTF-8 char boundary `<= byte_idx` within `bytes` (clamped to the
+/// slice length). The document text is valid UTF-8, so a char boundary is
+/// exactly a byte that is not a continuation byte (`0b10xxxxxx`), and
+/// `bytes.len()` is always a boundary. Safe (never panics) even for
+/// non-UTF-8 input.
+fn floor_char_boundary_bytes(bytes: &[u8], byte_idx: usize) -> usize {
+    let mut i = byte_idx.min(bytes.len());
+    while i > 0 && i < bytes.len() && bytes[i] & 0xC0 == 0x80 {
+        i -= 1;
+    }
+    i
+}
+
+/// Smallest UTF-8 char boundary `>= byte_idx` within `bytes` (clamped to the
+/// slice length). See [`floor_char_boundary_bytes`].
+fn ceil_char_boundary_bytes(bytes: &[u8], byte_idx: usize) -> usize {
+    let mut i = byte_idx.min(bytes.len());
+    while i < bytes.len() && bytes[i] & 0xC0 == 0x80 {
+        i += 1;
+    }
+    i
 }
 
 // ---------------------------------------------------------------------------
@@ -981,6 +1016,56 @@ mod tests {
         for (b, r) in marker_bytes.iter().zip(marker_rope.iter()) {
             assert_eq!(b.capture, r.capture, "capture name mismatch");
             assert_eq!(b.byte_range, r.byte_range, "byte_range mismatch");
+        }
+    }
+
+    /// Regression: label/trail span edges must land on UTF-8 char boundaries.
+    /// `label_start = word_start - 1` and `trail_end = word_end + 1` are raw
+    /// byte offsets; when the char immediately before/after the marker word is
+    /// multi-byte (e.g. 'é'), the emitted span slices the row mid-char, which
+    /// panics renderers that `row[range]` the string. Both the `apply` (bytes)
+    /// and `apply_rope` paths must snap to the enclosing char boundaries.
+    #[test]
+    fn marker_span_edges_are_char_boundaries_around_multibyte() {
+        // Label side: 'é' (2 bytes) directly before TODO; trail side: 'é'
+        // directly after TODO; both at once.
+        for src in ["// éTODO: fix", "// TODOé", "// xéTODOé: fix"] {
+            let bytes = src.as_bytes();
+            let rope = ropey::Rope::from_str(src);
+            let comment_span = HighlightSpan {
+                byte_range: 0..bytes.len(),
+                capture: Arc::from("comment"),
+                metadata: None,
+            };
+
+            let mut spans_bytes = vec![comment_span.clone()];
+            CommentMarkerPass::new().apply(&mut spans_bytes, bytes);
+
+            let mut spans_rope = vec![comment_span];
+            CommentMarkerPass::new().apply_rope(&mut spans_rope, &rope);
+
+            for spans in [&spans_bytes, &spans_rope] {
+                let markers: Vec<_> = spans
+                    .iter()
+                    .filter(|s| s.capture().starts_with("comment.marker"))
+                    .collect();
+                assert!(
+                    !markers.is_empty(),
+                    "expected marker spans for {src:?}: {spans:#?}"
+                );
+                for s in markers {
+                    assert!(
+                        src.is_char_boundary(s.byte_range.start),
+                        "{src:?}: span start {} not on a char boundary: {s:?}",
+                        s.byte_range.start
+                    );
+                    assert!(
+                        src.is_char_boundary(s.byte_range.end),
+                        "{src:?}: span end {} not on a char boundary: {s:?}",
+                        s.byte_range.end
+                    );
+                }
+            }
         }
     }
 
