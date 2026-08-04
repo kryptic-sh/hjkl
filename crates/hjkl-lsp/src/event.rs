@@ -31,12 +31,15 @@ pub struct ServerKey {
 /// Commands sent from the app (sync) side to the async LSP runtime.
 #[derive(Debug)]
 pub enum LspCommand {
-    /// Open a buffer in the LSP server for `language_id`.
+    /// Open a buffer in the LSP server for `language_id`. `text` is the shared
+    /// full-document `Arc<String>` (the app's `content_joined()` cache) — the
+    /// runtime serializes `didOpen` straight from the borrow, so the boundary
+    /// never copies the document.
     AttachBuffer {
         id: BufferId,
         path: PathBuf,
         language_id: String,
-        text: String,
+        text: Arc<String>,
     },
     /// Remove a buffer from the LSP server.
     DetachBuffer { id: BufferId },

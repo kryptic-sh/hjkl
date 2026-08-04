@@ -131,6 +131,26 @@ impl Server {
         self.enqueue(&rpc_envelope(None, method, params));
     }
 
+    /// Send a JSON-RPC notification serializing `params` straight from a
+    /// borrowed params struct (e.g. the `&str`-holding borrowed builders in
+    /// [`crate::params`]) — no intermediate `serde_json::Value`, so a
+    /// full-document `didChange` text is escaped directly into the output
+    /// writer with no full-document `String` allocation. Wire bytes identical
+    /// to [`Self::send_notification`] (the [`RpcMsg`] field order mirrors the
+    /// `serde_json::Map` serialization order); the tests below pin that.
+    pub fn send_notification_borrowed<P: serde::Serialize + ?Sized>(
+        &mut self,
+        method: &str,
+        params: &P,
+    ) {
+        self.enqueue_serialize(&RpcMsg {
+            jsonrpc: "2.0",
+            id: None,
+            method,
+            params,
+        });
+    }
+
     /// Send a JSON-RPC request, mapping the server's internal id back to
     /// the app-allocated `app_id` when the response arrives.
     ///
@@ -189,6 +209,36 @@ impl Server {
             }
         }
     }
+
+    /// Like [`Self::enqueue`] but for any `Serialize` — the borrowed-frame path
+    /// (see [`Self::send_notification_borrowed`]).
+    fn enqueue_serialize(&self, msg: &impl serde::Serialize) {
+        match serde_json::to_vec(msg) {
+            Ok(bytes) => {
+                let _ = self.stdin_tx.send(bytes);
+            }
+            Err(e) => {
+                tracing::warn!("failed to serialize JSON-RPC message: {e}");
+            }
+        }
+    }
+}
+
+/// The JSON-RPC notification frame for [`Server::send_notification_borrowed`]:
+/// serialized directly from this struct instead of via a `serde_json::Value`
+/// (which has no borrowed string variant, forcing a full-document copy).
+///
+/// Field order is deliberate: `serde_json::Map` (the Value path's backend,
+/// a sorted `BTreeMap` by default) serializes a notification's keys as
+/// `jsonrpc`, `method`, `params`, which is exactly this declaration order —
+/// so the wire bytes match [`rpc_envelope`]'s output.
+#[derive(serde::Serialize)]
+struct RpcMsg<'a, P: serde::Serialize + ?Sized> {
+    jsonrpc: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    id: Option<i64>,
+    method: &'a str,
+    params: &'a P,
 }
 
 /// Build a JSON-RPC envelope (`Some(id)` → request, `None` → notification),
@@ -696,6 +746,46 @@ mod tests {
         assert_eq!(
             null_params,
             json!({ "jsonrpc": "2.0", "method": "exit", "params": null })
+        );
+    }
+
+    /// The borrowed notification frame ([`RpcMsg`], as
+    /// [`Server::send_notification_borrowed`] builds it) must be
+    /// byte-identical to the Value frame for the same params — including a
+    /// full-document `didChange` with multi-byte chars, escapes and newlines.
+    #[test]
+    fn borrowed_frame_matches_value_frame_bytes() {
+        use crate::params;
+
+        let uri = "file:///tmp/a.rs";
+        let text = "fn main() {\n    println!(\"héllo — \\u{1F600}\\t\");\n}\n";
+
+        let notif = rpc_envelope(
+            None,
+            "textDocument/didChange",
+            params::did_change_full(uri, 3, text.to_string()),
+        );
+        let value_bytes = serde_json::to_vec(&notif).unwrap();
+
+        let borrowed_params = params::did_change_full_borrowed(uri, 3, text);
+        let msg = RpcMsg {
+            jsonrpc: "2.0",
+            id: None,
+            method: "textDocument/didChange",
+            params: &borrowed_params,
+        };
+        let borrowed_bytes = serde_json::to_vec(&msg).unwrap();
+
+        assert_eq!(
+            borrowed_bytes, value_bytes,
+            "borrowed frame must be byte-identical to the Value frame"
+        );
+        // And it decodes to the same JSON shape.
+        let borrowed_val: Value = serde_json::from_slice(&borrowed_bytes).unwrap();
+        assert_eq!(borrowed_val, notif);
+        assert!(
+            borrowed_val.get("id").is_none(),
+            "notifications carry no id"
         );
     }
 }

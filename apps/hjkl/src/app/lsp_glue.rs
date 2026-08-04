@@ -903,11 +903,13 @@ impl App {
 
         // `content_joined()` returns a `dirty_gen`-cached `Arc<String>`,
         // shared with any other per-tick consumer. Beats `lines().join`,
-        // which clones every row out of the rope.
+        // which clones every row out of the rope. The `Arc` is handed across
+        // the LSP boundary as-is — no `to_string()` copy — and the runtime
+        // serializes `didOpen` straight from the borrow.
         let text = self.slots[slot_idx].buffer().content_joined();
 
         let buffer_id = self.slots[slot_idx].buffer_id as hjkl_lsp::BufferId;
-        mgr.attach_buffer(buffer_id, &path, &language_id, &text);
+        mgr.attach_buffer(buffer_id, &path, &language_id, text);
     }
 
     /// Close the LSP document for `slot_idx`.

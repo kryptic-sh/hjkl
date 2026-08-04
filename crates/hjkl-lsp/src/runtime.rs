@@ -107,7 +107,7 @@ async fn handle_attach(
     id: BufferId,
     path: PathBuf,
     language_id: String,
-    text: String,
+    text: Arc<String>,
     config: &LspConfig,
     servers: &mut HashMap<ServerKey, Server>,
     buffers: &mut HashMap<BufferId, AttachedBuffer>,
@@ -158,12 +158,13 @@ async fn handle_attach(
 
     let server = servers.get_mut(&key).expect("just inserted");
 
-    // Send textDocument/didOpen. `text` is *moved* into the params object
-    // (see `crate::params`) — building it with `json!` would have deep-copied
-    // the whole document.
-    server.send_notification(
+    // Send textDocument/didOpen, serializing the document text straight from
+    // the shared `Arc<String>` — no full-document copy at the boundary or on
+    // the way into the frame (see `crate::params::did_open_borrowed` /
+    // `Server::send_notification_borrowed`).
+    server.send_notification_borrowed(
         "textDocument/didOpen",
-        params::did_open(uri.as_str(), language_id, 1, text),
+        &params::did_open_borrowed(uri.as_str(), &language_id, 1, text.as_str()),
     );
 
     buffers.insert(
@@ -230,18 +231,11 @@ fn handle_request(
     }
 }
 
-/// Full-document sync. Takes the text `Arc` by value so the params object
-/// can *move* the `String` in when this side holds the only reference —
-/// `Arc::unwrap_or_clone` copies only when the sender still shares it.
-///
-/// Note the app's current caller does still share it: `content_joined()`
-/// keeps the `Arc` in the buffer's `dirty_gen` cache, so on that path
-/// `unwrap_or_clone` pays for one copy — exactly the one `json!` used to
-/// make, no more. Fully eliminating it for a shared `Arc` would require
-/// serializing the notification directly instead of materializing a
-/// `serde_json::Value` (which has no borrowed/shared string variant).
-/// The unconditional win is on the owned-text paths: `didOpen` and
-/// incremental `didChange`, where the text really does move.
+/// Full-document sync. The text `Arc` is borrowed for serialization only: the
+/// params struct holds `&str`s into it and [`Server::send_notification_borrowed`]
+/// escapes them straight into the output writer — no full-document `String` is
+/// ever materialized, even though the app's `content_joined()` cache still
+/// shares the `Arc` (the case `Arc::unwrap_or_clone` used to pay a copy for).
 fn handle_notify_change(
     id: BufferId,
     full_text: Arc<String>,
@@ -256,9 +250,9 @@ fn handle_notify_change(
     let version = buf.version;
 
     if let Some(server) = servers.get_mut(&buf.server_key) {
-        server.send_notification(
+        server.send_notification_borrowed(
             "textDocument/didChange",
-            params::did_change_full(buf.uri.as_str(), version, Arc::unwrap_or_clone(full_text)),
+            &params::did_change_full_borrowed(buf.uri.as_str(), version, full_text.as_str()),
         );
     }
 }

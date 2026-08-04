@@ -5,15 +5,18 @@
 //! `serde_json::to_value(&expr)`, which *deep-copies* the value even when the
 //! expression is already owned — so a full-document sync copied the entire
 //! buffer text once more on its way into the params object. Taking the text
-//! by value and moving it into the map removes that copy; the caller passes
-//! `Arc::unwrap_or_clone(text)` so the common single-owner case is a move and
-//! only a genuinely shared `Arc` pays for a clone.
+//! by value and moving it into the map removes that copy.
 //!
-//! The counterpart on the envelope side is `server::rpc_envelope`, which
-//! moves the finished `params` into the JSON-RPC frame the same way.
+//! The full-document `didOpen` / full `didChange` paths go further: the
+//! `*_borrowed` variants below serialize the text straight from a shared
+//! `Arc<String>` (the app's `content_joined()` cache) with no owned
+//! full-document `String` at all — the frame is serialized directly from the
+//! struct via `Server::send_notification_borrowed`, whose counterpart on the
+//! Value side is `server::rpc_envelope`.
 //!
-//! Key insertion order matches the `json!` literals these replaced, so the
-//! serialized bytes are identical under either `serde_json` map backend
+//! Key insertion order matches the `json!` literals these replaced, and the
+//! borrowed structs' field order mirrors the sorted `BTreeMap` backend, so
+//! the serialized bytes are identical under either `serde_json` map backend
 //! (sorted `BTreeMap` by default, insertion-ordered `IndexMap` with the
 //! `preserve_order` feature). The tests below assert exactly that.
 
@@ -99,6 +102,86 @@ pub fn did_change_incremental(uri: &str, version: i32, changes: Vec<TextChange>)
     ])
 }
 
+// ── Borrowed variants (full-document sync) ────────────────────────────────────
+
+// The full-document `didOpen` / full `didChange` path serializes the buffer
+// text straight from a shared `Arc<String>` (the app's `content_joined()`
+// cache) instead of materializing an owned `serde_json::Value`: serde_json
+// escapes a `&str` directly into the output writer with no intermediate
+// full-document `String`. These structs are that borrowed path.
+//
+// Field declaration order mirrors the sorted-key serialization of
+// `serde_json::Map` (the default `BTreeMap` backend — this workspace enables
+// no `preserve_order` feature), so the wire bytes are IDENTICAL to the
+// Value-based builders above; the tests below pin that.
+
+/// Borrowed `textDocument/didOpen` params. Wire-identical to [`did_open`].
+#[derive(serde::Serialize)]
+pub struct DidOpen<'a> {
+    #[serde(rename = "textDocument")]
+    text_document: TextDocumentOpen<'a>,
+}
+
+#[derive(serde::Serialize)]
+struct TextDocumentOpen<'a> {
+    #[serde(rename = "languageId")]
+    language_id: &'a str,
+    text: &'a str,
+    uri: &'a str,
+    version: i32,
+}
+
+/// Borrowed `textDocument/didChange` params for full-document sync.
+/// Wire-identical to [`did_change_full`].
+#[derive(serde::Serialize)]
+pub struct DidChangeFull<'a> {
+    #[serde(rename = "contentChanges")]
+    content_changes: [ContentChange<'a>; 1],
+    #[serde(rename = "textDocument")]
+    text_document: TextDocumentVersion<'a>,
+}
+
+#[derive(serde::Serialize)]
+struct TextDocumentVersion<'a> {
+    uri: &'a str,
+    version: i32,
+}
+
+#[derive(serde::Serialize)]
+struct ContentChange<'a> {
+    text: &'a str,
+}
+
+/// Borrowed analogue of [`did_open`]: `text` is serialized from the borrow,
+/// never copied into an owned `String`.
+pub fn did_open_borrowed<'a>(
+    uri: &'a str,
+    language_id: &'a str,
+    version: i32,
+    text: &'a str,
+) -> DidOpen<'a> {
+    DidOpen {
+        text_document: TextDocumentOpen {
+            uri,
+            language_id,
+            version,
+            text,
+        },
+    }
+}
+
+/// Borrowed analogue of [`did_change_full`].
+pub fn did_change_full_borrowed<'a>(
+    uri: &'a str,
+    version: i32,
+    text: &'a str,
+) -> DidChangeFull<'a> {
+    DidChangeFull {
+        text_document: TextDocumentVersion { uri, version },
+        content_changes: [ContentChange { text }],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Wire-compatibility tests: every builder must serialize to exactly the
@@ -153,6 +236,63 @@ mod tests {
         assert_eq!(actual, expected);
         assert_eq!(
             serde_json::to_string(&actual).unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+        );
+    }
+
+    /// The borrowed `didOpen` builder must serialize byte-identically to the
+    /// Value-based one — the whole point of the borrowed path is that the
+    /// frame bytes cannot change.
+    #[test]
+    fn borrowed_did_open_matches_value_builder_bytes() {
+        let uri = "file:///tmp/ws/src/main.rs";
+        let language_id = "rust";
+        let version = 1;
+        let text = doc();
+
+        let value = did_open(uri, language_id.to_string(), version, text.clone());
+        let borrowed = did_open_borrowed(uri, language_id, version, &text);
+        assert_eq!(
+            serde_json::to_string(&borrowed).unwrap(),
+            serde_json::to_string(&value).unwrap(),
+            "borrowed didOpen must serialize byte-identically to the Value builder"
+        );
+        // And the canonical json! shape directly (text with escapes/newlines).
+        let expected = json!({
+            "textDocument": {
+                "uri": uri,
+                "languageId": language_id,
+                "version": version,
+                "text": text,
+            }
+        });
+        assert_eq!(
+            serde_json::to_string(&borrowed).unwrap(),
+            serde_json::to_string(&expected).unwrap(),
+        );
+    }
+
+    /// The borrowed full-didChange builder must serialize byte-identically to
+    /// the Value-based one.
+    #[test]
+    fn borrowed_did_change_full_matches_value_builder_bytes() {
+        let uri = "file:///tmp/ws/src/main.rs";
+        let version: i32 = 42;
+        let text = doc();
+
+        let value = did_change_full(uri, version, text.clone());
+        let borrowed = did_change_full_borrowed(uri, version, &text);
+        assert_eq!(
+            serde_json::to_string(&borrowed).unwrap(),
+            serde_json::to_string(&value).unwrap(),
+            "borrowed didChangeFull must serialize byte-identically to the Value builder"
+        );
+        let expected = json!({
+            "textDocument": { "uri": uri, "version": version },
+            "contentChanges": [{ "text": text }],
+        });
+        assert_eq!(
+            serde_json::to_string(&borrowed).unwrap(),
             serde_json::to_string(&expected).unwrap(),
         );
     }

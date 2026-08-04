@@ -92,14 +92,19 @@ impl LspManager {
     }
 
     /// Attach a buffer to the appropriate language server.
-    pub fn attach_buffer(&self, id: BufferId, path: &Path, language_id: &str, text: &str) {
+    ///
+    /// `text` is the shared full-document `Arc<String>` (the app's
+    /// `content_joined()` cache); the command carries the `Arc` and the runtime
+    /// serializes `didOpen` straight from the borrow — no `to_string()` at the
+    /// boundary.
+    pub fn attach_buffer(&self, id: BufferId, path: &Path, language_id: &str, text: Arc<String>) {
         self.send_cmd(
             "AttachBuffer",
             LspCommand::AttachBuffer {
                 id,
                 path: path.to_path_buf(),
                 language_id: language_id.to_string(),
-                text: text.to_string(),
+                text,
             },
         );
     }
