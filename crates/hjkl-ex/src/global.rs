@@ -185,7 +185,9 @@ pub fn global_handler<H: Host>(
             (start, end)
         }
         None => {
-            let total = editor.buffer().row_count();
+            // Skip ropey's phantom trailing empty row (same class as the `$`
+            // fix in range.rs) — `row_count()` counts it, vim doesn't.
+            let total = hjkl_engine::motions::content_row_count(editor.buffer());
             (0, total.saturating_sub(1))
         }
     };
@@ -505,6 +507,77 @@ mod tests {
             editor.undo_stack_len(),
             0,
             "a no-op :g must not pollute the undo stack"
+        );
+    }
+
+    // ---- phantom trailing row: default-scope :g/:v must skip it ----------
+    //
+    // `make_editor_with_lines` joins lines WITHOUT a trailing `\n`, so it
+    // never produces ropey's phantom empty final row (see
+    // `hjkl_engine::motions::content_row_count`). Newline-terminated buffers
+    // must be built directly to exercise the default-scope path — the `%`/`$`
+    // range fixes in range.rs already exclude the phantom, but the no-range
+    // arm here scans `row_count()` raw.
+
+    fn make_editor_from_str(
+        content: &str,
+    ) -> hjkl_engine::Editor<hjkl_buffer::View, hjkl_engine::DefaultHost> {
+        hjkl_vim::vim_editor(
+            hjkl_buffer::View::from_str(content),
+            hjkl_engine::DefaultHost::new(),
+            hjkl_engine::Options::default(),
+        )
+    }
+
+    #[test]
+    fn default_scope_skips_phantom_trailing_row() {
+        // Regression: on newline-terminated "a\nb\n" (vim lines "a", "b"),
+        // default-scope `:g/^$/d` scanned ropey's phantom empty trailing row,
+        // matched `^$` on it and deleted it — stripping the trailing newline
+        // (text became "a\nb"). Nothing real matches, so nothing may change.
+        let mut editor = make_editor_from_str("a\nb\n");
+        let result = global_match_handler(&mut editor, "/^$/d", None);
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { count: 0, .. })),
+            "got: {result:?}"
+        );
+        assert_eq!(
+            editor.buffer().rope().to_string(),
+            "a\nb\n",
+            "the phantom row must not be deleted"
+        );
+    }
+
+    #[test]
+    fn default_scope_still_matches_real_empty_last_line() {
+        // "a\n\n" has a REAL empty last line (vim line 2); `:g/^$/d` must
+        // still match and delete it, leaving "a\n" — guards against
+        // over-correcting past the single phantom row.
+        let mut editor = make_editor_from_str("a\n\n");
+        let result = global_match_handler(&mut editor, "/^$/d", None);
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { count: 1, .. })),
+            "got: {result:?}"
+        );
+        assert_eq!(editor.buffer().rope().to_string(), "a\n");
+    }
+
+    #[test]
+    fn vglobal_default_scope_skips_phantom_row() {
+        // Regression: `:v/./d` deletes non-matching lines; on "a\nb\n" the
+        // phantom empty trailing row is the only line not matching `.`, so
+        // today it gets deleted (text became "a\nb"). It must be skipped:
+        // count 0, buffer unchanged.
+        let mut editor = make_editor_from_str("a\nb\n");
+        let result = vglobal_handler(&mut editor, "/./d", None);
+        assert!(
+            matches!(result, Some(ExEffect::Substituted { count: 0, .. })),
+            "got: {result:?}"
+        );
+        assert_eq!(
+            editor.buffer().rope().to_string(),
+            "a\nb\n",
+            "the phantom row must not be deleted"
         );
     }
 }

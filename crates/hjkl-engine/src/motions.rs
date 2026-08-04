@@ -95,7 +95,10 @@ fn read_row_count<B: Query + ?Sized>(buf: &B) -> usize {
 /// into a `String` — `Query::line_bytes(row) == 0` iff `line(row).is_empty()`
 /// for every backend (the canonical `View` override reads the rope slice's
 /// length under one lock with no allocation), and this runs on every `j`/`k`.
-fn content_row_count<B: Query + ?Sized>(buf: &B) -> usize {
+///
+/// Also the shared helper for hjkl-ex's `range.rs` and `global.rs` — those
+/// consumers must call this rather than re-inline the logic.
+pub fn content_row_count<B: Query + ?Sized>(buf: &B) -> usize {
     let raw_count = read_row_count(buf);
     let raw_last = raw_count.saturating_sub(1);
     // `raw_last < raw_count` here, so the row is always in bounds.

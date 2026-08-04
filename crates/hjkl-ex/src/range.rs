@@ -158,25 +158,6 @@ fn parse_address(s: &str) -> Option<(Address, i64, &str)> {
     Some((base, offset, rest))
 }
 
-/// Number of real content rows in the buffer, excluding ropey's single
-/// phantom trailing empty row on newline-terminated text (vim treats a
-/// trailing `\n` as a line *terminator*, not a separator, so `"a\nb\n"` has
-/// 2 lines, not ropey's 3). A buffer whose *real* last line is empty
-/// (`"a\n\n"`) is untouched — only a single trailing phantom row is ever
-/// skipped, and single-row buffers (`""`, `"\n"`) are left alone (their one
-/// row is real). Mirrors `hjkl_engine::motions::content_row_count` (private
-/// there, so inlined here).
-fn content_row_count(buf: &hjkl_buffer::View) -> usize {
-    let raw_count = buf.row_count();
-    let raw_last = raw_count.saturating_sub(1);
-    // `raw_last < raw_count` here, so the row is always in bounds.
-    if raw_last > 0 && hjkl_engine::Query::line_bytes(buf, raw_last) == 0 {
-        raw_last
-    } else {
-        raw_count
-    }
-}
-
 /// Resolve a parsed address (base + offset) against the current editor
 /// state. Numbers are 1-based; the final `base + offset` is clamped to the
 /// buffer. Bad marks return an error.
@@ -196,7 +177,7 @@ fn resolve_address<H: hjkl_engine::Host>(
     // last REAL content line — `row_count()` includes ropey's phantom
     // trailing empty row on newline-terminated buffers, which would make `$`
     // (and thus `:$d`, `:$y`, `$-1`, ...) land past vim's last line.
-    let last = content_row_count(editor.buffer()).max(1);
+    let last = hjkl_engine::motions::content_row_count(editor.buffer()).max(1);
     // 1-based current line: the `;`-separator override when present, else the
     // real (0-based) editor cursor.
     let current = from_row.unwrap_or_else(|| editor.cursor().0 + 1);
@@ -312,9 +293,10 @@ pub fn parse_range<'a, H: hjkl_engine::Host>(
     editor: &hjkl_engine::Editor<hjkl_buffer::View, H>,
 ) -> Result<(Option<LineRange>, &'a str), String> {
     // `%` — whole buffer (1 through the last REAL content line; see
-    // `content_row_count` — `row_count()` includes the phantom trailing row)
+    // `hjkl_engine::motions::content_row_count` — `row_count()` includes the
+    // phantom trailing row)
     if let Some(rest) = cmd.strip_prefix('%') {
-        let line_count = content_row_count(editor.buffer()).max(1);
+        let line_count = hjkl_engine::motions::content_row_count(editor.buffer()).max(1);
         return Ok((Some(LineRange::new(1, line_count)), rest));
     }
 
