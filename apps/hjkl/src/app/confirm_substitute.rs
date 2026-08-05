@@ -138,11 +138,23 @@ impl App {
         let (row, col) = match self.confirming_substitute.as_ref() {
             Some(cs) if cs.idx < cs.matches.len() => {
                 let m = &cs.matches[cs.idx];
-                let r = m.row as usize;
+                // `row` / `byte_start` were recorded when the match set was
+                // collected, and nothing structurally prevents the buffer from
+                // having changed since (external autoreload rewrites the file,
+                // or the user mouse-switches buffers mid-confirm). A stale row
+                // would panic in `rope_line_str` and a stale (or non-boundary)
+                // byte offset would panic slicing the line, so both are
+                // treated as untrusted: clamp the row, and fall back to the
+                // line's char count when the offset does not name a real
+                // prefix. Landing the cursor in the wrong place is
+                // recoverable; taking down the editor over a `:s///c` prompt
+                // is not.
+                let rope = Query::rope(self.active_editor().buffer());
+                let r = (m.row as usize).min(rope.len_lines().saturating_sub(1));
                 let col = {
-                    let rope = Query::rope(self.active_editor().buffer());
                     let line = hjkl_buffer::rope_line_str(&rope, r);
-                    line[..m.byte_start as usize].chars().count()
+                    line.get(..m.byte_start as usize)
+                        .map_or_else(|| line.chars().count(), |p| p.chars().count())
                 };
                 (r, col)
             }

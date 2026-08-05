@@ -31,11 +31,16 @@ pub const ID_SEP: char = '\u{1F}';
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FsOp {
     /// Create a directory (and any intermediate parents — the wiring phase uses
-    /// `create_dir_all`).
-    CreateDir(PathBuf),
+    /// `create_dir_all`). The bool is `restore`: when `true`, `apply_ops` may
+    /// satisfy the create by restoring a same-basename trashed entry (`dd` +
+    /// `p` move); when `false` it must always create fresh — a type change at
+    /// an unchanged path, where a restore would move the just-trashed entry
+    /// back over the path and silently undo the type change.
+    CreateDir(PathBuf, bool),
     /// Create an empty file (the wiring phase uses `mkdir -p` on the parent
-    /// first so that `a/b.rs` works when `a/` is new).
-    CreateFile(PathBuf),
+    /// first so that `a/b.rs` works when `a/` is new). The bool is `restore` —
+    /// same contract as [`FsOp::CreateDir`].
+    CreateFile(PathBuf, bool),
     /// Move the entry at `from` into the trash directory (see
     /// `crate::app::trash`).  Never a physical delete.
     Trash(PathBuf),
@@ -225,20 +230,28 @@ pub fn reconcile(baseline: &[(u64, PathBuf, bool)], buffer: &str, root: &Path) -
                     // else: unchanged — no op needed
                 } else {
                     // Type changed (file → dir or dir → file) → trash + create.
+                    //
+                    // The create carries `restore: false`: the Trash above
+                    // pushes this same basename into the `trashed` registry,
+                    // and restoring would move the OLD entry back over the
+                    // path — silently undoing the type change and discarding
+                    // the user's edit. A fresh create leaves the old entry in
+                    // the trash (a later `p` can still restore it) and the
+                    // disk holding the user's edit.
                     trashes.push(FsOp::Trash(bpath.clone()));
                     if entry.is_dir {
-                        creates.push(FsOp::CreateDir(entry.path.clone()));
+                        creates.push(FsOp::CreateDir(entry.path.clone(), false));
                     } else {
-                        creates.push(FsOp::CreateFile(entry.path.clone()));
+                        creates.push(FsOp::CreateFile(entry.path.clone(), false));
                     }
                 }
             }
             // No id, unknown id, or duplicate id (yy+p) → create.
             _ => {
                 if entry.is_dir {
-                    creates.push(FsOp::CreateDir(entry.path.clone()));
+                    creates.push(FsOp::CreateDir(entry.path.clone(), true));
                 } else {
-                    creates.push(FsOp::CreateFile(entry.path.clone()));
+                    creates.push(FsOp::CreateFile(entry.path.clone(), true));
                 }
             }
         }
@@ -273,7 +286,7 @@ pub fn reconcile(baseline: &[(u64, PathBuf, bool)], buffer: &str, root: &Path) -
 
     // Creates: ascending by component count (parents before children).
     creates.sort_by_key(|op| match op {
-        FsOp::CreateDir(p) | FsOp::CreateFile(p) => component_count(p),
+        FsOp::CreateDir(p, _) | FsOp::CreateFile(p, _) => component_count(p),
         _ => 0,
     });
 
@@ -379,9 +392,12 @@ fn temp_sibling_path(from: &Path) -> PathBuf {
 }
 
 /// Apply reconcile ops to disk. Deletions go to the trash (recoverable);
-/// a `CreateFile` whose basename matches a pending trashed entry is **restored**
-/// from trash instead of created empty (this is how `dd` then `p` becomes a
-/// move). Returns the paths of genuinely newly-created FILES (to open), the
+/// a `CreateFile` / `CreateDir` whose basename matches a pending trashed entry
+/// is **restored** from trash instead of created empty (this is how `dd` then
+/// `p` becomes a move) — except when the op carries `restore: false`, which a
+/// type change at an unchanged path does, so the just-trashed entry of the same
+/// name is not moved back over the user's edit. Returns the paths of genuinely
+/// newly-created FILES (to open), the
 /// concrete [`AppliedOp`] journal entries (for undo/redo), and a list of error
 /// strings from non-fatal op failures (best-effort).
 ///
@@ -514,7 +530,7 @@ pub fn apply_ops(
                 }
             }
 
-            FsOp::CreateDir(path) => {
+            FsOp::CreateDir(path, restore) => {
                 // Like CreateFile, restore a trashed entry of the same name —
                 // restoring the WHOLE subtree. This is what makes moving a
                 // *collapsed* directory lossless: with the lazy explorer the
@@ -525,12 +541,21 @@ pub fn apply_ops(
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
-                let restore_idx = trashed
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find(|(_, (name, _))| name == &dir_name)
-                    .map(|(i, _)| i);
+                // `restore: false` (type change at an unchanged path) skips
+                // the trash lookup entirely and creates fresh: a restore would
+                // move the just-trashed entry of the same basename back over
+                // the path, silently undoing the type change. The entry stays
+                // in the registry so a later `p` can still restore it.
+                let restore_idx = if *restore {
+                    trashed
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(_, (name, _))| name == &dir_name)
+                        .map(|(i, _)| i)
+                } else {
+                    None
+                };
 
                 if let Some(parent) = path.parent()
                     && let Err(e) = std::fs::create_dir_all(parent)
@@ -559,20 +584,26 @@ pub fn apply_ops(
                 }
             }
 
-            FsOp::CreateFile(path) => {
+            FsOp::CreateFile(path, restore) => {
                 // Check whether a trashed entry can be restored here.
                 let file_name = path
                     .file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
 
-                // Find the most-recent trashed entry whose name matches.
-                let restore_idx = trashed
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find(|(_, (name, _))| name == &file_name)
-                    .map(|(i, _)| i);
+                // `restore: false` (type change at an unchanged path) skips
+                // the trash lookup entirely and creates fresh — see the
+                // CreateDir arm.
+                let restore_idx = if *restore {
+                    trashed
+                        .iter()
+                        .enumerate()
+                        .rev()
+                        .find(|(_, (name, _))| name == &file_name)
+                        .map(|(i, _)| i)
+                } else {
+                    None
+                };
 
                 if let Some(parent) = path.parent()
                     && let Err(e) = std::fs::create_dir_all(parent)
@@ -1008,7 +1039,7 @@ mod tests {
         let ops = reconcile(&baseline, &buffer, &root());
         for op in &ops {
             let paths: Vec<&PathBuf> = match op {
-                FsOp::CreateFile(p) | FsOp::CreateDir(p) | FsOp::Trash(p) => vec![p],
+                FsOp::CreateFile(p, _) | FsOp::CreateDir(p, _) | FsOp::Trash(p) => vec![p],
                 FsOp::Rename { from, to } => vec![from, to],
             };
             for p in paths {
@@ -1037,11 +1068,11 @@ mod tests {
         // existing.rs is unchanged (id match, same path).
         // new_a, new_b, new_c are creates.
         assert_eq!(ops.len(), 3, "expected 3 creates, got {ops:?}");
-        assert!(ops.contains(&FsOp::CreateFile(root().join("new_a.rs"))));
-        assert!(ops.contains(&FsOp::CreateFile(root().join("new_b.rs"))));
-        assert!(ops.contains(&FsOp::CreateFile(root().join("new_c.rs"))));
+        assert!(ops.contains(&FsOp::CreateFile(root().join("new_a.rs"), true)));
+        assert!(ops.contains(&FsOp::CreateFile(root().join("new_b.rs"), true)));
+        assert!(ops.contains(&FsOp::CreateFile(root().join("new_c.rs"), true)));
         assert!(
-            ops.iter().all(|op| matches!(op, FsOp::CreateFile(_))),
+            ops.iter().all(|op| matches!(op, FsOp::CreateFile(_, _))),
             "expected only CreateFile ops, got {ops:?}"
         );
     }
@@ -1054,7 +1085,7 @@ mod tests {
         let baseline = make_baseline(&[]);
         let buffer = format!("{}\n    newdir/", root_header());
         let ops = reconcile(&baseline, &buffer, &root());
-        assert_eq!(ops, vec![FsOp::CreateDir(root().join("newdir"))]);
+        assert_eq!(ops, vec![FsOp::CreateDir(root().join("newdir"), true)]);
     }
 
     // ── create_nested ─────────────────────────────────────────────────────────
@@ -1065,7 +1096,10 @@ mod tests {
         let baseline = make_baseline(&[]);
         let buffer = format!("{}\n    a/b.rs", root_header());
         let ops = reconcile(&baseline, &buffer, &root());
-        assert_eq!(ops, vec![FsOp::CreateFile(root().join("a").join("b.rs"))]);
+        assert_eq!(
+            ops,
+            vec![FsOp::CreateFile(root().join("a").join("b.rs"), true)]
+        );
     }
 
     // ── delete_to_trash ───────────────────────────────────────────────────────
@@ -1108,7 +1142,7 @@ mod tests {
                 "Trash must not be emitted for an in-place rename"
             );
             assert!(
-                !matches!(op, FsOp::CreateFile(_) | FsOp::CreateDir(_)),
+                !matches!(op, FsOp::CreateFile(_, _) | FsOp::CreateDir(_, _)),
                 "Create must not be emitted for an in-place rename"
             );
         }
@@ -1226,7 +1260,7 @@ mod tests {
             from: root().join("remove.rs"),
             to: root().join("fresh.rs"),
         });
-        let has_create = ops.contains(&FsOp::CreateFile(root().join("added.rs")));
+        let has_create = ops.contains(&FsOp::CreateFile(root().join("added.rs"), true));
 
         assert!(
             has_rename_old,
@@ -1255,7 +1289,7 @@ mod tests {
             .unwrap();
         let create_pos = ops
             .iter()
-            .position(|op| matches!(op, FsOp::CreateFile(p) if p == &root().join("added.rs")))
+            .position(|op| matches!(op, FsOp::CreateFile(p, _) if p == &root().join("added.rs")))
             .unwrap();
 
         assert!(
@@ -1317,7 +1351,7 @@ mod tests {
             "must trash old file, got {ops:?}"
         );
         assert!(
-            ops.contains(&FsOp::CreateDir(root().join("thing"))),
+            ops.contains(&FsOp::CreateDir(root().join("thing"), false)),
             "must create new dir, got {ops:?}"
         );
         assert_eq!(ops.len(), 2, "exactly Trash + CreateDir, got {ops:?}");
@@ -1336,7 +1370,7 @@ mod tests {
             "must trash old dir"
         );
         assert!(
-            ops.contains(&FsOp::CreateFile(root().join("thing"))),
+            ops.contains(&FsOp::CreateFile(root().join("thing"), false)),
             "must create new file"
         );
         assert_eq!(ops.len(), 2, "exactly Trash + CreateFile, got {ops:?}");
@@ -1381,11 +1415,11 @@ mod tests {
 
         let dir_pos = ops
             .iter()
-            .position(|op| matches!(op, FsOp::CreateDir(p) if p == &root().join("newdir")))
+            .position(|op| matches!(op, FsOp::CreateDir(p, _) if p == &root().join("newdir")))
             .expect("CreateDir(newdir) must be present");
         let file_pos = ops
             .iter()
-            .position(|op| matches!(op, FsOp::CreateFile(p) if p == &root().join("newdir").join("newfile.rs")))
+            .position(|op| matches!(op, FsOp::CreateFile(p, _) if p == &root().join("newdir").join("newfile.rs")))
             .expect("CreateFile(newdir/newfile.rs) must be present");
 
         assert!(
@@ -1446,7 +1480,7 @@ mod tests {
         let buffer = format!("{}\n    x.rs\n    y.rs\n    z.rs", root_header());
         let ops = reconcile(&baseline, &buffer, &root());
         assert_eq!(ops.len(), 3);
-        assert!(ops.iter().all(|op| matches!(op, FsOp::CreateFile(_))));
+        assert!(ops.iter().all(|op| matches!(op, FsOp::CreateFile(_, _))));
     }
 
     // ── duplicate id → copy (yy+p semantics) ─────────────────────────────────
@@ -1471,7 +1505,7 @@ mod tests {
             "duplicate id must yield one CreateFile, got {ops:?}"
         );
         assert!(
-            ops.contains(&FsOp::CreateFile(root().join("orig.rs"))),
+            ops.contains(&FsOp::CreateFile(root().join("orig.rs"), true)),
             "expected CreateFile(orig.rs), got {ops:?}"
         );
     }
@@ -1570,11 +1604,11 @@ mod tests {
         assert_eq!(ops.len(), 2, "expected 2 CreateFile ops, got {ops:?}");
         // Check that names are preserved verbatim.
         assert!(
-            ops.contains(&FsOp::CreateFile(root().join("a b.txt"))),
+            ops.contains(&FsOp::CreateFile(root().join("a b.txt"), true)),
             "must create 'a b.txt', got {ops:?}"
         );
         assert!(
-            ops.contains(&FsOp::CreateFile(root().join("trailing .txt"))),
+            ops.contains(&FsOp::CreateFile(root().join("trailing .txt"), true)),
             "must create 'trailing .txt' with trailing space, got {ops:?}"
         );
     }
@@ -1625,7 +1659,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let trash = isolated_trash(&td);
         let target = td.path().join("new.rs");
-        let ops = vec![FsOp::CreateFile(target.clone())];
+        let ops = vec![FsOp::CreateFile(target.clone(), true)];
         let (created, applied, errors) = apply_ops(&ops, &mut Vec::new(), &trash);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert_eq!(created, vec![target.clone()]);
@@ -1647,7 +1681,7 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let trash = isolated_trash(&td);
         let target = td.path().join("a").join("b").join("c.rs");
-        let ops = vec![FsOp::CreateFile(target.clone())];
+        let ops = vec![FsOp::CreateFile(target.clone(), true)];
         let (created, applied, errors) = apply_ops(&ops, &mut Vec::new(), &trash);
         assert!(errors.is_empty(), "unexpected errors: {errors:?}");
         assert_eq!(created, vec![target.clone()]);
@@ -1900,7 +1934,7 @@ mod tests {
         // Step 2: CreateFile at dir2/foo.rs — should restore from trash.
         let dir2 = td.path().join("dir2");
         let dest = dir2.join("foo.rs");
-        let create_ops = vec![FsOp::CreateFile(dest.clone())];
+        let create_ops = vec![FsOp::CreateFile(dest.clone(), true)];
         let (created, applied, errors) = apply_ops(&create_ops, &mut trashed, &trash);
         assert!(errors.is_empty(), "restore must succeed: {errors:?}");
         // Restored from trash → NOT in the "created" list.
@@ -1946,7 +1980,7 @@ mod tests {
         // CreateDir at a new parent — must restore the trashed `mover` wholesale.
         let dest = td.path().join("target").join("mover");
         let (created, applied, errors) =
-            apply_ops(&[FsOp::CreateDir(dest.clone())], &mut trashed, &trash);
+            apply_ops(&[FsOp::CreateDir(dest.clone(), true)], &mut trashed, &trash);
         assert!(errors.is_empty(), "restore dir: {errors:?}");
         assert!(created.is_empty(), "restored dir is not a fresh create");
         assert!(trashed.is_empty(), "trashed registry drained");
@@ -1962,6 +1996,115 @@ mod tests {
         );
     }
 
+    /// A type change at an UNCHANGED path must not be silently undone by the
+    /// trash registry. Reconcile emits `Trash(thing)` + `CreateDir(thing)`
+    /// (restore=false) in one batch; `apply_ops` runs the trash first, so the
+    /// create's basename matches a fresh trashed entry — but with `restore:
+    /// false` it must create a NEW EMPTY directory instead of moving the old
+    /// file back over the path. The old file stays in the trash, recoverable.
+    #[test]
+    fn apply_type_change_file_to_dir_creates_fresh_not_restores() {
+        let td = tempfile::tempdir().unwrap();
+        let trash = isolated_trash(&td);
+        let root = td.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        // Baseline: a file at `thing` (id 1) with content.
+        let p = root.join("thing");
+        std::fs::write(&p, b"old file contents").unwrap();
+        let baseline = vec![(0u64, root.clone(), true), (1u64, p.clone(), false)];
+        // Buffer: the same id, same path, but with a dir marker.
+        let buffer = format!("{}\n{}", root_header(), idline(1, "thing/", 1));
+
+        let ops = reconcile(&baseline, &buffer, &root);
+        // The type-change create must carry `restore: false`.
+        assert!(ops.contains(&FsOp::Trash(p.clone())));
+        assert!(
+            ops.contains(&FsOp::CreateDir(p.clone(), false)),
+            "type-change create must be a fresh CreateDir, got {ops:?}"
+        );
+        assert_eq!(ops.len(), 2, "exactly Trash + CreateDir, got {ops:?}");
+
+        let mut trashed = Vec::new();
+        let (created, applied, errors) = apply_ops(&ops, &mut trashed, &trash);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(created.is_empty(), "a dir create is not a file create");
+        // P is a fresh EMPTY directory — the old file did not come back.
+        let meta = std::fs::metadata(&p).expect("P must exist after the type change");
+        assert!(
+            meta.is_dir(),
+            "P must be a directory, not the restored file"
+        );
+        assert_eq!(
+            std::fs::read_dir(&p).unwrap().count(),
+            0,
+            "the new directory must be empty"
+        );
+        // The old file is still in the trash, intact and recoverable.
+        assert_eq!(trashed.len(), 1, "the old file must stay in the trash");
+        let (name, dest) = &trashed[0];
+        assert_eq!(name, "thing");
+        assert_eq!(
+            std::fs::read(dest).unwrap(),
+            b"old file contents",
+            "trashed file must be recoverable"
+        );
+        // Journal: Trashed first, then a FRESH Created (never Restored).
+        assert!(
+            matches!(&applied[0], AppliedOp::Trashed { original, .. } if original == &p),
+            "Trash must be journaled first, got {applied:?}"
+        );
+        assert!(
+            matches!(&applied[1], AppliedOp::Created(c) if c == &p),
+            "the dir create must be a fresh Created (not Restored), got {applied:?}"
+        );
+    }
+
+    /// The `dd` + `p` flow emits `Trash(thing.rs)` + `CreateFile(thing.rs)` in
+    /// ONE batch (same path, restore=true) — the create must still be satisfied
+    /// from the trash registry, restoring the entry wholesale instead of
+    /// creating an empty file. This is the constraint the type-change fix must
+    /// not break.
+    #[test]
+    fn apply_trash_then_create_same_batch_restores_dd_p() {
+        let td = tempfile::tempdir().unwrap();
+        let trash = isolated_trash(&td);
+        let root = td.path().join("project");
+        std::fs::create_dir_all(&root).unwrap();
+        let p = root.join("thing.rs");
+        std::fs::write(&p, b"move me").unwrap();
+        // Baseline: file at `thing.rs` (id 1); buffer pastes it back with NO id
+        // (dd then p) — reconcile emits Trash + CreateFile(restore=true).
+        let baseline = vec![(0u64, root.clone(), true), (1u64, p.clone(), false)];
+        let buffer = format!("{}\n    thing.rs", root_header());
+        let ops = reconcile(&baseline, &buffer, &root);
+        assert!(ops.contains(&FsOp::Trash(p.clone())));
+        assert!(
+            ops.contains(&FsOp::CreateFile(p.clone(), true)),
+            "dd+p create must carry restore=true, got {ops:?}"
+        );
+
+        let mut trashed = Vec::new();
+        let (created, applied, errors) = apply_ops(&ops, &mut trashed, &trash);
+        assert!(errors.is_empty(), "unexpected errors: {errors:?}");
+        assert!(
+            created.is_empty(),
+            "restored file must NOT appear in created"
+        );
+        assert!(
+            trashed.is_empty(),
+            "trash registry must be drained by the restore"
+        );
+        assert_eq!(
+            std::fs::read(&p).unwrap(),
+            b"move me",
+            "dd+p must restore the entry, not create an empty file"
+        );
+        assert!(
+            matches!(&applied[1], AppliedOp::Restored { to, .. } if to == &p),
+            "the create must be journaled as Restored, got {applied:?}"
+        );
+    }
+
     // ── revert_ops round-trip tests ───────────────────────────────────────────
 
     #[test]
@@ -1971,7 +2114,7 @@ mod tests {
         let target = td.path().join("round.rs");
 
         // Apply: create
-        let ops = vec![FsOp::CreateFile(target.clone())];
+        let ops = vec![FsOp::CreateFile(target.clone(), true)];
         let mut trashed = Vec::new();
         let (_, applied, errors) = apply_ops(&ops, &mut trashed, &trash);
         assert!(errors.is_empty());
@@ -2065,8 +2208,11 @@ mod tests {
 
         // Step 2: restore to a new location (simulate dd + p move)
         let dest = td.path().join("dest_dir").join("moved.txt");
-        let (_, applied_restore, e2) =
-            apply_ops(&[FsOp::CreateFile(dest.clone())], &mut trashed, &trash);
+        let (_, applied_restore, e2) = apply_ops(
+            &[FsOp::CreateFile(dest.clone(), true)],
+            &mut trashed,
+            &trash,
+        );
         assert!(e2.is_empty());
         assert!(dest.exists(), "restored file must exist at dest");
 

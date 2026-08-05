@@ -1742,12 +1742,22 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         let vp_bot = vp_top + area.height as usize;
         if match_row >= vp_top && match_row < vp_bot {
             let screen_row = area.y + (match_row - vp_top) as u16;
-            // Convert byte offsets to char columns for rendering.
+            // Convert byte offsets to char columns for rendering. `row` /
+            // `byte_start` / `byte_end` were recorded when the match set was
+            // collected and can be stale if the buffer was reloaded
+            // mid-confirm: clamp the row, and fall back to the line's char
+            // count when an offset no longer names a real prefix. Skipping or
+            // overpainting the highlight is acceptable; panicking is not.
             let rope = hjkl_engine::Query::rope(app.slots()[slot_idx].buffer());
+            let match_row = match_row.min(rope.len_lines().saturating_sub(1));
             let line = hjkl_buffer::rope_line_str(&rope, match_row);
             let line_no_nl = line.trim_end_matches('\n');
-            let char_start = line_no_nl[..m.byte_start as usize].chars().count();
-            let char_end = line_no_nl[..m.byte_end as usize].chars().count();
+            let char_start = line_no_nl
+                .get(..m.byte_start as usize)
+                .map_or_else(|| line_no_nl.chars().count(), |p| p.chars().count());
+            let char_end = line_no_nl
+                .get(..m.byte_end as usize)
+                .map_or_else(|| line_no_nl.chars().count(), |p| p.chars().count());
             let text_x = area.x + sign_w + num_gw + fold_w;
             let highlight_style = app
                 .theme
