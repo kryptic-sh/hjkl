@@ -25,7 +25,9 @@
 //!
 //! Layout written by the install step (and expected by [`Grammar::load`]):
 //! - `<user_dir>/<name><ext>` — parser
-//! - `<user_dir>/<name>.scm`  — highlights query
+//! - `<user_dir>/<name>.scm`  — highlights query, written verbatim
+//!   (un-sanitized) so runtime pre-extraction of `(#set! @cap ...)` directives
+//!   works on installed grammars
 //! - `<user_dir>/<name>.rev`  — sidecar `<git_rev>:<query_rev>:abi<N>` for
 //!   staleness detection. Updating either the grammar rev or the query-source rev
 //!   triggers a re-install (overwriting in place). Old two-field sidecars parse
@@ -39,8 +41,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-
-use crate::query_sanitize::sanitize_highlights;
 
 use super::compile::{GrammarCompiler, shared_lib_ext};
 use super::manifest::{LangSpec, ManifestMeta};
@@ -290,11 +290,13 @@ fn parse_rev_sidecar(s: &str) -> Option<(&str, &str, usize)> {
     Some((grammar_rev, query_rev, abi))
 }
 
-/// Copy `built_so` to `<user_dir>/<name><ext>`, `highlights_src` to
-/// `<user_dir>/<name>.scm`, optionally copy `injections_src` to
-/// `<user_dir>/<name>.injections.scm`, then write the `<user_dir>/<name>.rev`
-/// sidecar **last** so an interrupted install leaves no partial set of files.
-/// Returns the installed parser path.
+/// Copy `built_so` to `<user_dir>/<name><ext>`, write `highlights_src` to
+/// `<user_dir>/<name>.scm` **verbatim** (un-sanitized — capture-form
+/// `(#set! @cap ...)` directives must survive for the runtime's pre-extraction;
+/// see [`super::super::highlighter`]'s `compile_query`), optionally copy
+/// `injections_src` to `<user_dir>/<name>.injections.scm`, then write the
+/// `<user_dir>/<name>.rev` sidecar **last** so an interrupted install leaves no
+/// partial set of files. Returns the installed parser path.
 fn install_into_user_dir(
     name: &str,
     spec: &LangSpec,
@@ -320,21 +322,11 @@ fn install_into_user_dir(
     let highlights_dest = user_dir.join(format!("{name}.scm"));
     let highlights_raw = std::fs::read_to_string(highlights_src)
         .with_context(|| format!("read {}", highlights_src.display()))?;
-    let (highlights_sanitized, report) = sanitize_highlights(&highlights_raw);
-    if report.changed {
-        let raw_dest = user_dir.join(format!("{name}.scm.raw"));
-        write_atomic(&raw_dest, highlights_raw.as_bytes())?;
-        tracing::warn!(
-            grammar = name,
-            removed_lines = report.removed_lines,
-            "sanitized highlights query before install"
-        );
-    }
-    write_atomic(&highlights_dest, highlights_sanitized.as_bytes())?;
-
-    let sanitize_flag_dest = user_dir.join(format!("{name}.query_sanitized"));
-    let sanitize_flag = if report.changed { "true\n" } else { "false\n" };
-    write_atomic(&sanitize_flag_dest, sanitize_flag.as_bytes())?;
+    // Write the query VERBATIM — never sanitize. Capture-form `(#set! @cap ...)`
+    // directives must survive to runtime, where `compile_query` pre-extracts
+    // them and applies them as per-capture metadata; the sanitizer strips those
+    // forms, which would kill pre-extraction for every installed grammar.
+    write_atomic(&highlights_dest, highlights_raw.as_bytes())?;
 
     if let Some(inj_src) = injections_src {
         let inj_dest = user_dir.join(format!("{name}.injections.scm"));
@@ -681,10 +673,58 @@ mod tests {
         assert!(user.join("rust.scm").is_file());
         assert!(!user.join("rust").exists());
 
+        // The query is written verbatim, never sanitized.
+        let scm = std::fs::read_to_string(user.join("rust.scm")).unwrap();
+        assert_eq!(scm, "; highlights");
+
         let rev_payload = std::fs::read_to_string(user.join("rust.rev")).unwrap();
         assert_eq!(
             rev_payload,
             format!("{rev}:{query_rev}:abi{}", tree_sitter::LANGUAGE_VERSION)
+        );
+    }
+
+    #[test]
+    fn install_preserves_capture_form_set_directives_verbatim() {
+        // Regression: the installer used to run `sanitize_highlights` on the
+        // query before writing `<name>.scm`, which strips capture-form
+        // `(#set! @cap ...)` directives — killing the highlighter's
+        // pre-extraction feature for every installed grammar. The installed
+        // file must carry the raw query text, and neither the `.scm.raw`
+        // backup nor the `.query_sanitized` flag may be written.
+        let tmp = tempfile::tempdir().unwrap();
+        let user = tmp.path().join("user");
+
+        let raw_query = concat!(
+            "((tag_name) @tag)\n",
+            "((tag_name) @_u\n",
+            "  (#set! @_u url @_u))\n",
+        );
+        let highlights_src = tmp.path().join("html.resolved.scm");
+        std::fs::write(&highlights_src, raw_query).unwrap();
+
+        let built = tmp.path().join(format!("html{}", shared_lib_ext()));
+        std::fs::write(&built, b"fake parser bytes").unwrap();
+
+        let spec = dummy_spec("deadbeef00000000");
+        install_into_user_dir("html", &spec, &built, &highlights_src, None, "qrev", &user).unwrap();
+
+        let installed = std::fs::read_to_string(user.join("html.scm")).unwrap();
+        assert_eq!(
+            installed, raw_query,
+            "installed .scm must be the raw query verbatim"
+        );
+        assert!(
+            installed.contains("(#set! @_u url @_u)"),
+            "capture-form directive must survive install; got: {installed}"
+        );
+        assert!(
+            !user.join("html.scm.raw").exists(),
+            "dead .scm.raw backup must not be written"
+        );
+        assert!(
+            !user.join("html.query_sanitized").exists(),
+            "dead .query_sanitized flag must not be written"
         );
     }
 

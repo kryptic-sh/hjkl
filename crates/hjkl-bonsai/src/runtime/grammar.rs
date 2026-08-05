@@ -28,6 +28,12 @@ pub struct Grammar {
     /// `<name>.scm`. `None` when the grammar does not ship one (normal — most
     /// grammars don't define injections).
     injections_scm: Option<String>,
+    /// Identity of the `.so` this grammar was loaded from — `path:len:mtime`
+    /// (or the bare path when metadata is unavailable). Two same-named
+    /// grammars built from different `.so` files get distinct identities, so
+    /// the compiled-artifacts cache never serves a `Query` built against one
+    /// library to a highlighter holding another.
+    so_identity: String,
     /// Kept alive so `language`'s underlying pointer stays valid. Must be
     /// the LAST field so its `Drop` runs after `language`'s.
     _lib: Library,
@@ -53,6 +59,14 @@ impl Grammar {
     /// not define language injections return `None`.
     pub fn injections_scm(&self) -> Option<&str> {
         self.injections_scm.as_deref()
+    }
+
+    /// Identity of the `.so` this grammar was loaded from — the library path
+    /// plus its file size and mtime, so a replaced library (a grammar rev bump
+    /// with unchanged query content) reads as a different grammar. Used to key
+    /// the compiled-artifacts cache.
+    pub fn so_identity(&self) -> &str {
+        &self.so_identity
     }
 
     /// Load a grammar by name. The [`GrammarLoader`] handles parser
@@ -115,11 +129,13 @@ impl Grammar {
             }
         };
 
+        let so_identity = so_identity_of(&so);
         Ok(Self {
             name: name.to_string(),
             language,
             highlights_scm,
             injections_scm,
+            so_identity,
             _lib: lib,
         })
     }
@@ -172,17 +188,24 @@ impl Grammar {
             }
         };
 
+        let so_identity = so_identity_of(so);
         Ok(Self {
             name: name.to_string(),
             language,
             highlights_scm,
             injections_scm,
+            so_identity,
             _lib: lib,
         })
     }
 
     /// Construct a [`Grammar`] from already-resolved pieces. Useful for
     /// tests or callers that have a custom parser source.
+    ///
+    /// `so_identity` identifies the shared library the `language` came from
+    /// (see [`Self::so_identity`]) — it keys the compiled-artifacts cache, so
+    /// it must differ between distinct `.so` files that share a name. Pass
+    /// the caller's own identity string when no path/metadata is at hand.
     ///
     /// # Safety
     ///
@@ -197,14 +220,35 @@ impl Grammar {
         language: Language,
         highlights_scm: impl Into<String>,
         injections_scm: Option<impl Into<String>>,
+        so_identity: impl Into<String>,
     ) -> Self {
         Self {
             name: name.into(),
             language,
             highlights_scm: highlights_scm.into(),
             injections_scm: injections_scm.map(|s| s.into()),
+            so_identity: so_identity.into(),
             _lib: lib,
         }
+    }
+}
+
+/// Identity for a loaded `.so`: its path plus file size and mtime, so a
+/// replaced library (a grammar rev bump with unchanged query content) reads as
+/// a different grammar. Falls back to the bare path when metadata is
+/// unavailable — still strictly better than nothing, since the path alone
+/// distinguishes same-named grammars installed in different directories.
+fn so_identity_of(so: &std::path::Path) -> String {
+    match std::fs::metadata(so) {
+        Ok(md) => {
+            let mtime = md
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map_or(0, |d| d.as_nanos());
+            format!("{}:{}:{}", so.display(), md.len(), mtime)
+        }
+        Err(_) => so.display().to_string(),
     }
 }
 

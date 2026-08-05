@@ -349,7 +349,8 @@ impl PatternInfo {
 
 /// Immutable per-grammar artifacts produced by query compilation. Shared
 /// across all `Highlighter` instances that use the same grammar (identified
-/// by a content hash of its name + highlights.scm + injections.scm).
+/// by a content hash of its name + `.so` identity + highlights.scm +
+/// injections.scm).
 ///
 /// `tree_sitter::Query` is `Send + Sync` (unsafe impls upstream), so
 /// `Arc<CompiledArtifacts>` is safe to share across threads.
@@ -379,14 +380,19 @@ static COMPILED_CACHE: LazyLock<RwLock<ahash::AHashMap<u64, Arc<CompiledArtifact
 
 /// Derive a stable u64 key for `grammar`'s compiled artifacts.
 ///
-/// Hashes: grammar name + highlights_scm content + injections_scm content
-/// (if present). A grammar reload with an edited .scm gets a fresh entry.
+/// Hashes: grammar name + `.so` identity + highlights_scm content +
+/// injections_scm content (if present). A grammar reload with an edited .scm —
+/// or a rebuilt `.so` (a grammar rev bump with unchanged query content) — gets
+/// a fresh entry; tree-sitter matches patterns by numeric symbol id with no
+/// language check, so a `Query` compiled against one `.so` must never be
+/// served to a highlighter holding a different one.
 fn artifact_cache_key(grammar: &Grammar) -> u64 {
     use ahash::AHasher;
     use std::hash::BuildHasher;
     let build = ahash::RandomState::with_seeds(1, 2, 3, 4);
     let mut h: AHasher = build.build_hasher();
     grammar.name().hash(&mut h);
+    grammar.so_identity().hash(&mut h);
     grammar.highlights_scm().hash(&mut h);
     grammar.injections_scm().hash(&mut h);
     h.finish()
@@ -2528,6 +2534,58 @@ mod tests {
         assert!(
             Arc::ptr_eq(h1.compiled(), h2.compiled()),
             "both Highlighter instances must share the same Arc<CompiledArtifacts>"
+        );
+    }
+
+    /// Regression: `artifact_cache_key` used to hash only name + query
+    /// content, so two same-named grammars built from DIFFERENT `.so` files
+    /// (a grammar rev bump with unchanged queries) shared one compiled `Query`
+    /// — tree-sitter matches patterns by numeric symbol id with no language
+    /// check, so spans could change arbitrarily with no error. The key must
+    /// include the `.so` identity.
+    ///
+    /// `Grammar` can't be fabricated without a real dlopen-able library, so we
+    /// build two via the `from_parts` shim over the process's own image
+    /// (`Library::this()`) with a null language — the key function never
+    /// touches the language, only name / identity / query strings.
+    #[test]
+    #[cfg(unix)] // uses libloading::os::unix::Library::this()
+    fn artifact_cache_key_differs_across_so_identities() {
+        unsafe extern "C" fn null_language() -> *const () {
+            std::ptr::null()
+        }
+        let mk = |so_identity: &str| -> Grammar {
+            let lib: libloading::Library = libloading::os::unix::Library::this().into();
+            let lang_fn = unsafe { tree_sitter_language::LanguageFn::from_raw(null_language) };
+            let language = tree_sitter::Language::from(lang_fn);
+            // SAFETY: `lib` outlives `language` (both owned by the Grammar),
+            // and the language is never used by `artifact_cache_key`.
+            unsafe {
+                Grammar::from_parts(
+                    "same-name",
+                    lib,
+                    language,
+                    "(x) @x",
+                    None::<&str>,
+                    so_identity,
+                )
+            }
+        };
+
+        let g_old = mk("so-a.so:1234:1000");
+        let g_new = mk("so-b.so:5678:2000");
+        assert_ne!(
+            artifact_cache_key(&g_old),
+            artifact_cache_key(&g_new),
+            "identical name+queries but different .so identity must not share a cache key"
+        );
+
+        // Same identity + same content → same key (cache sharing preserved).
+        let g_again = mk("so-a.so:1234:1000");
+        assert_eq!(
+            artifact_cache_key(&g_old),
+            artifact_cache_key(&g_again),
+            "same .so identity and content must share a cache key"
         );
     }
 
