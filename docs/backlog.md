@@ -748,6 +748,22 @@ with ripgrep installed are unaffected.
 (The default-scope `:g`/`:v` phantom-row and `replace_all` change-log items
 shipped 2026-08-04 — see the Record.)
 
+### 1.11 Open from the 2026-08-05 code review (audit depth)
+
+Full report with repros in §8. Top of the pile:
+
+- **Confirm-substitute stale match offsets panic the editor** (§8 #1) — two
+  unguarded read sites, one fires on the next draw with no keypress after an
+  external rewrite; fix pattern already exists at `ex_dispatch.rs`'s guarded
+  first jump.
+- **Case operators clobber the clipboard and registers** (§8 #2) —
+  `apply_case_op_to_selection` routes through the delete funnel and restores
+  only the unnamed register; OS clipboard, `"-`, the `"1`–`"9` ring and any
+  pending named register are overwritten.
+- **X11 clipboard read truncates oversized non-INCR properties** (§8 #3) —
+  `read_property` never checks `bytes_after`; silent truncation reported as
+  success.
+
 ## 2. Blocked on platform access
 
 | Finding                                                      | Location                                                         | Blocker                                                                             |
@@ -1108,3 +1124,391 @@ conventions are recorded under Standing constraints.
   serialize straight from the shared `Arc` (`*_borrowed` params + a Serialize
   envelope), attach boundary carries the Arc; wire bytes unchanged, one
   full-document copy eliminated (~1.22 MB).
+
+## 8. 2026-08-05 code review (audit depth)
+
+Scope: whole workspace (~260k lines, 57 crates + app), clean tree. Method:
+read-only sub-agent sweeps per crate group, every candidate re-traced against
+the real code before inclusion. Verified against the installed dependency
+sources (`regex-syntax` 0.8.10, `ropey` 1.6.1, `tree-sitter` 0.26.11) and the
+X11 protocol spec. Windows/macOS code (`windows.rs`, `macos.rs`) was code-read
+only — not compiled on this Linux host.
+
+### Findings — ranked
+
+#### 1. HIGH — confirm-substitute stale match offsets panic the editor
+
+`apps/hjkl/src/app/confirm_substitute.rs:144-145` and
+`apps/hjkl/src/render.rs:1747-1749`. `jump_to_current_confirm_match` and the
+per-frame highlight read the live buffer with the match's stale `row` /
+`byte_start`: `rope_line_str(&rope, r)` panics for `row >= len_lines()` (ropey
+contract, stated at `hjkl-buffer/src/buffer.rs:845`), and `line[..byte_start]`
+panics on a stale or mid-char byte offset. The sibling first-jump is guarded
+(`ex_dispatch.rs:775-783`, whose comment names the hazard); these two sites are
+not.
+
+Repro (no keypress needed): 5-line file with ≥2 matches; `:s/a/x/c`; from
+another terminal `echo x > file`. `autoreload` defaults true
+(`hjkl-engine/src/types.rs:494`), fs-watch is on (`main.rs:841`),
+`drain_fs_watch_events` runs every tick (`event_loop.rs:383`) and reloads the
+clean buffer without clearing `confirming_substitute`
+(`ex_dispatch.rs:2417-2478`). Expect: prompt keeps working. Actual: on the next
+draw the highlight pass reads row 4 of a 1-row rope —
+`panicked at line_to_byte: byte index out of bounds`, process aborts. Variant B:
+mid-confirm mouse-click another buffer line (`event_loop.rs:1589-1593`, mouse
+not gated on the session) then `y`.
+
+#### 2. MEDIUM — case operators (`gU`/`gu`/`g~`/`g?`/`gUU`/visual `U`/`u`/`~`/`gn`) clobber the OS clipboard and registers
+
+`crates/hjkl-vim/src/vim/text_object_ops.rs:276-353` +
+`crates/hjkl-vim/src/vim/command.rs:144-146`. The op transforms the range via
+`cut_vim_range`, which calls `record_yank_to_host` (→ `Host::write_clipboard`,
+`hjkl-engine/src/editor.rs:1757-1759`) and `record_delete` (writes unnamed,
+shifts the `"1`–`"9` ring or writes `"-`, and writes any pending named target —
+`hjkl-engine/src/registers.rs:141-176`). Only the unnamed slot is saved and
+restored (`text_object_ops.rs:285-286,350-351`); the code's own comment says
+"vim's case operators don't touch registers".
+
+Repro: buffer `hello world\n`; `y$` (clipboard = `hello world`); `0` `gUw`.
+Expect: clipboard and `"-` unchanged (vim). Actual: clipboard = `hello`, `"-` =
+`hello`; linewise forms shift `"1`–`"9` and a pending `"x` prefix writes
+register `x`. Every case-op caller routes through this path (`op_motion.rs:455`,
+`linewise.rs:140`, `visual_ops.rs:108/210`, `operator.rs:235`,
+`range_ops.rs:101`).
+
+#### 3. MEDIUM — X11 clipboard read silently truncates oversized non-INCR properties
+
+`crates/hjkl-clipboard/src/backend/x11_thread.rs:1162-1212` (used from `do_get`
+at `:1267-1271`). `xcb_get_property` is issued once with
+`long_length = u32::MAX/4`; for a property larger than the server's max request
+length the reply carries the first chunk and `bytes_after > 0`. `bytes_after` is
+never checked (grep: the field appears nowhere in the crate outside the struct
+def), so the truncated chunk is returned as a successful `Ok`. (The sub-agent's
+"delete destroys the remainder" half is wrong — per the X11 protocol spec,
+`delete` only fires when `bytes_after == 0`, so the remainder survives but is
+never read.)
+
+Repro: owner writes a 256 KB non-INCR property via append-mode `ChangeProperty`;
+`get(Clipboard, Text)`. Expect: full payload or an error. Actual: `Ok` with the
+first ~max-request-length chunk. INCR transfers are unaffected (4-byte hint
+property).
+
+#### 4. MEDIUM — grammar install strips capture-form `(#set! @cap ...)` directives, silently killing the pre-extraction feature
+
+`crates/hjkl-bonsai/src/runtime/loader.rs:320-333` +
+`crates/hjkl-bonsai/src/query_sanitize.rs:357-364` +
+`crates/hjkl-bonsai/src/highlighter.rs:1933-1935`. The installer writes the
+sanitized query to `<name>.scm` (what `Grammar::load` reads,
+`runtime/grammar.rs:95-101`), and the sanitizer deletes every
+`(#set! @cap key @cap2)` form. The highlighter's `compile_query` only
+pre-extracts those directives when `Query::new` fails on the raw text —
+tree-sitter 0.26.11 rejects the two-capture form ("Unexpected second capture
+name", `binding_rust/lib.rs:2897-2905`) — but the sanitized text compiles
+first-try, so `pre_extracted` is always empty for installed grammars.
+
+Repro: install markdown_inline or html_tags; highlight a URL attribute. On-disk
+evidence:
+`~/.cache/bonsai/query-sources/…-markdown_inline.resolved.scm:45,49,96` carry
+`(#set! @_url url @_url)`; the installed
+`~/.local/share/bonsai/grammars/markdown_inline.scm` has none of them. Expect:
+span `metadata["url"]` (asserted by the `html_set_directive_metadata_applied`
+test, `highlighter.rs:2276-2316`). Actual: all spans have `metadata: None`.
+
+#### 5. MEDIUM — Wayland: an in-flight `source.send` fd for a replaced source is misattributed to the next paste
+
+`crates/hjkl-clipboard/src/backend/wayland_thread.rs:850-878` + `do_set`
+`:1284-1333`. `dispatch_events` pops an fd only when the message's object id
+matches the _current_ `clipboard_source`; a send event for a source destroyed by
+`do_set` (same thread, between dispatch cycles) is dispatched with
+`opt_fd = None` and its fd stays in the FIFO `rx_fds`
+(`wayland_socket.rs:96-97`). The next paste pops the stale fd.
+
+Repro: paste (compositor queues `source.send(S1, fd1)`) racing a `set()` before
+the bg thread dispatches it. Expect: each paste gets its own fd. Actual: the
+paste writes the payload into the previous generation's pipe (stale fd); the
+queue is permanently shifted one generation, so every later paste fails or
+desyncs. A blocking write on a stale undrained pipe can stall the bg thread.
+
+#### 6. MEDIUM — explorer file↔dir type change at an unchanged path silently reverts
+
+`apps/hjkl/src/app/explorer_reconcile.rs:226-234` (emits `Trash(path)` +
+`CreateDir/CreateFile(path)` in one batch) + `:486-515` (Trash pushes
+`(basename, dest)` into the registry) + `:528-554` / `:562-598` (create ops
+restore by basename only, with no original-path comparison). `apply_ops` runs
+trashes before creates (`:280-284`), so the type-change create finds the entry
+the same batch just trashed and moves the old _file_ back; the buffer is then
+rebuilt from disk (`explorer.rs:1221`), discarding the user's edit silently.
+
+Repro: explorer on a dir containing `a.txt`; edit the line to `a.txt/` and press
+`<Esc>`. Expect: file trashed, empty dir `a.txt/` created. Actual: file restored
+unchanged, tree shows a file, no error.
+
+#### 7. LOW — linewise-delete inverse text is wrong for non-`\n` line separators
+
+`crates/hjkl-buffer/src/edit.rs:573-581` (`rope_line_str_locked` strips only
+`'\n'`), used by `do_delete_range`'s `MotionKind::Line` arm (`:298-396`).
+Ropey's `line()` includes the full separator (`get_line`, ropey 1.6.1), so for
+`\r`, U+000B, U+000C, U+0085, U+2028, U+2029 the removed span is stripped
+correctly but `removed_joined` (`:347-352`) carries a phantom `'\n'` — the
+inverse `InsertStr` re-inserts one extra line break, violating the documented
+`apply_edit` round-trip contract (`:133-135`). CRLF is safe (the `\r` is
+stripped and restored); the round-trip proptest corpus only generates ASCII.
+
+Repro: buffer `a\u{2028}b`; `dd` at (0,0). Removed span = `a\u{2028}` (2 chars).
+Expect: undo restores `a\u{2028}b`. Actual: inverse text `a\u{2028}\n` restores
+`a\u{2028}\nb` — a line break materializes.
+
+#### 8. LOW — vim pattern escapes `\a`/`\A` pass through as rust-regex escapes with different meanings
+
+`crates/hjkl-engine/src/search.rs:292-298` (the passthrough arm — also every `/`
+search, `:s`, `:g` pattern). The arm's comment claims `\a`/`\A` are "already
+valid rust-regex syntax … and identical in vim's default magic" — false: vim
+`\a` = `[A-Za-z]`, `\A` = non-alpha; rust-regex `\a` = Bell
+(`regex-syntax parse.rs:1551`), `\A` = start-of-text anchor (`:1557-1560`).
+
+Repro: `:s/\A/x/` on `"ab1"`. Expect (vim): `"abx"`. Actual: `\A` matches the
+empty string at position 0, `do_replace` (`substitute.rs:856-875`) inserts →
+`"xab1"` — text changed in a way vim never produces. `:s/\a/x/g` silently no-ops
+(no bell chars).
+
+#### 9. LOW — escaped `]` inside a character class closes it early → "bad pattern"
+
+`crates/hjkl-engine/src/search.rs:258-264`: the in-bracket branch pushes `]`
+verbatim and clears `in_bracket` without checking the preceding `\`, so an
+escaped `]` terminates the class.
+
+Repro: `:s/[a\]b]/x/` on `"a]b"`. Expect (vim): class `{a, ], b}`, substitution
+runs. Actual: translated pattern `[a\]b\]` — rust-regex reports "unclosed
+character class" and the command errors, doing nothing.
+
+#### 10. LOW — vim `\Z`/`\e`/`\z`-family mis-translate
+
+`crates/hjkl-engine/src/search.rs:292-298`. Vim `\Z` (ignore case) and `\e`
+(ESC) pass through; rust-regex has neither →
+`bad pattern: unrecognized escape sequence` (`regex-syntax parse.rs:1594`),
+where vim substitutes fine. Vim `\ze`/`\zs` (start/end of match) pass through as
+rust's end-of-text anchor `\z` + literal — compiles, matches nonsense or
+nothing.
+
+Repro: `:s/\Zfoo/bar/` on `"FOO"`. Expect (vim): `"bar"`. Actual: `bad pattern`
+error, no change.
+
+#### 11. LOW — `\d`/`\s`/`\w` are Unicode-wide in rust-regex, ASCII-only in vim
+
+`crates/hjkl-engine/src/search.rs:292-298`. Vim `\d` = `[0-9]`; rust `\d` =
+`\p{Nd}`. Verified: rust `\d` matches U+0663.
+
+Repro: `:s/\d/x/` on `"٣"`. Expect (vim): no match, unchanged. Actual: `"x"`.
+
+#### 12. LOW — `:0r file` inserts after line 1; vim inserts before line 1
+
+`crates/hjkl-ex/src/builtins.rs:176-179` (`read_handler`), with
+`crates/hjkl-ex/src/lib.rs:88-100` (the `:0put` special case exists precisely to
+rescue 0-address insertion-point commands; `:r` is not in its list) and
+`range.rs:196` (`clamp(1, last)` on a literal 0).
+
+Repro: buffer `"a\nb"`, `:0r x.txt` (file content `"X\n"`). Expect: `"X\na\nb"`.
+Actual: `"a\nX\nb"`.
+
+#### 13. LOW — LSP diag overlay paints char columns as screen cells, ignoring tabs and wide chars
+
+`crates/hjkl-buffer-tui/src/render.rs:1100-1114`. `DiagOverlay` maps
+`col - top_col` straight to a cell; no tab expansion, no wide-char width. The
+diagnostic columns are chars end-to-end (`lsp_glue.rs:487-504` →
+`build_diag_overlays`), so any line with a tab or multibyte char before the
+range underlines the wrong cells.
+
+Repro: line `"\tfoo"`, `tab_width = 4` (cells: tab 0-3, `foo` 4-6); diag range
+chars 1..4. Expect: underline on cells 4-6. Actual: underline on cells 1-3
+(inside the tab).
+
+#### 14. LOW — past-EOL cursor placeholder uses a char offset as a cell offset
+
+`crates/hjkl-buffer-tui/src/render.rs:1789-1804`. `dx = cursor_col - seg_start`
+is a char index, painted at `area.x + dx` as a cell; on a line containing a wide
+char the reversed cursor cell lands on the last character instead of one cell
+past it. The correct conversion exists in the same crate
+(`char_col_to_visual_col`, used at `render.rs:939`).
+
+Repro: line `"你x"` (3 cells), cursor at (0,2) past-end (the state the crate's
+own tests exercise — with ASCII, so they pass). Expect: placeholder at cell 3.
+Actual: cell 2 — covers `x` (or half of a trailing wide char).
+
+#### 15. LOW — fs-watch rename `To`-merge bypasses the path filter
+
+`crates/hjkl-fs-watch/src/lib.rs:451-476`. The `From` arm applies
+`passes_filter` (`:443-445`); the `To` merge branch (`:460-468`) inserts
+`Renamed { to }` with no filter check — only the no-`From` fallback filters.
+
+Repro: filter `extension == "rs"`; `rename("a.rs", "b.txt")`. Expect: `a.rs`
+events at most. Actual: `Renamed { from: "a.rs", to: "b.txt" }` — a filtered-out
+path delivered as `to`; a consumer acting on `to` touches an unwanted file.
+
+#### 16. LOW — fs-watch `Create` merges with an unrelated pending `RenameFrom`, fabricating a rename
+
+`crates/hjkl-fs-watch/src/lib.rs:490-513`. The merge keys on recency
+(`max_by_key(v.at)`), not a kernel cookie; a `Create` landing inside the
+debounce window of an unmatched `RenameFrom` pairs them.
+
+Repro: `rename("old.txt", "other.txt")` (From pending, To delayed past the
+debounce boundary); 50 ms later an unrelated `create("fresh.txt")`. Expect (doc
+promise, `:153-154`): separate events. Actual:
+`Renamed { from: "old.txt", to: "fresh.txt" }` — a pair that never happened; the
+real `To` then arrives as `Created(other.txt)`.
+
+#### 17. LOW — anvil install dedup race reports `Failed` for a succeeded install
+
+`crates/hjkl-anvil/src/job.rs:173-176` vs `:77-103` / `wait` `:142-150`. The
+worker's terminal `broadcast` and `in_flight.remove` are separate lock
+acquisitions; a caller attaching a sender in the window between them observes a
+closed channel and `wait()` returns `Failed("<channel closed>")`.
+
+Repro: three threads (UI + LSP + anvil worker); caller B calls `install(name)`
+for a name whose worker just broadcast `Done` but not yet removed. Expect:
+`Done`. Actual: `Failed("<channel closed>")` — a caller that re-queues on
+`Failed` starts a duplicate install of an already-installed tool. Window is
+microseconds but real.
+
+#### 18. LOW — bonsai compiled-artifacts cache ignores the grammar `.so` identity
+
+`crates/hjkl-bonsai/src/highlighter.rs:384-393` (key = name + highlights +
+injections content only) + `:497-509` (global `COMPILED_CACHE`). A same-named
+grammar from a different `.so` with unchanged query content (a grammar-only rev
+bump) reuses a `Query` compiled against the old symbol table; tree-sitter
+matches patterns by numeric symbol id with no language check, so spans change
+arbitrarily with no error. The cached `Query` also holds a shallow copy of the
+old language — a latent dangling pointer after the last old `Grammar` drops, not
+dereferenced in release builds.
+
+Repro: same process, two `rust` grammars with identical `.scm` built from
+different revisions; highlight the same buffer with both. Expect: identical
+spans. Actual: arbitrary span differences, no diagnostic.
+
+#### 19. LOW — Windows: `EmptyClipboard` runs before allocation, wiping prior clipboard on failure
+
+`crates/hjkl-clipboard/src/backend/windows.rs:568-580` (`set_png`; same shape in
+`set_text` `:257-266` and `set_bytes` `:372-381`). If `GlobalAlloc` (or the
+second format's `SetClipboardData`) fails after `EmptyClipboard`, the old
+clipboard content is already destroyed. Allocating first and emptying only
+immediately before `SetClipboardData` preserves it. cfg-gated; code-read only on
+this host.
+
+#### 20. LOW — macOS: NUL byte in a custom mime type panics the calling thread
+
+`crates/hjkl-clipboard/src/backend/macos.rs:248`
+(`CString::new(s).expect("NUL byte in clipboard type string")`);
+`MimeType::Custom` passes the string through verbatim (`:330`). X11 and Wayland
+handle the same input fine (length-based); Windows rejects it. cfg-gated;
+code-read only on this host.
+
+### Cleared
+
+- **`hjkl-fs` atomic-write fallback dropping `preserve_mode`** — disproved.
+  `File::create` on an _existing_ target reuses the inode, so the mode survives
+  O_TRUNC; no caller combines `mode: Some(..)` with `nonatomic_fallback` (only
+  `document()` does, with `mode: None`); the `CrossesDevices` fallback is
+  unreachable because `temp_path` is always a sibling (`atomic.rs:112-123`).
+- **X11 `delete=1` destroying the unread remainder** — disproved. Protocol spec:
+  the property is deleted only when `bytes_after == 0`; the remainder survives
+  (but is never read — that half is finding #3).
+- **`shell.rs` undo leak on failed `:%!cmd`** — `push_undo()` runs after every
+  error return; a failed filter leaves no undo entry.
+- **Substitute `parse_flags` digit handling, huge counts,
+  `chars.next().unwrap()` at `substitute.rs:702`, last-changed-row mapping** —
+  all traced, guarded or clamped; no panic, no wrong-line reach.
+- **Undo arena tree (diff/apply/keyframes/retarget/cap/prune/pop/by_seq)** —
+  differential-tested against a full-snapshot model; char-boundary snapping in
+  `diff` is sound.
+- **Buffer cursor clamps, `floor_char_boundary`, wrap-scroll subtraction,
+  jumplist bounds, insert-bridge autopair/soft-tab arithmetic** — safe.
+- **`apply_collected_matches` staleness guards** (`substitute.rs:611-626`) —
+  skips stale matches; the confirm path's _display_ is the hole (finding #1).
+- **Swap/trash/nvim_api paths** — swap lengths capped, atomic temp+rename; trash
+  reservation atomic; nvim_api clamps untrusted row/col params,
+  char-boundary-snaps byte offsets, budgets the RPC loop.
+- **Explorer path injection** — `escape_ex_path` round-trips `%`/`#`; `|` is not
+  a command separator in this ex parser.
+- **Confirm-session `idx` bounds and key routing** — `idx < matches.len()` while
+  the session lives; keys fully consumed during confirm.
+- **LSP byte/char conversions** (`col_to_wire`/`wire_to_col`), framing
+  (Content-Length caps), UTF-16/UTF-8 gating — correct; the renderer's cell
+  mapping is the defect (finding #13).
+- **anvil atomic-install sequence, `safe_join`, URL interpolation, TOML sidecar
+  escaping** — all validated.
+- **Bonsai rope-provider lifetimes, parse-callback chunk lifetimes, `#offset!`
+  handling, `dedup_by` comment merge** — traced against tree-sitter 0.26.11;
+  safe.
+- **Ropey CRLF handling in the linewise-delete inverse** — `\r\n` round-trips
+  (the `\r` is stripped and restored); only non-`\n` separators break (finding
+  #7).
+
+### Hardening
+
+- `set_yank` (`hjkl-engine/src/editor.rs:2070-2078`) rebuilds the unnamed slot
+  with `..Default::default()`, dropping `blockwise`/`block_width` even on a
+  correct restore.
+- `ex_dispatch.rs:775-783` is the guarded pattern finding #1's two sites should
+  mirror (clamp row, `.get(..byte_start)` fallback), or the session should be
+  dropped on buffer reload/switch.
+- X11 INCR send uses `CW_EVENT_MASK` in _replace_ mode on the requestor's window
+  (`x11_thread.rs:729-739`), clobbering their event selection.
+- `wayland_socket.rs`: a message advertising a huge `hdr.size` never drains
+  (unbounded `rx_buf` growth); `MAX_FDS_PER_RECV = 8` silently drops extra fds
+  (`MSG_CTRUNC`); `sendmsg` on a blocking socket can block.
+- `escape_ex_path` (`ex_dispatch.rs:3216-3218`): a filename containing the
+  literal bytes `\%` or `\#` is mis-targeted (vim has the same ambiguity).
+- anvil backup-path collision: a tool named `foo.bak` collides with `foo`'s
+  backup path (`installer.rs:218-241`); unreachable via the manifest (dots
+  excluded) but reachable via the public install API.
+- `FormatWorker::drop` (`hjkl-mangler/src/lib.rs:1001-1013`) joins the worker,
+  which can block teardown up to `FORMAT_TIMEOUT` (30 s) on a hung formatter.
+- Bonsai `extract_capture_set_directives` pattern-index off-by-one for
+  directives placed after their pattern's closing paren
+  (`query_sanitize.rs:128-132`); latent — current pinned queries place them
+  inside the parens, and finding #4 currently prevents the extractor from
+  running on installed grammars at all.
+- `shift_byte` row-delta semantics (`folds.rs:752-788`): a nonzero row delta on
+  a node starting at column ≠ 0 would diverge from tree-sitter's `#offset!`.
+- Cached bonsai `Query` holding a shallow copy of an unloaded grammar's language
+  — latent dangling pointer, not dereferenced in release builds.
+
+### Coverage
+
+Reviewed (all findings above re-traced by the reviewer against the cited lines
+and the installed dependency sources): hjkl-buffer, hjkl-vim, hjkl-engine
+(search/substitute/registers/buf_helpers/editor hot paths), hjkl-ex
+(parse/range/shell/global/expand/complete + builtins read/write handlers),
+apps/hjkl (confirm_substitute, ex_dispatch regions, event_loop regions,
+explorer + reconcile, render highlight/diag regions, nvim_api regions, headless,
+embed, save), hjkl-app (swap, trash, git), hjkl-clipboard (backends: x11_thread,
+x11, wayland_thread, wayland_socket, wayland_wire, windows, macos, dlopen,
+dib_png, uri), hjkl-fs (atomic, dir, identity, path, read), hjkl-fs-watch,
+hjkl-bonsai (highlighter, folds, comment_markers, hex_color, runtime/\*,
+query_sanitize, rainbow), hjkl-anvil, hjkl-buffer-tui (render), hjkl-lsp,
+hjkl-mangler, hjkl-quickfix, hjkl-layout, hjkl-keymap, hjkl-menu, hjkl-css
+(partial), hjkl-picker (partial), hjkl-fuzzy, hjkl-compat-oracle (partial),
+hjkl-config (validate), hjkl-xdg, hjkl-kitty, hjkl-markdown (partial).
+
+Not reviewed (GAP): the ~30 small TUI-shell crates (theme-tui, statusline-tui,
+splash-tui, holler-tui, etc.) skimmed for structure only; the full bodies of
+apps/hjkl
+`app/{buffer_ops,mouse,fs_watch,keymap,keymap_build,count_prefix, chord_routing,diff_mode,diff,dispatch,dock,engine_actions,window, viewport_sync,syntax_glue,prompt,quickfix,types}`
+and `host.rs`/`theme.rs`/ `main.rs`; `nvim_api.rs` 1126-1545 and 1785-2336;
+hjkl-app
+`{config,filestate,git_worker,keymap_actions,modeline,picker_git, picker_sources,undofile}`;
+hjkl-engine editor.rs large spans (500-1780, 2000-2430, 2860-3624, 3730-4385,
+4430-4880, 5000-7582) and
+motions/types/viewport_math/selection_shift/tag/input/options_registry/
+abbrev/discipline/policy; hjkl-ex `builtins.rs` 300-630 and 2210-4970
+(quickfix/comment/retab), setopt/folds/listings/effect; hjkl-clipboard
+`{osc52,base64,mime,selection,error,mock,ssh_aware}`; hjkl-fs
+`{dirs,lock,open,project}`; the bundled tree-sitter query files' contents; crate
+test/bench harnesses. Windows (`windows.rs`) and macOS (`macos.rs`) code was not
+compiled on this host — findings #19/#20 are code-reading only.
+
+Summary: 18 confirmed findings — 1 high, 5 medium, 12 low. Overall risk is
+moderate: one process-abort reachable with no keypress (finding #1), one silent
+user-data clobber (#2), one silent clipboard truncation (#3). Fix order: (1)
+guard or drop the confirm session on buffer reload/switch; (2) stop routing case
+ops through the delete funnel (or snapshot/restore clipboard + registers); (3)
+check `bytes_after` in `read_property`.
