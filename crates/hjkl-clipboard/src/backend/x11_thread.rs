@@ -1165,48 +1165,83 @@ fn read_property(state: &X11State) -> Result<(u32, Vec<u8>), ClipboardError> {
     let window = state.window;
     let our_property = state.conn.atoms().hjkl_clipboard_get;
 
-    // long_length: max u32/4 to request the full property in one shot.
-    // For very large data the X server caps at max_request_length; values that
-    // exceed it will be delivered via INCR instead, so we don't need to chunk.
-    let cookie = unsafe {
-        (fns.xcb_get_property)(
-            raw,
-            1, // delete=1: server frees property after this read
-            window,
-            our_property,
-            XCB_GET_PROPERTY_TYPE_ANY,
-            0,            // long_offset
-            u32::MAX / 4, // long_length
-        )
-    };
+    // Loop: long_length = u32::MAX/4 requests the full property in one shot,
+    // but the X server caps the reply at max_request_length. When the property
+    // is larger than that, the first reply holds only the first chunk and sets
+    // bytes_after > 0 — the remainder survives and (with delete=1) the server
+    // does NOT delete the property until a read returns bytes_after == 0. Keep
+    // reading, advancing long_offset by the value returned each iteration,
+    // until bytes_after == 0.
+    let mut offset: u32 = 0; // in 4-byte units
+    let mut bytes: Vec<u8> = Vec::new();
+    let mut first = true;
+    let mut type_atom: u32 = 0;
 
-    // SAFETY: cookie from xcb_get_property; null error pointer (null reply ->
-    // error).
-    let reply = unsafe { (fns.xcb_get_property_reply)(raw, cookie, std::ptr::null_mut()) };
-    if reply.is_null() {
-        return Err(ClipboardError::io_other(
-            "xcb_get_property_reply returned null",
-        ));
+    loop {
+        let cookie = unsafe {
+            (fns.xcb_get_property)(
+                raw,
+                1, // delete=1: server frees the property only on the read where
+                // bytes_after comes back 0; intermediate reads cannot delete
+                window,
+                our_property,
+                XCB_GET_PROPERTY_TYPE_ANY,
+                offset,       // long_offset
+                u32::MAX / 4, // long_length
+            )
+        };
+
+        // SAFETY: cookie from xcb_get_property; null error pointer (null reply ->
+        // error).
+        let reply = unsafe { (fns.xcb_get_property_reply)(raw, cookie, std::ptr::null_mut()) };
+        if reply.is_null() {
+            return Err(ClipboardError::io_other(
+                "xcb_get_property_reply returned null",
+            ));
+        }
+
+        // SAFETY: reply is non-null xcb_get_property_reply_t.
+        let bytes_after = unsafe { (*reply).bytes_after };
+        if first {
+            // Type comes from the first reply; subsequent replies report the
+            // same type.
+            type_atom = unsafe { (*reply).r#type };
+            first = false;
+        }
+        // SAFETY: reply non-null; xcb_get_property_value returns pointer into
+        // reply's trailing data buffer.
+        let value_ptr = unsafe { (fns.xcb_get_property_value)(reply) };
+        // SAFETY: same.
+        let value_len = unsafe { (fns.xcb_get_property_value_length)(reply) } as usize;
+
+        let chunk = if value_len == 0 || value_ptr.is_null() {
+            Vec::new()
+        } else {
+            // SAFETY: value_ptr is valid for value_len bytes inside the reply
+            // allocation. We copy immediately before freeing reply.
+            unsafe { std::slice::from_raw_parts(value_ptr as *const u8, value_len).to_vec() }
+        };
+
+        // SAFETY: reply was malloc'd by xcb.
+        unsafe { libc::free(reply.cast()) };
+
+        // Defensive: the protocol guarantees that a read with bytes_after > 0
+        // returned data (so the offset advances); a server that reports
+        // bytes_after > 0 without advancing would loop forever.
+        if bytes_after > 0 && chunk.is_empty() {
+            return Err(ClipboardError::io_other(
+                "xcb_get_property: bytes_after > 0 but no data returned",
+            ));
+        }
+
+        bytes.extend_from_slice(&chunk);
+        if bytes_after == 0 {
+            break;
+        }
+        // value-length is in bytes; long_offset is in 4-byte units. Property
+        // lengths are stored in whole 4-byte units, so this division is exact.
+        offset += chunk.len() as u32 / 4;
     }
-
-    // SAFETY: reply is non-null xcb_get_property_reply_t.
-    let type_atom = unsafe { (*reply).r#type };
-    // SAFETY: reply non-null; xcb_get_property_value returns pointer into
-    // reply's trailing data buffer.
-    let value_ptr = unsafe { (fns.xcb_get_property_value)(reply) };
-    // SAFETY: same.
-    let value_len = unsafe { (fns.xcb_get_property_value_length)(reply) } as usize;
-
-    let bytes = if value_len == 0 || value_ptr.is_null() {
-        Vec::new()
-    } else {
-        // SAFETY: value_ptr is valid for value_len bytes inside the reply
-        // allocation. We copy immediately before freeing reply.
-        unsafe { std::slice::from_raw_parts(value_ptr as *const u8, value_len).to_vec() }
-    };
-
-    // SAFETY: reply was malloc'd by xcb.
-    unsafe { libc::free(reply.cast()) };
 
     Ok((type_atom, bytes))
 }

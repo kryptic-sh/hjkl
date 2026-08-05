@@ -854,17 +854,20 @@ fn dispatch_events(state: &mut WaylandState) {
         Vec::new();
 
     while let Some((hdr, args)) = state.socket.next_message() {
-        // Only `data_source.send` events carry an fd (via SCM_RIGHTS). Pop the
-        // fd queue exclusively for those messages: popping an fd for every
-        // message would misattribute (and close) an fd that belongs to a later
-        // send event whenever unrelated messages arrive in the same batch,
-        // breaking the paste. Unmatched fds stay queued for the message they
-        // belong to (and are closed by WaylandSocket::drop as a last resort).
-        let expects_fd = (hdr.opcode == EXT_SOURCE_SEND
-            && state.clipboard_source.as_ref().map(|s| s.id) == Some(hdr.object_id))
-            || (hdr.opcode == ZWP_PRIMARY_SOURCE_SEND
-                && state.primary_source.as_ref().map(|s| s.id) == Some(hdr.object_id));
-        let opt_fd = if expects_fd {
+        // Only `data_source.send` / `primary_source.send` events carry an fd
+        // (via SCM_RIGHTS), and every such event carries exactly one, so the
+        // fd must be popped for send-opcode messages regardless of whether the
+        // object id still matches a live source. A send for a source that
+        // `do_set`/`do_set_primary` already destroyed (a paste in flight when
+        // the user copies new data) would otherwise leave its fd sitting in the
+        // FIFO queue, and the next real send would pop that stale fd — the
+        // payload lands in the wrong pipe and every later paste shifts by one
+        // generation. handle_event closes the fd when the object id no longer
+        // matches a current source (the compositor will not deliver more sends
+        // for a destroyed source); a send event with no fd in the queue (a
+        // compositor protocol violation) passes None as before — no panic.
+        let is_send = hdr.opcode == EXT_SOURCE_SEND || hdr.opcode == ZWP_PRIMARY_SOURCE_SEND;
+        let opt_fd = if is_send {
             state.socket.next_fd()
         } else {
             None
@@ -3408,6 +3411,113 @@ mod tests {
         assert!(
             state.fatal_error,
             "wl_display.error must mark the state as fatal"
+        );
+    }
+
+    /// Regression: a `data_source.send` for a source that `do_set` already
+    /// destroyed (a paste in flight when the user copies new data) must still
+    /// pop and close its fd. Previously the fd stayed in the socket's FIFO
+    /// `rx_fds` queue and the next real send popped that stale fd — the
+    /// payload was written to the wrong pipe and every later paste shifted by
+    /// one generation.
+    #[test]
+    fn stale_source_send_fd_is_closed_not_misattributed() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(mock) = ensure_mock() else { return };
+        let Some(thread) = get_thread_for_test() else {
+            return;
+        };
+
+        mock.state().reset();
+        let _ = clear_clipboard(thread, Selection::Clipboard);
+
+        // Set twice: the second set destroys the first source, after which the
+        // compositor may still deliver a send event for it (a paste in flight).
+        set_clipboard(thread, Selection::Clipboard, &MimeType::Text, b"old")
+            .expect("set old failed");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let old_source = mock.state().current_selection.expect("source A set");
+        set_clipboard(thread, Selection::Clipboard, &MimeType::Text, b"new")
+            .expect("set new failed");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let new_source = mock.state().current_selection.expect("source B set");
+        assert_ne!(
+            old_source, new_source,
+            "replacing a source must allocate a fresh object id"
+        );
+
+        // Two pipes: one for the stale send (old source), one for the live
+        // send (current source). The mock closes its own copies of the write
+        // ends after sending, so EOF on a read end means every other copy — in
+        // particular the client's SCM_RIGHTS dup — was closed.
+        let mut stale = [0i32; 2];
+        // SAFETY: pipe2 with valid args.
+        assert_eq!(
+            unsafe { libc::pipe2(stale.as_mut_ptr(), libc::O_CLOEXEC) },
+            0
+        );
+        let stale_read = stale[0];
+        let stale_write = stale[1];
+        let mut live = [0i32; 2];
+        // SAFETY: pipe2 with valid args.
+        assert_eq!(
+            unsafe { libc::pipe2(live.as_mut_ptr(), libc::O_CLOEXEC) },
+            0
+        );
+        let live_read = live[0];
+        let live_write = live[1];
+
+        // Enqueue the stale send FIRST so its fd sits at the front of the
+        // client's rx_fds queue — the misattribution case.
+        {
+            let mut st = mock.state();
+            st.pending_sends.push(PendingSend {
+                mime: "text/plain;charset=utf-8".to_owned(),
+                read_fd: stale_read,
+                write_fd: stale_write,
+                source_id: old_source,
+                complete: false,
+            });
+            st.pending_sends.push(PendingSend {
+                mime: "text/plain;charset=utf-8".to_owned(),
+                read_fd: live_read,
+                write_fd: live_write,
+                source_id: new_source,
+                complete: false,
+            });
+        }
+
+        // Wait for the mock server thread to send both events. The write ends
+        // are closed by the mock (dispatch_pending_sends) — we must not close
+        // them here, or the fds get double-closed and possibly reused.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            {
+                let st = mock.state();
+                if st.pending_sends.iter().all(|p| p.complete) {
+                    break;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "mock never sent both send events"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        // Read the live pipe first: its data+EOF imply the client dispatched
+        // both messages (stale is handled before live in the same dispatch).
+        let live_data = read_fd_to_end(live_read).expect("live paste should receive payload");
+        // SAFETY: live_read and stale_read are ours; close after reading.
+        unsafe { libc::close(live_read) };
+        let stale_data = read_fd_to_end(stale_read).expect("stale pipe should reach EOF");
+        // SAFETY: same.
+        unsafe { libc::close(stale_read) };
+
+        assert_eq!(live_data, b"new", "live paste must get the current payload");
+        assert!(
+            stale_data.is_empty(),
+            "stale paste pipe must receive nothing, got: {stale_data:?}"
         );
     }
 }

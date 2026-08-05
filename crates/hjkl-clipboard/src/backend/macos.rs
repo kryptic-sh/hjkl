@@ -241,19 +241,22 @@ unsafe fn general_pasteboard() -> Id {
 
 /// Construct an `NSString` from a Rust `&str` via `stringWithUTF8String:`.
 ///
-/// Returns `nil` on allocation failure (extremely rare). The returned object
-/// is autoreleased; its lifetime is tied to the current autorelease pool.
-/// For our use (immediate argument to another ObjC call) this is safe.
-unsafe fn nsstring_from_str(s: &str) -> Id {
-    let cstr = CString::new(s).expect("NUL byte in clipboard type string");
+/// Returns an error if the string contains a NUL byte, which cannot be
+/// expressed in a C string (e.g. a `MimeType::Custom` type with a NUL). Returns
+/// `nil` on allocation failure (extremely rare). The returned object is
+/// autoreleased; its lifetime is tied to the current autorelease pool. For our
+/// use (immediate argument to another ObjC call) this is safe.
+unsafe fn nsstring_from_str(s: &str) -> Result<Id, ClipboardError> {
+    let cstr = CString::new(s)
+        .map_err(|_| ClipboardError::io_other("clipboard type string contains NUL byte"))?;
     // SAFETY: `cstr.as_ptr()` is a valid NUL-terminated C string. The class
     // method `stringWithUTF8String:` copies the bytes internally.
     unsafe {
-        msg1::<*const c_char, Id>(
+        Ok(msg1::<*const c_char, Id>(
             class_nsstring(),
             sel_string_with_utf8_string(),
             cstr.as_ptr(),
-        )
+        ))
     }
 }
 
@@ -405,7 +408,7 @@ impl Backend for MacosBackend {
             // Apple docs. Returns NSInteger (change count); we discard it.
             let _change: isize = msg0(pb, sel_clear_contents());
             let data = nsdata_from_bytes(bytes);
-            let ty = nsstring_from_str(&uti);
+            let ty = nsstring_from_str(&uti)?;
             let ok: bool = msg2(pb, sel_set_data_for_type(), data, ty);
             if !ok {
                 return Err(ClipboardError::io_other("setData:forType: returned NO"));
@@ -430,7 +433,7 @@ impl Backend for MacosBackend {
             if pb.is_null() {
                 return Err(ClipboardError::io_other("generalPasteboard returned nil"));
             }
-            let ty = nsstring_from_str(&uti);
+            let ty = nsstring_from_str(&uti)?;
             let data: Id = msg1(pb, sel_data_for_type(), ty);
             if data.is_null() {
                 return Err(ClipboardError::UnsupportedMime);
