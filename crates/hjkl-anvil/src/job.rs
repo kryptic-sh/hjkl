@@ -170,11 +170,24 @@ fn worker_loop(job_rx: Receiver<Job>, in_flight: InFlight) {
             Ok(bin_path) => InstallStatus::Done { bin_path },
             Err(e) => InstallStatus::Failed(e.to_string()),
         };
-        broadcast(&in_flight, &name, terminal);
-
-        // Remove from in-flight so a subsequent request starts fresh.
-        in_flight.lock().unwrap().remove(&name);
+        finish_job(&in_flight, &name, terminal);
     }
+}
+
+/// Emit the terminal status to every registered sender AND remove the key
+/// from the in-flight registry, under ONE lock acquisition.
+///
+/// Splitting the two into separate critical sections leaves a window in
+/// which a caller of [`InstallPool::install`] attaches its sender to the
+/// still-present entry, then the worker removes the entry: that caller's
+/// channel closes with no terminal status and `wait()` reports
+/// `Failed("<channel closed>")` for a job that succeeded.
+fn finish_job(in_flight: &InFlight, key: &str, status: InstallStatus) {
+    let mut guard = in_flight.lock().unwrap();
+    if let Some(senders) = guard.get_mut(key) {
+        senders.retain(|tx| tx.send(status.clone()).is_ok());
+    }
+    guard.remove(key);
 }
 
 /// Send `status` to all registered senders for `key`.  Drop senders whose
@@ -276,6 +289,61 @@ mod tests {
 
         // Pool must still accept new work after the dropped handle.
         let _ = pool.in_flight_names();
+    }
+
+    // ── finish_job terminal broadcast + removal atomicity ─────────────────────
+
+    /// Regression: the worker's terminal `broadcast` and `in_flight.remove`
+    /// were two separate lock acquisitions. A caller of `install` attaching
+    /// its sender between them got a channel that closes with no terminal
+    /// status, so `wait()` reported `Failed("<channel closed>")` for a job
+    /// that succeeded. `finish_job` must deliver the terminal status to a
+    /// sender attached BEFORE the job finished AND remove the key, under one
+    /// lock.
+    ///
+    /// The exact interleaving can't be forced through the real workers
+    /// (`install_blocking` is a concrete import, not injectable), so this
+    /// drives the finish path directly: the sender attached before finish
+    /// must receive the terminal status, the key must be gone afterwards
+    /// (a fresh `install` for the same name would start a new job), and the
+    /// channel must close once the entry is removed.
+    #[test]
+    fn finish_job_delivers_terminal_and_removes_atomically() {
+        let in_flight: InFlight = Arc::new(Mutex::new(HashMap::new()));
+        let (tx, rx) = bounded::<InstallStatus>(8);
+        in_flight
+            .lock()
+            .unwrap()
+            .insert("tool-a".to_string(), vec![tx]);
+
+        finish_job(
+            &in_flight,
+            "tool-a",
+            InstallStatus::Done {
+                bin_path: "/bin/tool-a".into(),
+            },
+        );
+
+        // Removed from the registry — a caller attaching after the removal
+        // sees no in-flight entry and starts a fresh job.
+        assert!(
+            !in_flight.lock().unwrap().contains_key("tool-a"),
+            "finish_job must remove the key from the in-flight registry"
+        );
+
+        // A sender attached BEFORE the finish received the terminal status.
+        match rx.try_recv() {
+            Ok(InstallStatus::Done { bin_path }) => {
+                assert_eq!(bin_path, std::path::PathBuf::from("/bin/tool-a"))
+            }
+            other => panic!("expected Done terminal status, got {other:?}"),
+        }
+        // No second status, and the channel closed when the entry (and its
+        // senders) were dropped.
+        assert!(
+            rx.try_recv().is_err(),
+            "channel must close after finish_job"
+        );
     }
 
     // ── Concurrent deduplication ──────────────────────────────────────────────

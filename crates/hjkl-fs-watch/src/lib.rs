@@ -458,14 +458,24 @@ fn handle_event(event: Event, pending: &mut HashMap<PathBuf, Pending>, filter: O
                     .map(|(k, _)| k.clone());
 
                 if let Some(from_path) = from {
-                    pending.remove(&from_path);
-                    pending.insert(
-                        from_path.clone(),
-                        Pending {
-                            kind: PendingKind::Renamed { to: to_path },
-                            at: Instant::now(),
-                        },
-                    );
+                    if passes_filter(filter, &to_path) {
+                        pending.remove(&from_path);
+                        pending.insert(
+                            from_path.clone(),
+                            Pending {
+                                kind: PendingKind::Renamed { to: to_path },
+                                at: Instant::now(),
+                            },
+                        );
+                    } else {
+                        // The rename's destination is filtered out, so no
+                        // `Renamed` pair may be emitted (the consumer would
+                        // see a `to` path it never asked for). The source
+                        // passed the filter when its `RenameFrom` was
+                        // recorded, so the consumer must learn it is gone —
+                        // record the removal instead.
+                        upsert(pending, from_path, PendingKind::Removed);
+                    }
                 } else {
                     // No matching From — treat as Create.
                     if passes_filter(filter, &to_path) {
@@ -492,24 +502,16 @@ fn handle_event(event: Event, pending: &mut HashMap<PathBuf, Pending>, filter: O
                 if !passes_filter(filter, &path) {
                     continue;
                 }
-                // If there's a pending RenameFrom, merge to Renamed.
-                let from = pending
-                    .iter()
-                    .filter(|(_, v)| matches!(v.kind, PendingKind::RenameFrom))
-                    .max_by_key(|(_, v)| v.at)
-                    .map(|(k, _)| k.clone());
-                if let Some(from_path) = from {
-                    pending.remove(&from_path);
-                    pending.insert(
-                        from_path,
-                        Pending {
-                            kind: PendingKind::Renamed { to: path },
-                            at: Instant::now(),
-                        },
-                    );
-                } else {
-                    upsert(pending, path, PendingKind::Created);
-                }
+                // Always `Created`. A create must NOT be merged with a
+                // pending `RenameFrom` (the old code did, via the most recent
+                // one): the kernel cookie that would prove the two belong to
+                // one rename is not exposed by notify, so an unrelated file
+                // created inside the debounce window fabricated a `Renamed`
+                // pair. Only the `RenameMode::To` arm correlates renames; a
+                // rename whose To side never arrives degrades to the
+                // documented `Removed` + `Created` fallback when the pending
+                // `RenameFrom` flushes.
+                upsert(pending, path, PendingKind::Created);
             }
         }
 
@@ -1042,6 +1044,133 @@ mod tests {
         assert!(
             has_rename || (has_remove && has_create) || (has_modify_src && has_modify_dst),
             "expected Renamed(src→dst), Removed(src)+Created/Modified(dst), or Modified(src)+Modified(dst); got {events:?}"
+        );
+    }
+
+    // ── rename correlation unit tests (handle_event) ─────────────────────────
+
+    fn rename_event(mode: notify::event::RenameMode, paths: &[&str]) -> notify::Event {
+        notify::Event {
+            kind: notify::event::EventKind::Modify(notify::event::ModifyKind::Name(mode)),
+            paths: paths.iter().map(PathBuf::from).collect(),
+            attrs: notify::event::EventAttributes::default(),
+        }
+    }
+
+    fn create_event(path: &str) -> notify::Event {
+        notify::Event {
+            kind: notify::event::EventKind::Create(notify::event::CreateKind::File),
+            paths: vec![PathBuf::from(path)],
+            attrs: notify::event::EventAttributes::default(),
+        }
+    }
+
+    fn rs_filter() -> FilterFn {
+        Box::new(|p| p.extension().is_some_and(|e| e == "rs"))
+    }
+
+    /// The `RenameMode::To` merge must re-apply the filter to the
+    /// destination: renaming `a.rs` → `b.txt` under a `*.rs` filter must NOT
+    /// emit a `Renamed` pair whose `to` the consumer never asked for — the
+    /// source, which the consumer did see, is a removal instead.
+    #[test]
+    fn rename_to_filtered_out_path_emits_removal_not_renamed() {
+        let mut pending: HashMap<PathBuf, Pending> = HashMap::new();
+        let filter = rs_filter();
+
+        handle_event(
+            rename_event(notify::event::RenameMode::From, &["a.rs"]),
+            &mut pending,
+            Some(&filter),
+        );
+        assert!(
+            matches!(
+                pending.get(Path::new("a.rs")).map(|p| &p.kind),
+                Some(PendingKind::RenameFrom)
+            ),
+            "pending: {pending:?}"
+        );
+
+        handle_event(
+            rename_event(notify::event::RenameMode::To, &["b.txt"]),
+            &mut pending,
+            Some(&filter),
+        );
+        // No fabricated Renamed pair; the from-path is recorded as removed.
+        assert_eq!(pending.len(), 1, "pending: {pending:?}");
+        assert!(
+            matches!(
+                pending.get(Path::new("a.rs")).map(|p| &p.kind),
+                Some(PendingKind::Removed)
+            ),
+            "expected Removed for a.rs, got {pending:?}"
+        );
+        assert!(
+            !pending
+                .values()
+                .any(|p| matches!(p.kind, PendingKind::Renamed { .. })),
+            "pending: {pending:?}"
+        );
+
+        // Flushing delivers the removal, never Renamed { to: b.txt }.
+        let (tx, rx) = bounded::<FsEvent>(16);
+        let overflow = AtomicBool::new(false);
+        flush_pending(&mut pending, &tx, Duration::from_millis(0), &overflow);
+        assert_eq!(rx.try_recv(), Ok(FsEvent::Removed(PathBuf::from("a.rs"))));
+        assert!(rx.try_recv().is_err(), "expected exactly one event");
+    }
+
+    /// An unrelated create inside the debounce window must not be glued to a
+    /// pending `RenameFrom`: the pair cannot be correlated (notify exposes no
+    /// kernel cookie), so the create stays `Created` and the rename degrades
+    /// to the documented `Removed` + `Created` fallback when the pending
+    /// entry flushes.
+    #[test]
+    fn create_does_not_fabricate_rename_pair() {
+        let mut pending: HashMap<PathBuf, Pending> = HashMap::new();
+
+        handle_event(
+            rename_event(notify::event::RenameMode::From, &["old.txt"]),
+            &mut pending,
+            None,
+        );
+        handle_event(create_event("fresh.txt"), &mut pending, None);
+
+        // The create is its own Created; the RenameFrom stays pending.
+        assert!(
+            matches!(
+                pending.get(Path::new("fresh.txt")).map(|p| &p.kind),
+                Some(PendingKind::Created)
+            ),
+            "pending: {pending:?}"
+        );
+        assert!(
+            matches!(
+                pending.get(Path::new("old.txt")).map(|p| &p.kind),
+                Some(PendingKind::RenameFrom)
+            ),
+            "RenameFrom must stay pending, got {pending:?}"
+        );
+        assert!(
+            !pending
+                .values()
+                .any(|p| matches!(p.kind, PendingKind::Renamed { .. })),
+            "no Renamed pair may be fabricated, got {pending:?}"
+        );
+
+        // Flushing degrades to Removed + Created — never a Renamed pair.
+        let (tx, rx) = bounded::<FsEvent>(16);
+        let overflow = AtomicBool::new(false);
+        flush_pending(&mut pending, &tx, Duration::from_millis(0), &overflow);
+        let mut got: Vec<FsEvent> = rx.try_iter().collect();
+        got.sort_by_key(|e| format!("{e:?}"));
+        assert_eq!(
+            got,
+            vec![
+                FsEvent::Created(PathBuf::from("fresh.txt")),
+                FsEvent::Removed(PathBuf::from("old.txt")),
+            ],
+            "got {got:?}"
         );
     }
 

@@ -329,6 +329,19 @@ impl View {
                         (0, c.text.len_chars())
                     };
 
+                    // Capture the exact removed span BEFORE removing. The
+                    // inverse must re-insert byte-for-byte what was cut, and
+                    // ropey's unicode line splitting separates on `\r`,
+                    // `\r\n`, U+000B, U+000C, U+0085, U+2028 and U+2029 as
+                    // well as `\n` — a join rebuilt with `'\n'` would rewrite
+                    // those separators and undo would restore a different
+                    // buffer. (`removed_joined` below keeps the `\n`-joined
+                    // register form, which vim-style registers expect.)
+                    let removed_span: String = if remove_start == remove_end {
+                        String::new()
+                    } else {
+                        c.text.slice(remove_start..remove_end).to_string()
+                    };
                     c.text.remove(remove_start..remove_end);
                     // ropey guarantees len_lines() >= 1 (empty rope = 1 line).
 
@@ -345,41 +358,36 @@ impl View {
                         String::new()
                     } else {
                         let mut s = removed_lines.join("\n");
-                        // Add trailing '\n' so the inverse InsertStr re-inserts
-                        // correctly (pushes surviving rows down).
+                        // Add trailing '\n' so the register form reads like
+                        // vim's `dd` register (lines joined with '\n').
                         s.push('\n');
                         s
                     };
-                    // The inverse text must be *exactly* the removed span, so
-                    // its shape follows the three `(remove_start, remove_end)`
+                    // The inverse text is the exact removed span, so its
+                    // shape follows the three `(remove_start, remove_end)`
                     // branches above:
                     //
                     // - `lo > 0 && hi + 1 == n` (last-row delete with rows
-                    //   above): the removed span includes the '\n' that ended
-                    //   row lo-1, so the inverse inserts a *leading*-separator
-                    //   form at the end of the new last row (row lo-1). The
-                    //   trailing-separator form targeted at (lo, 0) would
-                    //   reference a row that no longer exists.
+                    //   above): the removed span starts with the separator
+                    //   that ended row lo-1 (its trailing `\n` for a CRLF
+                    //   row — the `\r` stays in the surviving row), so the
+                    //   inverse is a leading-separator insert at the end of
+                    //   the new last row (row lo-1). The trailing-separator
+                    //   form targeted at (lo, 0) would reference a row that
+                    //   no longer exists.
                     // - `lo == 0 && hi + 1 == n` (whole buffer): the removed
-                    //   span is the entire rope, which the plain join already
-                    //   reproduces — a rope without a trailing newline yields
-                    //   ["a","b","c"] -> "a\nb\nc", one with a trailing newline
-                    //   yields ["a","b","c",""] -> "a\nb\nc\n". Appending a '\n'
-                    //   (the `removed_joined` register form) would restore an
-                    //   extra trailing row.
+                    //   span is the entire rope; re-inserting it at (0, 0)
+                    //   restores it exactly, separators included.
                     // - `hi + 1 < n` (rows survive below): the surviving rows
-                    //   must be pushed back down, so the trailing-separator
-                    //   form at (lo, 0) is exact.
+                    //   must be pushed back down, so inserting the span at
+                    //   (lo, 0) is exact.
                     let (inverse_at, inverse_text) = if lo > 0 && hi + 1 == n {
                         let last_row_chars = c.text.line(lo - 1).len_chars();
-                        (
-                            Position::new(lo - 1, last_row_chars),
-                            "\n".to_string() + &removed_lines.join("\n"),
-                        )
+                        (Position::new(lo - 1, last_row_chars), removed_span)
                     } else if hi + 1 == n {
-                        (Position::new(0, 0), removed_lines.join("\n"))
+                        (Position::new(0, 0), removed_span)
                     } else {
-                        (Position::new(lo, 0), removed_joined.clone())
+                        (Position::new(lo, 0), removed_span)
                     };
                     (
                         removed_joined,
@@ -567,17 +575,35 @@ impl View {
 
 // ── Internals — char surgery (free functions over &mut ropey::Rope) ──
 
-/// Get logical line `row` as a `String`, stripping trailing `\n`.
+/// Get logical line `row` as a `String`, stripping the FULL line separator.
+/// ropey's `line()` includes the separator, and under the default
+/// `unicode_lines` splitting that is `\n`, `\r\n`, `\r`, U+000B, U+000C,
+/// U+0085, U+2028 and U+2029 — stripping only a trailing `'\n'` left the
+/// others embedded in the content, and the linewise-delete inverse then
+/// carried them plus a pushed `'\n'`: a phantom extra line break.
 /// Identical to `rope_line_str` but takes a lock guard's rope by ref
 /// (avoids re-importing the pub(crate) helper from buffer.rs inside this module).
 fn rope_line_str_locked(rope: &ropey::Rope, row: usize) -> String {
-    let slice = rope.line(row);
-    let s = slice.to_string();
-    if s.ends_with('\n') {
-        s[..s.len() - 1].to_string()
-    } else {
-        s
+    let start = rope.line_to_byte(row);
+    rope.byte_slice(start..rope_line_content_end_locked(rope, row))
+        .to_string()
+}
+
+/// Absolute byte index where row `row`'s content ends — the first byte of the
+/// separator ropey split on, or `len_bytes()` for the final row. Mirrors
+/// `buffer::rope_line_content_end` exactly: the separators are 1–3 bytes wide
+/// and `line_to_byte(row + 1)` points just past one, so stepping back a single
+/// byte lands *inside* a multi-byte separator; flooring to the enclosing char
+/// start snaps to the separator's first byte, which is the end of this row's
+/// content. `\r\n` is unaffected — `\n` begins a char, the floor is the
+/// identity, and a CRLF row keeps its trailing `\r` (the same rule
+/// `rope_line_str` applies).
+fn rope_line_content_end_locked(rope: &ropey::Rope, row: usize) -> usize {
+    if row + 1 >= rope.len_lines() {
+        return rope.len_bytes();
     }
+    let step_back = rope.line_to_byte(row + 1).saturating_sub(1);
+    crate::buffer::floor_char_boundary(rope, step_back)
 }
 
 /// Remove `[start, end)` (charwise) from the rope and return the
@@ -899,6 +925,59 @@ mod tests {
         }
         assert_eq!(b.row_count(), 1);
         assert_eq!(rope_line_str(&b.rope(), 0), "");
+    }
+
+    /// Regression (non-`\n` line separators): ropey's unicode line splitting
+    /// treats `\r`, U+000B, U+000C, U+0085, U+2028 and U+2029 as line
+    /// separators too, and the linewise-delete inverse used to rebuild the
+    /// removed text from per-row strings joined with `'\n'` — fabricating a
+    /// phantom extra line break after a U+2028 separator (and rewriting `\r`
+    /// as `\n`). The inverse must be the exact removed span so undo restores
+    /// the buffer byte-for-byte.
+    #[test]
+    fn delete_linewise_inverse_is_exact_removed_span_for_non_nl_separators() {
+        for (initial, removed_span) in [
+            ("a\u{2028}b", "a\u{2028}"),
+            ("a\rb", "a\r"),
+            ("a\r\nb", "a\r\n"),
+        ] {
+            let mut b = View::from_str(initial);
+            let inv = b.apply_edit(Edit::DeleteRange {
+                start: Position::new(0, 0),
+                end: Position::new(0, 0),
+                kind: MotionKind::Line,
+            });
+            match &inv {
+                Edit::InsertStr { text, .. } => assert_eq!(
+                    text.as_str(),
+                    removed_span,
+                    "inverse must be the exact removed span for {initial:?}"
+                ),
+                other => panic!("expected InsertStr inverse, got {other:?}"),
+            }
+            b.apply_edit(inv);
+            assert_eq!(b.as_string(), initial, "undo must restore {initial:?}");
+        }
+    }
+
+    /// Same regression from the whole-buffer side: `dd`ing every row must
+    /// restore a U+2028-separated buffer exactly — the old inverse joined the
+    /// rows with `'\n'`, rewriting the separator.
+    #[test]
+    fn delete_linewise_whole_buffer_restores_unicode_separator() {
+        let initial = "a\u{2028}b\u{2028}c";
+        let mut b = View::from_str(initial);
+        let inv = b.apply_edit(Edit::DeleteRange {
+            start: Position::new(0, 0),
+            end: Position::new(2, 0),
+            kind: MotionKind::Line,
+        });
+        match &inv {
+            Edit::InsertStr { text, .. } => assert_eq!(text.as_str(), initial),
+            other => panic!("expected InsertStr inverse, got {other:?}"),
+        }
+        b.apply_edit(inv);
+        assert_eq!(b.as_string(), initial);
     }
 
     #[test]

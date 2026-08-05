@@ -1097,16 +1097,25 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 let y = text_area.y + sr as u16;
                 // Paint the char columns in the overlay range, clamped
                 // to the horizontal scroll window and text area width.
+                //
+                // `col_start`/`col_end` are CHAR columns; the screen is
+                // measured in cells, so they go through the same tab
+                // expansion and wide-char accounting `paint_row` applies
+                // (via `char_col_to_visual_col`), and `top_col` — a char
+                // index — is converted the same way, so the underline
+                // lands exactly on the painted text for this row.
+                let line = line_at(overlay.row);
+                let tab_width = self.viewport.effective_tab_width();
                 let col_start = overlay.col_start;
                 let col_end = overlay.col_end.max(col_start + 1);
-                for col in col_start..col_end {
-                    if col < top_col {
-                        continue;
-                    }
-                    let screen_col = col - top_col;
-                    if screen_col >= text_area.width as usize {
-                        break;
-                    }
+                let vis_top = hjkl_buffer::char_col_to_visual_col(&line, top_col, tab_width);
+                let vis_start = hjkl_buffer::char_col_to_visual_col(&line, col_start, tab_width);
+                let vis_end = hjkl_buffer::char_col_to_visual_col(&line, col_end, tab_width);
+                let screen_start = vis_start.saturating_sub(vis_top);
+                let screen_end = vis_end
+                    .saturating_sub(vis_top)
+                    .min(text_area.width as usize);
+                for screen_col in screen_start..screen_end {
                     let x = text_area.x + screen_col as u16;
                     if let Some(cell) = term_buf.cell_mut((x, y)) {
                         cell.set_style(cell.style().patch(overlay.style));
@@ -1794,7 +1803,16 @@ impl<R: StyleResolver> BufferView<'_, R> {
             // Compare in usize before casting: on a >64K-char line the u16
             // cast truncates, painting a phantom cursor cell mid-row (and
             // overflowing `area.x + …` in debug builds).
-            let dx = cursor_col - seg_start;
+            //
+            // `cursor_col` is a CHAR index and `seg_start` is too, but the
+            // cell is measured in screen cells — map both through the same
+            // tab expansion / wide-char accounting `paint_row` uses, so the
+            // placeholder lands one cell past the painted text even when the
+            // segment holds a wide char (a raw `cursor_col - seg_start`
+            // counts the wide char once and paints over its second cell).
+            let tab_width = self.viewport.effective_tab_width();
+            let dx = hjkl_buffer::char_col_to_visual_col(line, cursor_col, tab_width)
+                - hjkl_buffer::char_col_to_visual_col(line, seg_start, tab_width);
             if dx < area.width as usize
                 && let Some(cell) = term_buf.cell_mut((area.x + dx as u16, y))
             {
@@ -3992,6 +4010,42 @@ mod tests {
         );
     }
 
+    /// Regression: the past-EOL placeholder offset is a CHAR index but the
+    /// cell is measured in screen cells. On "你x" the cursor at char col 2
+    /// must paint the reversed placeholder at cell 3 (one past the 2-cell 你
+    /// and the 1-cell x) — the old `cursor_col - seg_start` math put it on
+    /// cell 2, covering the 'x'.
+    #[test]
+    fn wide_char_past_eol_cursor_placeholder_lands_one_cell_past_text() {
+        let mut b = View::from_str("你x");
+        b.set_cursor(hjkl_buffer::Position::new(0, 2));
+        let v = vp(10, 1);
+        let mut view = base_view(&b, &v);
+        view.cursor_style = Style::default().add_modifier(Modifier::REVERSED);
+        let term = run_render(view, 10, 1);
+
+        // The text paints 你 at cells 0-1 and x at cell 2.
+        assert_eq!(term.cell((0, 0)).unwrap().symbol(), "你");
+        assert_eq!(term.cell((1, 0)).unwrap().symbol(), " ");
+        assert_eq!(term.cell((2, 0)).unwrap().symbol(), "x");
+        // The placeholder sits one cell past the text, NOT on the 'x'.
+        assert!(
+            term.cell((3, 0))
+                .unwrap()
+                .modifier
+                .contains(Modifier::REVERSED),
+            "placeholder must land at cell 3 (one past the text)"
+        );
+        assert!(
+            !term
+                .cell((2, 0))
+                .unwrap()
+                .modifier
+                .contains(Modifier::REVERSED),
+            "placeholder must not cover the last character at cell 2"
+        );
+    }
+
     #[test]
     fn wrap_word_breaks_at_whitespace() {
         let b = View::from_str("alpha beta gamma");
@@ -4538,6 +4592,93 @@ mod tests {
         };
         // Must not panic.
         let _term = run_render(view, 10, 3);
+    }
+
+    /// Regression: diag overlay columns are CHAR columns, but the screen is
+    /// measured in cells — a tab before the range pushes the underlined
+    /// cells right. `"\tfoo bar baz"` at tab width 4 paints "bar" (chars
+    /// 5..8) at cells 8..11; the old code painted cells 5..8 ("oo b").
+    #[test]
+    fn diag_overlay_tab_before_range_underlines_visual_cells() {
+        let b = View::from_str("\tfoo bar baz");
+        let v = vp(20, 2);
+        let overlay = DiagOverlay {
+            row: 0,
+            col_start: 5,
+            col_end: 8,
+            style: Style::default().add_modifier(Modifier::UNDERLINED),
+        };
+        let mut view = base_view(&b, &v);
+        let overlays = [overlay];
+        view.diag_overlays = &overlays;
+        let term = run_render(view, 20, 2);
+
+        // Cells 0..8 (tab expansion + "foo ") must NOT be underlined.
+        for x in 0u16..8 {
+            let cell = term.cell((x, 0)).unwrap();
+            assert!(
+                !cell.modifier.contains(Modifier::UNDERLINED),
+                "col {x} must not be underlined (outside overlay)"
+            );
+        }
+        // Cells 8..11 (the visual span of "bar") must be underlined.
+        for x in 8u16..11 {
+            let cell = term.cell((x, 0)).unwrap();
+            assert!(
+                cell.modifier.contains(Modifier::UNDERLINED),
+                "col {x} must be underlined (inside overlay)"
+            );
+        }
+        // Cells 11.. must NOT be underlined.
+        for x in 11u16..20 {
+            let cell = term.cell((x, 0)).unwrap();
+            assert!(
+                !cell.modifier.contains(Modifier::UNDERLINED),
+                "col {x} must not be underlined (past overlay end)"
+            );
+        }
+    }
+
+    /// Same regression from the wide-char side: the overlay range spans the
+    /// double-width `你` (2 cells), so `col_end - col_start` is one CHAR but
+    /// the underline must cover two CELLS.
+    #[test]
+    fn diag_overlay_wide_char_underlines_both_cells() {
+        let b = View::from_str("你x");
+        let v = vp(10, 2);
+        let overlay = DiagOverlay {
+            row: 0,
+            col_start: 0,
+            col_end: 1,
+            style: Style::default().add_modifier(Modifier::UNDERLINED),
+        };
+        let mut view = base_view(&b, &v);
+        let overlays = [overlay];
+        view.diag_overlays = &overlays;
+        let term = run_render(view, 10, 2);
+
+        assert!(
+            term.cell((0, 0))
+                .unwrap()
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "leading cell of 你 must be underlined"
+        );
+        assert!(
+            term.cell((1, 0))
+                .unwrap()
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "trailing cell of 你 must be underlined"
+        );
+        assert!(
+            !term
+                .cell((2, 0))
+                .unwrap()
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "x must not be underlined"
+        );
     }
 
     #[test]
