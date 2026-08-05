@@ -65,6 +65,60 @@ patch bumps.
   coarse whole-buffer Replace on the change log plus the content-reset flag, so
   syntax reparse, LSP and diff consumers observe the substitute. The substitute
   path swapped content via `replace_all`, which emitted neither.
+- **The `:s///c` confirm prompt can no longer panic the editor.** The match
+  highlight and the per-match cursor jump read the live buffer with offsets
+  collected when the prompt started; an external autoreload or a mid-confirm
+  buffer switch could make a row or byte offset stale and panic in
+  `rope_line_str` / a byte slice (the render path fired with no keypress). Both
+  sites now clamp the row and fall back to the line's char count, mirroring the
+  guarded initial jump.
+- **Case operators (`gU`/`gu`/`g~`/`g?`/`gUU` and visual `U`/`u`/`~`) no longer
+  touch the clipboard or registers.** The transform routed through the cut
+  funnel, pushing the pre-transform text to the OS clipboard and the
+  small-delete/numbered/named registers; vim's case operators record nothing.
+- **Explorer file↔dir type changes at an unchanged path now stick.** The
+  reconcile emitted Trash + Create for the same path in one batch and the
+  create's by-name trash restore moved the old entry back, silently undoing the
+  change; type-change creates are now fresh, with the old entry left in the
+  trash.
+- **vim pattern escapes `\a`/`\A`/`\Z`/`\e` translate correctly.** They passed
+  through to rust-regex, where `\A` is a start-of-text anchor (`:s/\A/x/`
+  inserted at buffer position 0), `\a` is Bell, and `\Z`/`\e` were rejected.
+  They now mean vim's alphabetic, non-alphabetic, case-switch and ESC. An
+  escaped `]` inside a character class (`[a\]b]`) is also a literal member again
+  instead of a "bad pattern" error.
+- **`:0r file` reads the file before line 1** like vim, instead of clamping the
+  literal 0 to line 1 and inserting after it.
+- **Linewise deletes on buffers using ropey's non-`\n` line separators (bare
+  `\r`, U+000B, U+000C, U+0085, U+2028, U+2029) undo exactly.** The inverse edit
+  rebuilt the removed text joined with `\n`, fabricating a phantom line break on
+  undo; it is now the exact removed span.
+- **LSP diagnostic underlines and the past-end-of-line cursor cell land on the
+  right screen cells** on lines with tabs or wide characters; both used char
+  columns as cell offsets.
+- **Grammar installs keep capture-form `(#set! @cap ...)` directives**, which
+  the runtime pre-extracts into per-capture metadata (e.g. `metadata["url"]` on
+  link spans); the installer was stripping them, dead-featuring pre-extraction
+  for every installed grammar. The compiled-artifacts cache is also keyed by the
+  grammar `.so` identity, so a grammar rev bump with unchanged queries no longer
+  reuses a `Query` compiled against the old symbol table.
+- **`hjkl-fs-watch`: rename merging no longer bypasses the path filter or
+  fabricates pairs.** A rename whose destination fails the filter degrades to a
+  removal, and an unrelated `Create` inside the debounce window is no longer
+  glued to a pending `RenameFrom`.
+- **`anvil` install dedup no longer reports `Failed` for a succeeded job** when
+  a caller attaches its handle between the worker's terminal broadcast and its
+  in-flight removal; the two now happen under one lock.
+- **X11 clipboard reads of oversized non-INCR properties no longer truncate.**
+  `read_property` returned the first chunk when a property exceeded the server's
+  max request length; it now loops on `bytes_after` until the whole property is
+  read.
+- **Wayland: a paste racing a clipboard `set()` no longer misattributes the
+  fd.** A `source.send` for a source destroyed by the set kept its fd in the
+  queue, so the next paste wrote the payload to a stale pipe and every later
+  paste shifted by one generation; the fd is now popped and closed.
+- **macOS: a custom clipboard mime type containing a NUL returns an error**
+  instead of panicking the calling thread.
 
 ### Changed
 

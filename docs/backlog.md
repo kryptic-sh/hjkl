@@ -750,19 +750,22 @@ shipped 2026-08-04 — see the Record.)
 
 ### 1.11 Open from the 2026-08-05 code review (audit depth)
 
-Full report with repros in §8. Top of the pile:
+The full report is in §8. All 15 code findings with a feasible fix shipped the
+same day (commits `0518ca77`..`77c2be3a` — see the Record, §7). Still open, each
+with its §8 finding number:
 
-- **Confirm-substitute stale match offsets panic the editor** (§8 #1) — two
-  unguarded read sites, one fires on the next draw with no keypress after an
-  external rewrite; fix pattern already exists at `ex_dispatch.rs`'s guarded
-  first jump.
-- **Case operators clobber the clipboard and registers** (§8 #2) —
-  `apply_case_op_to_selection` routes through the delete funnel and restores
-  only the unnamed register; OS clipboard, `"-`, the `"1`–`"9` ring and any
-  pending named register are overwritten.
-- **X11 clipboard read truncates oversized non-INCR properties** (§8 #3) —
-  `read_property` never checks `bytes_after`; silent truncation reported as
-  success.
+- **`\d`/`\s`/`\w` are Unicode-wide in rust-regex, ASCII-only in vim** (§8 #11).
+  Translating them needs in-class handling (`\D`/`\S`/`\W` negations are only
+  correct as a class's first element) and vim's `\s` is strictly `[ \t]` —
+  deferred as a semantics decision, not a corruption.
+- **vim `\ze`/`\zs` (start/end of match) mis-translate** (§8 #10 half) — needs
+  match-boundary rewriting rust-regex has no anchor for; currently compiles to
+  nonsense or nothing rather than corrupting.
+- **Windows `EmptyClipboard` runs before allocation, wiping the prior clipboard
+  on failure** (§8 #19) — needs a Windows host to verify the reorder; the macOS
+  NUL-panic half of that finding shipped (`4323e39d`).
+
+(The macOS NUL fix and the X11/Wayland clipboard fixes are in `4323e39d`.)
 
 ## 2. Blocked on platform access
 
@@ -1124,6 +1127,21 @@ conventions are recorded under Standing constraints.
   serialize straight from the shared `Arc` (`*_borrowed` params + a Serialize
   envelope), attach boundary carries the Arc; wire bytes unchanged, one
   full-document copy eliminated (~1.22 MB).
+
+### 2026-08-05 code review fixes (the §8 findings)
+
+All 15 code findings with a feasible fix shipped the same day, in six commits
+(`0518ca77`, `af6747d3`, `2d8cf784`, `4323e39d`, `e62b7bd9`, `77c2be3a`):
+confirm-substitute stale-offset guards (#1), case-op register/clipboard
+preservation (#2), X11 chunked `read_property` (#3), bonsai raw-query install +
+`.so`-keyed artifacts cache (#4/#18), Wayland stale-fd drain (#5), explorer
+type-change fresh create (#6), exact linewise-delete inverses (#7), `\a`/`\A`/
+`\Z`/`\e` + escaped-`]` translation (#8/#9/#10-half), `:0r` (#12), diag/cursor
+cell mapping (#13/#14), fs-watch filter + rename-fabrication (#15/#16), anvil
+finish-race (#17), macOS NUL mime (#20). Still open, tracked in §1.11:
+`\d`/`\s`/ `\w` ASCII semantics (#11), `\ze`/`\zs` (#10 half), Windows
+`EmptyClipboard` ordering (#19). What the review disproved is in §8's Cleared
+section.
 
 ## 8. 2026-08-05 code review (audit depth)
 
