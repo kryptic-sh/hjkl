@@ -253,6 +253,11 @@ fn translate_pattern(pat: &str, last_sub: &str) -> (String, Option<bool>) {
     let mut override_mode: Option<bool> = None;
     let mut chars = pat.chars().peekable();
     let mut in_bracket = false;
+    // Parity of the run of backslashes immediately preceding the current
+    // in-bracket char: `\]` is an ESCAPED literal `]` member (vim
+    // `[a\]b]` = {a, ], b}), so a `]` closes the class only when the run is
+    // even; `\\]` closes. Reset on any non-backslash.
+    let mut bracket_backslash_parity = false;
 
     while let Some(ch) = chars.next() {
         if in_bracket {
@@ -264,12 +269,20 @@ fn translate_pattern(pat: &str, last_sub: &str) -> (String, Option<bool>) {
             if ch == '\\' && matches!(chars.peek(), Some('a') | Some('A')) {
                 let c = chars.next().unwrap();
                 out.push_str(if c == 'a' { "A-Za-z" } else { "^A-Za-z" });
+                // The consumed pair ends in a non-backslash.
+                bracket_backslash_parity = false;
                 continue;
             }
-            out.push(ch);
-            if ch == ']' {
+            if ch == '\\' {
+                bracket_backslash_parity = !bracket_backslash_parity;
+                out.push(ch);
+                continue;
+            }
+            if ch == ']' && !bracket_backslash_parity {
                 in_bracket = false;
             }
+            bracket_backslash_parity = false;
+            out.push(ch);
             continue;
         }
 
@@ -1212,6 +1225,23 @@ mod tests {
         let re = vim_re(r"[\a]");
         assert!(re.is_match("x"));
         assert!(!re.is_match("1"));
+    }
+
+    /// An ESCAPED `]` inside a class is a literal member — vim `[a\]b]` =
+    /// {a, ], b} — and must not close the class early. The pre-fix translator
+    /// closed on the escaped `]`, emitting `[a\]b\]` which rust-regex rejects
+    /// as an unclosed class, so `:s/[a\]b]/x/` errored where vim substitutes.
+    #[test]
+    fn escaped_close_bracket_inside_class_is_literal_member() {
+        let re = vim_re(r"[a\]b]");
+        assert!(re.is_match("a"), "class must contain a");
+        assert!(re.is_match("]"), "escaped ] must be a literal member");
+        assert!(re.is_match("b"), "class must contain b");
+        assert!(!re.is_match("x"), "class must be exactly {{a, ], b}}");
+        // The canonical `[a\]]` form, and `\\]` (even backslash run) closing.
+        assert!(vim_re(r"[a\]]").is_match("]"));
+        assert!(vim_re(r"[\\]").is_match("\\"));
+        assert!(!vim_re(r"[\\]").is_match("]"));
     }
 
     /// vim `\Z` — ignore case for the rest of the pattern, identical to `\c`
