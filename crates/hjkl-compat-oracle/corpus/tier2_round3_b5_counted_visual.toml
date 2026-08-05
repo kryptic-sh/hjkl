@@ -52,7 +52,7 @@ expected_mode = "normal"
 
 # Not `10Vd` here: deleting through the buffer's TRUE last row hits a
 # pre-existing, unrelated register-capture bug in the linewise Delete path
-# (yanks an extra trailing "\n" — see DIVERGE.md B5 note) that isn't part of
+# (yanks an extra trailing "\n") that isn't part of
 # this fix's scope. Checking the clamped cursor/mode alone (no delete) still
 # fully pins the count-clamping behavior this item is about.
 [[cases]]

@@ -665,8 +665,8 @@ fn block_insert_skips_rows_shorter_than_the_block_column() {
 /// `<C-b>`) must be a no-op, NOT insert the literal letter (the pre-fix
 /// bug — `<C-a>` used to insert "a"). This intentionally diverges from
 /// real nvim, which inserts the raw control byte for most unbound ctrl
-/// keys (verified: `<C-b>` in nvim inserts a literal ^B) — logged in
-/// DIVERGE.md since reproducing an unprintable control byte in the buffer
+/// keys (verified: `<C-b>` in nvim inserts a literal ^B) — chosen because
+/// reproducing an unprintable control byte in the buffer
 /// has no user-facing benefit and no-op is the safer choice.
 #[test]
 fn insert_unhandled_ctrl_key_is_noop_not_literal_letter() {

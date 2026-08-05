@@ -229,7 +229,7 @@ fn emit_literal(out: &mut String, ch: char) {
 /// supported by the rust `regex` crate (no backtracking engine) — they pass
 /// through unchanged, which either fails to compile or fails to match,
 /// preserving the pre-fix "silent no-match" behavior rather than corrupting
-/// text. See `DIVERGE.md`.
+/// text.
 ///
 /// A simple bracket-depth flag skips translation inside `[...]` character
 /// classes, mirroring how vim (and rust-regex) treat class contents mostly
@@ -265,7 +265,7 @@ fn translate_pattern(pat: &str, last_sub: &str) -> (String, Option<bool>) {
             // and reject `\A`; vim reads them as the alphabetic class, so
             // emit the range directly. `\A` → `^A-Za-z` is only correct as
             // the class's FIRST element (vim treats it as a literal member
-            // otherwise) — best approximation, see `DIVERGE.md`.
+            // otherwise) — best approximation.
             if ch == '\\' && matches!(chars.peek(), Some('a') | Some('A')) {
                 let c = chars.next().unwrap();
                 out.push_str(if c == 'a' { "A-Za-z" } else { "^A-Za-z" });
@@ -922,7 +922,7 @@ mod tests {
         // \1-\9 in the PATTERN aren't supported by rust-regex (no
         // backtracking) — kept as a literal backslash-digit escape so the
         // net effect (no match / compile error) matches pre-fix behavior
-        // rather than silently corrupting text. See DIVERGE.md.
+        // rather than silently corrupting text.
         assert_eq!(vim_to_rust_regex(r"\(a\)\1"), r"(a)\1");
     }
 
