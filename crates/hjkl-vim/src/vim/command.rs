@@ -76,6 +76,23 @@ pub fn cut_vim_range<H: hjkl_engine::types::Host>(
     end: (usize, usize),
     kind: RangeKind,
 ) -> String {
+    cut_vim_range_inner(ed, start, end, kind, true)
+}
+/// Shared implementation of [`cut_vim_range`]. With `record = false` the
+/// delete edit still happens and the deleted text is still returned, but no
+/// register and no clipboard is touched — vim's case operators (`gU`/`gu`/
+/// `g~`/`g?` and the visual `U`/`u`/`~`) transform text without recording
+/// anything (`:h gU`). The delete itself is load-bearing: the case-op
+/// re-insertion in
+/// [`apply_case_op_to_selection`](crate::vim::text_object_ops::apply_case_op_to_selection)
+/// consumes the delete's inverse edit.
+pub(super) fn cut_vim_range_inner<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    start: (usize, usize),
+    end: (usize, usize),
+    kind: RangeKind,
+    record: bool,
+) -> String {
     use hjkl_buffer::{Edit, MotionKind as BufKind, Position};
     let (top, bot) = order(start, end);
     ed.sync_buffer_content_from_textarea();
@@ -141,9 +158,11 @@ pub fn cut_vim_range<H: hjkl_engine::types::Host>(
         // Non-linewise delete yielded no text — nothing to record.
         return text;
     }
-    ed.record_yank_to_host(text.clone());
-    let target = vim_mut(ed).pending_register.take();
-    ed.record_delete(text.clone(), matches!(kind, RangeKind::Linewise), target);
+    if record {
+        ed.record_yank_to_host(text.clone());
+        let target = vim_mut(ed).pending_register.take();
+        ed.record_delete(text.clone(), matches!(kind, RangeKind::Linewise), target);
+    }
     text
 }
 /// `D` / `C` — delete from cursor to end of line through the edit

@@ -93,6 +93,29 @@ fn read_handler<H: Host>(
     args: &str,
     range: Option<LineRange>,
 ) -> Option<ExEffect> {
+    read_handler_impl(editor, args, range, false)
+}
+
+/// `:0r <path>` / `:0read <path>` / `:0re <path>` — like `:r`, but inserts
+/// the file content BEFORE the first line (vim's `:0r` bypasses the range
+/// parser's clamp of a literal `0` address to line 1). Cursor lands on the
+/// first inserted row (row 0).
+pub fn read_handler_at_zero<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
+    args: &str,
+) -> Option<ExEffect> {
+    read_handler_impl(editor, args, None, true)
+}
+
+/// Shared body of `:r` / `:0r`. With `at_zero` the content is inserted as
+/// `{trimmed}\n` at `(0, 0)` (before line 1); otherwise it is inserted as
+/// `\n{trimmed}` after the range end / cursor row.
+fn read_handler_impl<H: Host>(
+    editor: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
+    args: &str,
+    range: Option<LineRange>,
+    at_zero: bool,
+) -> Option<ExEffect> {
     use hjkl_buffer::{Edit, Position};
 
     let path = args.trim();
@@ -172,21 +195,31 @@ fn read_handler<H: Host>(
     // specified); trailing newline in file is dropped (vim does the same).
     let trimmed = content.strip_suffix('\n').unwrap_or(&content);
     editor.push_undo();
-    // Insert below range end if range given, else below cursor.
-    let row = match range {
-        Some(r) => r.end_one_based().saturating_sub(1),
-        None => editor.cursor().0,
-    };
-    let line_chars = hjkl_buffer::rope_line_str(&editor.buffer().rope(), row)
-        .chars()
-        .count();
-    let insert_text = format!("\n{trimmed}");
-    editor.mutate_edit(Edit::InsertStr {
-        at: Position::new(row, line_chars),
-        text: insert_text,
-    });
-    // Cursor lands on the first inserted row at col 0.
-    editor.jump_cursor(row + 1, 0);
+    if at_zero {
+        // `:0r f` — the file content followed by a newline, BEFORE line 1;
+        // cursor lands on the first inserted row (row 0).
+        editor.mutate_edit(Edit::InsertStr {
+            at: Position::new(0, 0),
+            text: format!("{trimmed}\n"),
+        });
+        editor.jump_cursor(0, 0);
+    } else {
+        // Insert below range end if range given, else below cursor.
+        let row = match range {
+            Some(r) => r.end_one_based().saturating_sub(1),
+            None => editor.cursor().0,
+        };
+        let line_chars = hjkl_buffer::rope_line_str(&editor.buffer().rope(), row)
+            .chars()
+            .count();
+        let insert_text = format!("\n{trimmed}");
+        editor.mutate_edit(Edit::InsertStr {
+            at: Position::new(row, line_chars),
+            text: insert_text,
+        });
+        // Cursor lands on the first inserted row at col 0.
+        editor.jump_cursor(row + 1, 0);
+    }
     editor.mark_content_dirty();
     Some(ExEffect::Ok)
 }
@@ -4692,6 +4725,28 @@ mod tests {
             }
             other => panic!("expected Error, got {other:?}"),
         }
+    }
+
+    /// `:0r file` reads the file BEFORE the first line — the range parser's
+    /// clamp of a literal `0` to line 1 would otherwise make this a plain
+    /// `:1r` (insert after line 1, so "a\nb" → "a\nX\nb" instead of
+    /// "X\na\nb"). Cursor lands on the first inserted row (row 0).
+    #[test]
+    fn read_handler_at_zero_inserts_before_first_line() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        writeln!(tmp, "X").unwrap();
+        let path = tmp.path().to_str().unwrap().to_string();
+
+        let mut ed = make_editor_with_lines(&["a", "b"]);
+        let result = read_handler_at_zero(&mut ed, &path);
+        assert_eq!(result, Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["X", "a", "b"]);
+        assert_eq!(
+            ed.cursor().0,
+            0,
+            "cursor must land on the first inserted row"
+        );
     }
 
     // ── set_handler (smoke — deep coverage is in setopt.rs) ──────────────────

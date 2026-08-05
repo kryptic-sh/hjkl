@@ -6,7 +6,7 @@ use hjkl_vim_types::{Mode, Operator, RangeKind};
 
 use hjkl_engine::rope_util::rope_to_lines_vec;
 
-use super::command::read_vim_range;
+use super::command::{cut_vim_range_inner, read_vim_range};
 use super::*;
 use crate::vim_state::vim_mut;
 use hjkl_engine::Editor;
@@ -294,8 +294,11 @@ pub fn apply_case_op_to_selection<H: hjkl_engine::types::Host>(
     // "foo\nbar\n" → 3 rows, "foo\nbar" → 2 rows).  Needed after the cut
     // to decide whether to strip read_vim_range's synthetic trailing '\n'.
     let n_rows_before = buf_row_count(ed.buffer());
-    // Perform the delete (yank, clipboard, registers are handled inside).
-    cut_vim_range(ed, top, bot, kind);
+    // Perform the delete WITHOUT recording: vim's case operators touch no
+    // registers and no clipboard, so skip the yank/delete registration that
+    // `cut_vim_range` normally performs. The inverse edit is what the
+    // re-insertion below consumes.
+    cut_vim_range_inner(ed, top, bot, kind, false);
     let transformed = match op {
         Operator::Uppercase => selection.to_uppercase(),
         Operator::Lowercase => selection.to_lowercase(),
@@ -754,7 +757,7 @@ pub fn clamp_cursor_to_normal_mode<H: hjkl_engine::types::Host>(
 
 #[cfg(test)]
 mod tests {
-    use super::{outdent_rows, toggle_case_str};
+    use super::{apply_case_op_to_selection, outdent_rows, toggle_case_str};
     use hjkl_buffer::{View, rope_line_str};
     use hjkl_engine::{DefaultHost, Editor, Options};
 
@@ -776,5 +779,93 @@ mod tests {
         outdent_rows(&mut ed, 0, 0, 1);
 
         assert_eq!(rope_line_str(&ed.buffer().rope(), 0), "\tfoo");
+    }
+
+    // ── case operators must not touch registers / clipboard ──────────────────
+
+    /// `gUw` uppercases the word but leaves the OS clipboard, `"-` and the
+    /// unnamed register untouched — vim's case operators record nothing.
+    /// Regression: `cut_vim_range` used to `record_yank_to_host` +
+    /// `record_delete` the pre-transform text, clobbering all three.
+    #[test]
+    fn case_op_preserves_clipboard_small_delete_and_unnamed() {
+        use hjkl_engine::{Host as _, Slot};
+        use hjkl_vim_types::{Operator, RangeKind};
+
+        let mut ed = crate::vim::vim_editor(
+            View::from_str("ab1 cd"),
+            DefaultHost::new(),
+            Options::default(),
+        );
+        ed.host_mut().write_clipboard("CLIP-SENTINEL".into());
+        ed.with_registers_mut(|regs| {
+            regs.small_delete = Slot {
+                text: "SMALL-SENTINEL".into(),
+                ..Default::default()
+            };
+            regs.unnamed = Slot {
+                text: "PRE-YANK".into(),
+                ..Default::default()
+            };
+        });
+
+        // `gUw` over "ab" at the cursor — the direct call.
+        apply_case_op_to_selection(
+            &mut ed,
+            Operator::Uppercase,
+            (0, 0),
+            (0, 1),
+            RangeKind::Inclusive,
+        );
+
+        assert_eq!(rope_line_str(&ed.buffer().rope(), 0), "AB1 cd");
+        assert_eq!(ed.host_mut().read_clipboard(), Some("CLIP-SENTINEL".into()));
+        ed.with_registers(|regs| {
+            assert_eq!(regs.small_delete.text, "SMALL-SENTINEL");
+            assert_eq!(regs.unnamed.text, "PRE-YANK");
+        });
+    }
+
+    /// `gUU` on the first line must not shift the `"1`–`"9` delete ring
+    /// (a linewise cut would otherwise push the pre-transform text into
+    /// `"1`). Regression for the same `cut_vim_range` recording bug.
+    #[test]
+    fn linewise_case_op_does_not_shift_delete_ring() {
+        use hjkl_engine::{Host as _, Slot};
+        use hjkl_vim_types::{Operator, RangeKind};
+
+        let mut ed = crate::vim::vim_editor(
+            View::from_str("abc\ndef"),
+            DefaultHost::new(),
+            Options::default(),
+        );
+        ed.host_mut().write_clipboard("CLIP-SENTINEL".into());
+        ed.with_registers_mut(|regs| {
+            regs.delete_ring[0] = Slot {
+                text: "RING-SENTINEL".into(),
+                ..Default::default()
+            };
+            regs.unnamed = Slot {
+                text: "PRE-YANK".into(),
+                ..Default::default()
+            };
+        });
+
+        // `gUU` on line 1 — the direct call.
+        apply_case_op_to_selection(
+            &mut ed,
+            Operator::Uppercase,
+            (0, 0),
+            (0, 0),
+            RangeKind::Linewise,
+        );
+
+        assert_eq!(rope_line_str(&ed.buffer().rope(), 0), "ABC");
+        assert_eq!(rope_line_str(&ed.buffer().rope(), 1), "def");
+        assert_eq!(ed.host_mut().read_clipboard(), Some("CLIP-SENTINEL".into()));
+        ed.with_registers(|regs| {
+            assert_eq!(regs.delete_ring[0].text, "RING-SENTINEL");
+            assert_eq!(regs.unnamed.text, "PRE-YANK");
+        });
     }
 }

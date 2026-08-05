@@ -256,6 +256,16 @@ fn translate_pattern(pat: &str, last_sub: &str) -> (String, Option<bool>) {
 
     while let Some(ch) = chars.next() {
         if in_bracket {
+            // `\a` / `\A` inside a class: rust-regex would read `\a` as Bell
+            // and reject `\A`; vim reads them as the alphabetic class, so
+            // emit the range directly. `\A` → `^A-Za-z` is only correct as
+            // the class's FIRST element (vim treats it as a literal member
+            // otherwise) — best approximation, see `DIVERGE.md`.
+            if ch == '\\' && matches!(chars.peek(), Some('a') | Some('A')) {
+                let c = chars.next().unwrap();
+                out.push_str(if c == 'a' { "A-Za-z" } else { "^A-Za-z" });
+                continue;
+            }
             out.push(ch);
             if ch == ']' {
                 in_bracket = false;
@@ -267,6 +277,15 @@ fn translate_pattern(pat: &str, last_sub: &str) -> (String, Option<bool>) {
             match chars.next() {
                 Some('c') => override_mode = Some(true),  // \c → insensitive
                 Some('C') => override_mode = Some(false), // \C → sensitive
+                // vim `\Z` — ignore case for the rest of the pattern,
+                // identical to `\c` (`:h /\Z`).
+                Some('Z') => override_mode = Some(true),
+                // vim `\a` = `[A-Za-z]` (rust-regex `\a` is Bell) and
+                // `\A` = `[^A-Za-z]` (rust-regex `\A` is a start-of-text
+                // anchor). `\e` = ESC (rust-regex has no `\e`).
+                Some('a') => out.push_str("[A-Za-z]"),
+                Some('A') => out.push_str("[^A-Za-z]"),
+                Some('e') => out.push('\u{001b}'),
                 Some('v') => level = MagicLevel::VeryMagic,
                 Some('V') => level = MagicLevel::VeryNoMagic,
                 Some('m') => level = MagicLevel::Magic,
@@ -290,7 +309,7 @@ fn translate_pattern(pat: &str, last_sub: &str) -> (String, Option<bool>) {
                     }
                 }
                 Some(other) => {
-                    // \d \s \w \b \B \a \A \n \t \r \& \~ \\ etc. — already
+                    // \d \s \w \b \B \n \t \r \& \~ \\ etc. — already
                     // valid rust-regex syntax (or handled by the caller) and
                     // identical in vim's default magic. Pass through.
                     out.push('\\');
@@ -1150,5 +1169,107 @@ mod tests {
             hits.contains(&"foo"),
             "smartcase lower-word * must match foo: {hits:?}"
         );
+    }
+
+    // ── \a / \A / \Z / \e escape translation ─────────────────────────────────
+
+    /// vim `\a` = alphabetic. rust-regex would read `\a` as Bell (U+0007),
+    /// so `:s/\a/x/g` used to silently no-op; it must now match letters.
+    #[test]
+    fn backslash_a_is_alphabetic() {
+        let re = vim_re(r"\a");
+        assert!(re.is_match("a"));
+        assert!(re.is_match("B"));
+        assert!(!re.is_match("1"));
+        let hits: Vec<_> = Regex::new(&vim_to_rust_regex(r"\a"))
+            .unwrap()
+            .find_iter("ab1")
+            .map(|m| m.as_str())
+            .collect();
+        assert_eq!(hits, vec!["a", "b"]);
+    }
+
+    /// vim `\A` = non-alphabetic. rust-regex `\A` is a start-of-text anchor,
+    /// so `:s/\A/x/` used to insert at position 0 ("ab1" → "xab1"); it must
+    /// now match the `1` and give vim's "abx".
+    #[test]
+    fn backslash_upper_a_is_non_alphabetic() {
+        let re = vim_re(r"\A");
+        assert!(re.is_match("1"));
+        assert!(!re.is_match("a"));
+        let hits: Vec<_> = Regex::new(&vim_to_rust_regex(r"\A"))
+            .unwrap()
+            .find_iter("ab1")
+            .map(|m| m.as_str())
+            .collect();
+        assert_eq!(hits, vec!["1"]);
+    }
+
+    /// `[\a]` inside a class is the alphabetic range, not a Bell escape.
+    #[test]
+    fn backslash_a_inside_class_is_alpha_range() {
+        assert_eq!(vim_to_rust_regex(r"[\a]"), "[A-Za-z]");
+        let re = vim_re(r"[\a]");
+        assert!(re.is_match("x"));
+        assert!(!re.is_match("1"));
+    }
+
+    /// vim `\Z` — ignore case for the rest of the pattern, identical to `\c`
+    /// (rust-regex rejects `\Z` outright).
+    #[test]
+    fn backslash_z_makes_pattern_case_insensitive() {
+        let (stripped, mode) = resolve_case_mode(r"\Zfoo", CaseMode::Sensitive, "");
+        assert_eq!(stripped, "foo");
+        assert_eq!(mode, CaseMode::Insensitive);
+        // End-to-end: a Sensitive base must be overridden by `\Z`.
+        let re = build_regex_from(r"\Zfoo", false, false);
+        assert!(re.is_match("FOO"), "\\Z must make pattern insensitive");
+        assert!(re.is_match("foo"));
+    }
+
+    /// vim `\e` = ESC (U+001B); rust-regex has no `\e` escape and rejects it.
+    #[test]
+    fn backslash_e_is_esc() {
+        assert_eq!(vim_to_rust_regex(r"\e"), "\u{1b}");
+        let re = vim_re(r"\e");
+        assert!(re.is_match("\u{1b}"));
+        assert!(!re.is_match("e"));
+    }
+
+    // ── substitution-level regression for \a / \A (bug 2) ────────────────────
+
+    fn editor_for_substitute(
+        content: &str,
+    ) -> crate::Editor<hjkl_buffer::View, crate::types::DefaultHost> {
+        let mut e = crate::Editor::new(
+            hjkl_buffer::View::new(),
+            crate::types::DefaultHost::new(),
+            crate::types::Options::default(),
+        );
+        e.set_content(content);
+        e
+    }
+
+    /// `:s/\a/x/g` on "ab1" must replace both letters — the pre-fix rust-regex
+    /// reading of `\a` (Bell) matched nothing and the command silently no-oped.
+    #[test]
+    fn substitute_backslash_a_replaces_letters() {
+        let mut e = editor_for_substitute("ab1");
+        let cmd = crate::substitute::parse_substitute(r"/\a/x/g").unwrap();
+        let out = crate::substitute::apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(out.replacements, 2);
+        assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "xx1");
+    }
+
+    /// `:s/\A/x/` (first match per line) on "ab1" gives "abx" — the pre-fix
+    /// rust-regex `\A` (start-of-text anchor) replaced at position 0 instead,
+    /// producing "xab1".
+    #[test]
+    fn substitute_backslash_upper_a_replaces_first_non_alpha() {
+        let mut e = editor_for_substitute("ab1");
+        let cmd = crate::substitute::parse_substitute(r"/\A/x/").unwrap();
+        let out = crate::substitute::apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(out.replacements, 1);
+        assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "abx");
     }
 }

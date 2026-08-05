@@ -78,13 +78,15 @@ pub fn try_dispatch<H: hjkl_engine::Host>(
         return Some(handle_search_address(editor, input));
     }
 
-    // `:0put[!]` / `:0pu[!]` — special-cased BEFORE the generic parse_range
-    // below, which clamps a literal `0` range address to line 1 via
-    // resolve_address. Every other command legitimately has no "line 0";
-    // insertion-point commands like `:put` do (`:h :0`) — `:0put` pastes
-    // before the first line. Only fires for a BARE `0` (not `01`, not
-    // `0,5`) immediately followed by `put`/`pu` (+ optional `!`), so it
-    // can't shadow any other command's range parsing.
+    // `:0put[!]` / `:0pu[!]` and `:0r` / `:0read` / `:0re` — special-cased
+    // BEFORE the generic parse_range below, which clamps a literal `0` range
+    // address to line 1 via resolve_address. Every other command legitimately
+    // has no "line 0"; these insertion-point commands do (`:h :0`) — `:0put`
+    // pastes before the first line and `:0r f` reads the file BEFORE line 1
+    // (not after it, which is where the clamped (1,1) range would land).
+    // Only fires for a BARE `0` (not `01`, not `0,5`) immediately followed by
+    // the command name (+ optional `!` for put), so it can't shadow any other
+    // command's range parsing.
     if let Some(rest) = input.strip_prefix('0')
         && !rest.starts_with(|c: char| c.is_ascii_digit() || c == ',')
     {
@@ -96,6 +98,9 @@ pub fn try_dispatch<H: hjkl_engine::Host>(
                 above: name.ends_with('!'),
                 target_line: Some(0),
             });
+        }
+        if matches!(name, "read" | "r" | "re") {
+            return builtins::read_handler_at_zero(editor, args);
         }
     }
 
@@ -1930,6 +1935,21 @@ mod tests {
             matches!(result, Some(ExEffect::Error(_))),
             "got: {result:?}"
         );
+    }
+
+    /// `:0r file` — the bare-`0` special case must route to the at-zero read
+    /// handler: file content lands BEFORE line 1 and the cursor follows.
+    #[test]
+    fn dispatch_zero_r_reads_before_first_line() {
+        let reg = default_registry::<DefaultHost>();
+        let mut editor = make_editor_with_lines(&["a", "b"]);
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), "X\n").unwrap();
+        let path = tmp.path().to_string_lossy().to_string();
+        let result = try_dispatch(&reg, &mut editor, &format!("0r {path}"));
+        assert_eq!(result, Some(ExEffect::Ok), "got: {result:?}");
+        assert_eq!(buf_lines(&editor), vec!["X", "a", "b"]);
+        assert_eq!(editor.cursor().0, 0);
     }
 
     // ---- Phase 8a: :!cmd shell filter ----------------------------------------
