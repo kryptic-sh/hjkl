@@ -1879,9 +1879,11 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         } else {
             (start, end)
         };
-        // NOTE: this collapses EVERY text object out of blockwise visual, and
-        // that is not what vim does. Measured on neovim 0.12.4 from a
-        // `<C-v>j` block, there are three behaviours, not one:
+        // NOTE: only the WORD objects stay blockwise here (handled above —
+        // the block keeps its rows and the cursor extends its columns to the
+        // object end); everything else still collapses out of blockwise
+        // visual, and that is not always what vim does. Measured on neovim
+        // 0.12.4 from a `<C-v>j` block:
         //
         //   - `iw` / `aw` / `iW` / `aW` / `ip` / `is` stay BLOCKWISE and just
         //     extend the cursor (so the block keeps its rows and takes the
@@ -1890,12 +1892,22 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         //     single row, which is what this branch does;
         //   - `i"` / `it` do nothing at all.
         //
-        // Only the middle one is right here. The mismatch is why `<C-v>iw<`
-        // still outdents the whole line: the operator never reaches the
-        // blockwise arm. Tracked in docs/backlog.md §1.5b — fixing it needs
-        // per-object routing, and the word objects additionally need to write
+        // So the remaining mismatches — paragraph / sentence (collapse where
+        // nvim stays blockwise) and tags (collapse where nvim does nothing) —
+        // stay tracked in docs/backlog.md §1.5b. Quotes already no-op in hjkl
+        // too at the measured position (the object is not found from the
+        // block), matching nvim. The word objects additionally write
         // `block_vcol` so `block_bounds` sees the new column.
         if crate::vim_state::vim(self).mode == FsmMode::VisualBlock {
+            // Word objects keep the selection blockwise: the block spans
+            // anchor-column..object-end-column, matching nvim.
+            if let TextObject::Word { .. } = obj {
+                let (er, ec) = crate::vim::retreat_one(self, end);
+                self.jump_cursor(er, ec);
+                crate::vim_state::vim_mut(self).block_vcol = ec;
+                crate::vim_state::vim_mut(self).block_to_eol = false;
+                return;
+            }
             match kind {
                 RangeKind::Linewise => {
                     crate::vim_state::vim_mut(self).visual_line_anchor = start.0;

@@ -150,3 +150,69 @@ initial_cursor = [1, 2]
 keys = "vi{d"
 expected_buffer = "{}\n"
 expected_mode = "normal"
+
+# ── blockwise visual (`<C-v>`) + text objects ─────────────────────────────
+# neovim 0.12.4 keeps BLOCKWISE for word objects: the block keeps its rows
+# and the cursor extends its columns to the object end. hjkl used to
+# collapse to charwise (mode "visual"), which made `<C-v>iw<` outdent the
+# whole line. Verified against neovim 0.12.4 via dfcase.
+
+[[cases]]
+name = "blockwise_iw_keeps_block_mode"
+initial_buffer = "hello world\nfoo bar baz\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jiw"
+expected_buffer = "hello world\nfoo bar baz\n"
+expected_cursor = [1, 2]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_iw_tilde_flips_block"
+initial_buffer = "hello world\nfoo bar baz\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jiw~"
+expected_buffer = "HELlo world\nFOO bar baz\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_aw_keeps_block_mode"
+initial_buffer = "hello world\nfoo bar baz\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jaw"
+expected_buffer = "hello world\nfoo bar baz\n"
+expected_cursor = [1, 3]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_aw_tilde_flips_block"
+initial_buffer = "hello world\nfoo bar baz\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jaw~"
+expected_buffer = "HELLo world\nFOO bar baz\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_iw_single_row_keeps_block"
+initial_buffer = "\t(x).[y]\n"
+initial_cursor = [0, 6]
+keys = "<C-v>iw"
+expected_buffer = "\t(x).[y]\n"
+expected_cursor = [0, 6]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_iw_shift_left_does_not_outdent_line"
+initial_buffer = "\t(x).[y]\n"
+initial_cursor = [0, 6]
+keys = "<C-v>iw<"
+expected_buffer = "\t(x).[y]\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_quote_obj_noop"
+initial_buffer = "a\"hello\nworld\"b\n"
+initial_cursor = [0, 0]
+keys = "<C-v>ji\""
+expected_buffer = "a\"hello\nworld\"b\n"
+expected_cursor = [1, 0]
+expected_mode = "visual_block"
