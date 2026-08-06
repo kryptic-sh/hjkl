@@ -109,44 +109,10 @@ pub fn sentence_boundary<H: hjkl_engine::types::Host>(
     let (cr, cc) = cursor;
 
     if forward {
-        // Closest row below the cursor whose terminator's trailing
-        // whitespace runs to end-of-line. Such a terminator pushes a
-        // boundary onto the first stopper row above it — which may be the
-        // cursor's own row — so the flag is seeded by walking down from
-        // `cr - 1` past skippable rows.
-        let mut stopper_eol = if cr == 0 {
-            false
-        } else {
-            closest_stopper_below(&line_chars, cr - 1).is_some_and(|(_, eol)| eol)
-        };
-        let mut prev_blank = cr > 0 && line_chars(cr - 1).is_empty();
-        for r in cr..n_lines {
-            let blank = line_chars(r).is_empty();
-            let first_ns = line_chars(r).iter().position(|&c| !c.is_whitespace());
-            let mut cands: Vec<(usize, usize)> = Vec::new();
-            // Blank-line transition: `(r, 0)` when the previous row's
-            // blankness differs.
-            if r > 0 && prev_blank != blank {
-                cands.push((r, 0));
-            }
-            // Trailing-whitespace walk from a terminator below this row
-            // lands here on this row's first non-whitespace cell.
-            if stopper_eol && let Some(c) = first_ns {
-                cands.push((r, c));
-            }
-            let (mid, has_eol) = scan_row_boundaries(r, &line_chars);
-            cands.extend(mid);
-            for (row, col) in cands {
-                if r > cr || col > cc {
-                    return Some((row, col));
-                }
-            }
-            prev_blank = blank;
-            stopper_eol = if first_ns.is_some() || blank {
-                has_eol
-            } else {
-                stopper_eol
-            };
+        // The first real boundary strictly past the cursor — the scan
+        // lives in [`first_sentence_boundary_forward`].
+        if let Some(p) = first_sentence_boundary_forward(&line_chars, cr, cc, n_lines) {
+            return Some(p);
         }
         // No next sentence: land on the last character of the buffer,
         // but never move backward past the cursor.
@@ -212,6 +178,60 @@ pub fn sentence_boundary<H: hjkl_engine::types::Host>(
         }
         None
     }
+}
+
+/// The first real sentence boundary strictly past cursor `(cr, cc)` —
+/// the forward half of [`sentence_boundary`]'s scan, extracted so
+/// [`sentence_step_forward`] can reuse it. Scans rows `cr..n_lines`
+/// row by row, stopping at the first candidate with `r > cr ||
+/// col > cc`. `None` when no boundary exists before end-of-buffer —
+/// the caller applies its own run-off-the-end fallback.
+fn first_sentence_boundary_forward<F: Fn(usize) -> Vec<char>>(
+    line_chars: &F,
+    cr: usize,
+    cc: usize,
+    n_lines: usize,
+) -> Option<(usize, usize)> {
+    // Closest row below the cursor whose terminator's trailing
+    // whitespace runs to end-of-line. Such a terminator pushes a
+    // boundary onto the first stopper row above it — which may be the
+    // cursor's own row — so the flag is seeded by walking down from
+    // `cr - 1` past skippable rows.
+    let mut stopper_eol = if cr == 0 {
+        false
+    } else {
+        closest_stopper_below(line_chars, cr - 1).is_some_and(|(_, eol)| eol)
+    };
+    let mut prev_blank = cr > 0 && line_chars(cr - 1).is_empty();
+    for r in cr..n_lines {
+        let blank = line_chars(r).is_empty();
+        let first_ns = line_chars(r).iter().position(|&c| !c.is_whitespace());
+        let mut cands: Vec<(usize, usize)> = Vec::new();
+        // Blank-line transition: `(r, 0)` when the previous row's
+        // blankness differs.
+        if r > 0 && prev_blank != blank {
+            cands.push((r, 0));
+        }
+        // Trailing-whitespace walk from a terminator below this row
+        // lands here on this row's first non-whitespace cell.
+        if stopper_eol && let Some(c) = first_ns {
+            cands.push((r, c));
+        }
+        let (mid, has_eol) = scan_row_boundaries(r, line_chars);
+        cands.extend(mid);
+        for (row, col) in cands {
+            if r > cr || col > cc {
+                return Some((row, col));
+            }
+        }
+        prev_blank = blank;
+        stopper_eol = if first_ns.is_some() || blank {
+            has_eol
+        } else {
+            stopper_eol
+        };
+    }
+    None
 }
 
 /// A row the trailing-whitespace walk passes *through* without stopping:
@@ -298,9 +318,10 @@ fn scan_row_boundaries<F: Fn(usize) -> Vec<char>>(
 }
 
 /// Every valid sentence-boundary landing position within `lines[..n_lines]`,
-/// in ascending order (deduplicated). Always includes `(0, 0)`. Shared by
-/// both directions of [`sentence_boundary`] so `(` and `)` agree on where
-/// sentences start.
+/// in ascending order (deduplicated). Always includes `(0, 0)`. Kept as the
+/// full-buffer reference for the differential tests (`old_sentence_boundary`
+/// / `old_sentence_step_forward`).
+#[cfg_attr(not(test), allow(dead_code))]
 fn sentence_boundaries(lines: &[Vec<char>], n_lines: usize) -> Vec<(usize, usize)> {
     let mut out = vec![(0usize, 0usize)];
     for (row, line) in lines.iter().enumerate().take(n_lines) {
@@ -357,6 +378,7 @@ fn sentence_boundaries(lines: &[Vec<char>], n_lines: usize) -> Vec<(usize, usize
 /// whitespace would otherwise land (`"One.\n\nTwo.\n"` stops at the blank
 /// line, not at `"Two."`). `None` when the walk runs off the end of the
 /// buffer without finding one.
+#[cfg_attr(not(test), allow(dead_code))]
 fn skip_sentence_ws(
     lines: &[Vec<char>],
     n_lines: usize,
@@ -386,7 +408,9 @@ fn skip_sentence_ws(
 
 /// The last valid cursor cell in `lines[..n_lines]` — vim's `)` landing
 /// spot when there's no next sentence. The last row's last character, or
-/// column 0 if that row happens to be empty.
+/// column 0 if that row happens to be empty. Test-only reference now
+/// (the row-by-row `sentence_step_forward` computes this from the rope).
+#[cfg_attr(not(test), allow(dead_code))]
 fn end_of_buffer_pos(lines: &[Vec<char>], n_lines: usize) -> (usize, usize) {
     let last = n_lines - 1;
     let col = lines[last].len().saturating_sub(1);
@@ -401,6 +425,7 @@ fn end_of_buffer_pos(lines: &[Vec<char>], n_lines: usize) -> (usize, usize) {
 /// is only a legal *final* landing. A repetition that starts already at the
 /// last cell is a no-op success, which is why `9)` at end-of-buffer neither
 /// moves nor beeps.
+#[derive(Debug, PartialEq, Eq)]
 pub enum SentenceStep {
     /// A real boundary: a sentence terminator (possibly the one that closes
     /// the buffer) or a blank-line transition.
@@ -421,11 +446,18 @@ pub fn sentence_step_forward<H: hjkl_engine::types::Host>(
     if raw_n_lines == 0 {
         return SentenceStep::AtEnd;
     }
-    let lines: Vec<Vec<char>> = (0..raw_n_lines)
-        .map(|r| rope_line_to_str(&rope, r).chars().collect())
-        .collect();
+    // Borrow row `r` as a `Cow<str>` instead of cloning a `String` per row
+    // (`rope_line_to_str`). `rope_line_bytes` gives the byte length of the
+    // row's content with every line separator excluded, matching
+    // `hjkl_buffer::rope_line_str` exactly (see `viewport_math::rope_line_slice`).
+    let line_of = |r: usize| -> std::borrow::Cow<'_, str> {
+        let start = rope.line_to_byte(r);
+        rope.byte_slice(start..start + hjkl_buffer::rope_line_bytes(&rope, r))
+            .into()
+    };
+    let line_chars = |r: usize| -> Vec<char> { line_of(r).chars().collect() };
     // Same phantom-trailing-row clamp as `sentence_boundary`.
-    let n_lines = if raw_n_lines > 1 && lines[raw_n_lines - 1].is_empty() {
+    let n_lines = if raw_n_lines > 1 && line_chars(raw_n_lines - 1).is_empty() {
         raw_n_lines - 1
     } else {
         raw_n_lines
@@ -435,13 +467,11 @@ pub fn sentence_step_forward<H: hjkl_engine::types::Host>(
     }
     let cursor = ed.cursor();
     let cursor = (cursor.0.min(n_lines - 1), cursor.1);
-    if let Some(&p) = sentence_boundaries(&lines, n_lines)
-        .iter()
-        .find(|&&p| p > cursor)
-    {
+    if let Some(p) = first_sentence_boundary_forward(&line_chars, cursor.0, cursor.1, n_lines) {
         return SentenceStep::Boundary(p);
     }
-    let end = end_of_buffer_pos(&lines, n_lines);
+    let last_row = line_chars(n_lines - 1);
+    let end = (n_lines - 1, last_row.len().saturating_sub(1));
     if end <= cursor {
         return SentenceStep::AtEnd;
     }
@@ -449,7 +479,7 @@ pub fn sentence_step_forward<H: hjkl_engine::types::Host>(
     // the buffer still ends a sentence in vim, so this landing is a real
     // boundary rather than the run-off-the-end fallback: `3)` on
     // `"One. Two."` stops at the last char, while `3)` on `"One. Two"` fails.
-    let mut tail = lines[n_lines - 1].as_slice();
+    let mut tail: &[char] = &last_row;
     while tail.last().is_some_and(|c| c.is_whitespace()) {
         tail = &tail[..tail.len() - 1];
     }
@@ -1970,6 +2000,58 @@ mod tests {
         }
     }
 
+    /// Reference: the pre-incremental full-buffer `sentence_step_forward`.
+    fn old_sentence_step_forward<H: hjkl_engine::types::Host>(
+        ed: &Editor<hjkl_buffer::View, H>,
+    ) -> SentenceStep {
+        let rope = hjkl_engine::types::Query::rope(ed.buffer());
+        let raw_n_lines = rope.len_lines();
+        if raw_n_lines == 0 {
+            return SentenceStep::AtEnd;
+        }
+        let lines: Vec<Vec<char>> = (0..raw_n_lines)
+            .map(|r| rope_line_to_str(&rope, r).chars().collect())
+            .collect();
+        // Same phantom-trailing-row clamp as `sentence_boundary`.
+        let n_lines = if raw_n_lines > 1 && lines[raw_n_lines - 1].is_empty() {
+            raw_n_lines - 1
+        } else {
+            raw_n_lines
+        };
+        if n_lines == 0 {
+            return SentenceStep::AtEnd;
+        }
+        let cursor = ed.cursor();
+        let cursor = (cursor.0.min(n_lines - 1), cursor.1);
+        if let Some(&p) = sentence_boundaries(&lines, n_lines)
+            .iter()
+            .find(|&&p| p > cursor)
+        {
+            return SentenceStep::Boundary(p);
+        }
+        let end = end_of_buffer_pos(&lines, n_lines);
+        if end <= cursor {
+            return SentenceStep::AtEnd;
+        }
+        // A terminator (plus any closing run and trailing whitespace) that
+        // closes the buffer still ends a sentence in vim, so this landing is
+        // a real boundary rather than the run-off-the-end fallback: `3)` on
+        // `"One. Two."` stops at the last char, while `3)` on `"One. Two"`
+        // fails.
+        let mut tail = lines[n_lines - 1].as_slice();
+        while tail.last().is_some_and(|c| c.is_whitespace()) {
+            tail = &tail[..tail.len() - 1];
+        }
+        while tail.last().is_some_and(|c| is_sentence_closing(*c)) {
+            tail = &tail[..tail.len() - 1];
+        }
+        if tail.last().is_some_and(|c| is_sentence_terminator(*c)) {
+            SentenceStep::Boundary(end)
+        } else {
+            SentenceStep::EndOfBuffer(end)
+        }
+    }
+
     /// Reference: the pre-window full-buffer `sentence_text_object`.
     fn old_sentence_text_object<H: hjkl_engine::types::Host>(
         ed: &Editor<hjkl_buffer::View, H>,
@@ -2171,6 +2253,24 @@ mod tests {
                         buf
                     );
                 }
+            }
+        }
+    }
+
+    /// The same corpus: the row-by-row `)` classifier must agree with the
+    /// old full-buffer classification at every cursor sample.
+    #[test]
+    fn sentence_step_forward_matches_full_scan_on_corpus() {
+        for buf in corpus_buffers() {
+            let mut ed = make_editor(&buf);
+            for (row, col) in cursor_samples(&buf) {
+                ed.set_cursor_quiet(row, col);
+                assert_eq!(
+                    sentence_step_forward(&ed),
+                    old_sentence_step_forward(&ed),
+                    "buffer {:?} cursor ({row},{col})",
+                    buf
+                );
             }
         }
     }
