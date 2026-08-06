@@ -40,7 +40,9 @@ To finish: `gh run rerun 30858075595 --failed`, once
 not `https://aur.archlinux.org/` and not `ssh aur@aur.archlinux.org` — both
 answer normally while the git service is in maintenance, which is what made the
 first re-run premature. Verify after with the RPC:
-`curl 'https://aur.archlinux.org/rpc/v5/info?arg[]=hjkl-bin'`.
+`curl 'https://aur.archlinux.org/rpc/v5/info?arg[]=hjkl-bin'`. Re-checked
+2026-08-06: `git ls-remote` still answers the same maintenance banner, so the
+rerun is still blocked.
 
 Everything else in v0.41.0 landed and was verified against the registries rather
 than the job statuses: 59/59 crates at 0.41.0 on crates.io, the GitHub release
@@ -49,10 +51,6 @@ targets green.
 
 ### 1.1 Undo-tree follow-ups
 
-- `lowest_offpath_leaf` / `prune_root_side` still test path membership with
-  `current_path().contains(..)` rather than the `UndoNode::on_path` flag that
-  now exists, which would make `cap` O(N) instead of O(N\*depth). `cap` is not
-  benched, so this was left out to keep the change confined.
 - `retarget_current` is O(tree distance), not O(1): a `g-` crossing to a far
   branch still walks to the fork. Those ancestors genuinely have to change, so
   the worst case stays O(depth) for an adversarial branch layout. Every benched
@@ -313,37 +311,43 @@ compatibility corpus and verify it against nvim before changing expectations.
 ### 1.5b Left open by the motion- and blockwise-parity passes
 
 **A text object in blockwise visual collapses the block (2026-08-04).**
-`editor_ext::visual_text_obj_extend` sends EVERY text object down one path —
-collapse to charwise (or linewise), set `visual_anchor`, move the cursor — and
-never writes `block_anchor` / `block_vcol`, which are what `block_bounds` reads.
+`editor_ext::visual_text_obj_extend` used to send EVERY text object down one
+path — collapse to charwise (or linewise), set `visual_anchor`, move the cursor
+— and never wrote `block_anchor` / `block_vcol`, which are what `block_bounds`
+reads.
 
-Measured on neovim 0.12.4, entering with `<C-v>j` and then the object, there are
-THREE behaviours:
+**Word objects fixed 2026-08-06 (`2be058b8`).** `iw`/`aw`/`iW`/`aW` now keep
+`FsmMode::VisualBlock` and write `block_vcol` to the landed column (cursor
+already matched nvim; only the mode was wrong), so `<C-v>iw<` reaches the
+blockwise shift arm and `<C-v>jiw~` flips the block instead of the line. Pinned
+by seven corpus cases in `corpus/tier2_block_textobj.toml` measured against
+neovim 0.12.4 (word mode + `~`/`<` consequences, quote no-op).
 
-| Objects                       | neovim                                                 |
-| ----------------------------- | ------------------------------------------------------ |
-| `iw` `aw` `iW` `aW` `ip` `is` | stays BLOCKWISE; rows kept, cursor extends the columns |
-| `ib` `ab` `iB`                | collapses to charwise AND to the cursor's single row   |
-| `i"` `it`                     | no-op — the object does not apply                      |
+The 2026-08-04 behaviour table was re-measured against neovim 0.12.4 during that
+work, and two of its rows did not reproduce at the positions probed:
 
-hjkl does the middle one for all of them. For the word objects the cursor
-already lands exactly where nvim puts it (verified for `<C-v>iw` and `<C-v>jiw`)
-— only the MODE is wrong, so that part is small: keep `FsmMode::VisualBlock` and
-write `block_vcol`. The bracket objects have a second, separate divergence:
-`<C-v>jib` leaves hjkl's cursor on row 1 where nvim puts it on row 0.
+- **Brackets (`ib`/`ab`/`iB`) stayed BLOCKWISE in nvim** at every position
+  probed (`(x\ny)`, `(ab\ncd)`, `a(b\nc)d`, cursors on rows 0 and 1) — the
+  "collapses to charwise AND to the cursor's single row" claim, and the
+  `<C-v>jib` cursor-on-row-0 claim, did not reproduce. hjkl still collapses them
+  (or no-ops when the object is not found, e.g. cursor on `d` outside the parens
+  — there hjkl and nvim already agree).
+- **Quotes (`i"`) no-op on both sides** at the measured position
+  (`a"hello\nworld"b`, cursor inside the content) — hjkl's `text_object_range`
+  returns no object from that row, so hjkl already matches nvim. Pinned by the
+  `blockwise_quote_obj_noop` corpus case.
+- **Tags (`it`) collapse in hjkl, no-op in nvim** at the measured position
+  (`<a>x\ny</a>`, cursor inside the content): hjkl goes charwise and `~` flips
+  both rows, nvim flips only the cursor row.
+- **`ip`/`is` stay blockwise in nvim but hjkl collapses** (to visual-line /
+  visual). The cursor lands identically, but the block's column/row EXTENT after
+  the object is not yet measured per position (`<C-v>jip~` on `"one\n\ntwo"`
+  flipped both paragraphs' first word in nvim, which is more than "rows kept,
+  cursor extends") — so the fix shape is not yet determined.
 
-This is what stops `<C-v>iw<` from reaching the blockwise `>` / `<` arm, so it
-still outdents the whole line even though the shift geometry underneath is
-correct:
-
-```
-`<C-v>iw<` on "\t(x).[y]", cursor (0,6)
-hjkl: "(x).[y]"     ← outdented the whole line
-nvim: "\t(x).[y]"   ← unchanged
-```
-
-Not attempted: it needs per-object routing plus a re-verification of every case
-in `corpus/tier2_block_textobj.toml`, which is its own change.
+Open per-object routing for paragraph / sentence / brackets / tags; each needs
+its measured corpus cases first. The word-object code documents this in the NOTE
+comment at `visual_text_obj_extend`.
 
 **`H` / `L` / `gE` in blockwise visual still diverge on motion and cursor.**
 `<C-v>H>` is the standing repro. Blockwise `~` is correct.
@@ -668,10 +672,15 @@ with ripgrep installed are unaffected.
   of these rebuilds the whole document into a `Vec` for an edit or query whose
   extent is small. None is a correctness bug and none is measured; they are
   recorded so the next perf pass has the list.
-  - `vim::text_object::sentence_boundary` and
-    `vim::text_object::sentence_step_forward` each collect the entire buffer
-    into a `Vec<Vec<char>>` on every `(` / `)` keystroke. Both were rewritten
-    for vim parity, not for allocation discipline.
+  - `vim::text_object::sentence_step_forward` collected the entire buffer into a
+    `Vec<Vec<char>>` on every `)` keystroke — fixed 2026-08-06 (`8a7f3613`): it
+    now reuses the row-by-row forward scan extracted from `sentence_boundary`
+    (which was already row-by-row; only `step_forward` was live), measured 31.5
+    ms → 2 µs cold on a 50k-line buffer with the next boundary three rows away.
+    Worst case (a buffer with no terminator at all) is 62 ms vs the old 36 ms:
+    the scan must visit every row either way, and the shared per-row closures
+    collect each row a few times — the same shape `(`'s backward scan already
+    ships with. If it ever matters, cache each row once per loop.
   - `vim::visual_ops::transform_block_case` and
     `vim::visual_ops::block_replace_bounds` collect a full `Vec<String>` via
     `rope_to_lines_vec` to edit one rectangle.
@@ -1142,6 +1151,22 @@ finish-race (#17), macOS NUL mime (#20). Still open, tracked in §1.11:
 `\d`/`\s`/ `\w` ASCII semantics (#11), `\ze`/`\zs` (#10 half), Windows
 `EmptyClipboard` ordering (#19). What the review disproved is in §8's Cleared
 section.
+
+### Backlog-work session 2026-08-06
+
+- **Undo `cap` O(N) (`4e3c2bf4`)** — `lowest_offpath_leaf` and `prune_root_side`
+  read the maintained `UndoNode::on_path` flag instead of building a path `Vec`
+  and testing membership (O(N\*depth) → O(N)); `UndoTree::current_path` deleted.
+- **Blockwise word text objects (`2be058b8`)** — `iw`/`aw`/`iW`/`aW` keep
+  `FsmMode::VisualBlock` and write `block_vcol` instead of collapsing to
+  charwise; `<C-v>iw<` now reaches the blockwise shift arm. Seven corpus cases
+  pinned against neovim 0.12.4; the remaining blockwise text-object divergences
+  (paragraph/sentence/brackets/tags) are re-measured and tracked in §1.5b.
+- **`)` sentence scan row-by-row (`8a7f3613`)** — `sentence_step_forward`
+  stopped collecting the whole buffer; reuses a forward scan extracted from
+  `sentence_boundary` (behavior unchanged there), 31.5 ms → 2 µs per `)` on a
+  50k-line buffer. New differential test pins it against a full-buffer reference
+  over the corpus. §1.7's other allocation bullets remain open.
 
 ## 8. 2026-08-05 code review (audit depth)
 
