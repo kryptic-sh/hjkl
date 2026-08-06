@@ -1712,6 +1712,31 @@ mod tests {
         Some(child)
     }
 
+    /// Write data into xclip's clipboard and wait until xclip actually owns the
+    /// selection. The ownership claim is async after the stdin write closes, so
+    /// a fixed sleep races on loaded CI hosts (available_lists_text flaked with
+    /// an empty TARGETS list for exactly this reason). Polls available() until
+    /// it reports a non-empty mime list; if ownership never lands within the
+    /// deadline, returns the child anyway so the caller's assertion fails
+    /// loudly rather than silently skipping a real regression.
+    fn xclip_write_owned(sel: &str, data: &[u8]) -> Option<Child> {
+        let child = xclip_write(sel, data)?;
+        let selection = match sel {
+            "clipboard" => Selection::Clipboard,
+            "primary" => Selection::Primary,
+            other => panic!("xclip_write_owned: unknown selection {other:?}"),
+        };
+        let thread = get_thread()?;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while available_clipboard(thread, selection).map_or(true, |m| m.is_empty()) {
+            if Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        Some(child)
+    }
+
     /// Initialize Xvfb + get the singleton X11Thread for tests.
     fn get_thread() -> Option<&'static X11Thread> {
         ensure_xvfb()?;
@@ -1886,13 +1911,10 @@ mod tests {
         let data = b"hello-get-5c\n";
 
         // Write via xclip; it stays alive as a selection owner.
-        let Some(mut child) = xclip_write("clipboard", data) else {
+        let Some(mut child) = xclip_write_owned("clipboard", data) else {
             eprintln!("SKIP get_clipboard_text: xclip not available");
             return;
         };
-
-        // Give xclip time to claim ownership.
-        std::thread::sleep(Duration::from_millis(150));
 
         let result = get_clipboard(thread, Selection::Clipboard, &MimeType::Text);
         // Let xclip exit before asserting (avoid zombie).
@@ -1909,12 +1931,10 @@ mod tests {
 
         let data = b"primary-get-5c\n";
 
-        let Some(mut child) = xclip_write("primary", data) else {
+        let Some(mut child) = xclip_write_owned("primary", data) else {
             eprintln!("SKIP get_primary_text: xclip not available");
             return;
         };
-
-        std::thread::sleep(Duration::from_millis(150));
 
         let result = get_clipboard(thread, Selection::Primary, &MimeType::Text);
         let _ = child.wait();
@@ -1944,12 +1964,10 @@ mod tests {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let Some(thread) = get_thread() else { return };
 
-        let Some(mut child) = xclip_write("clipboard", b"available-test\n") else {
+        let Some(mut child) = xclip_write_owned("clipboard", b"available-test\n") else {
             eprintln!("SKIP available_lists_text: xclip not available");
             return;
         };
-
-        std::thread::sleep(Duration::from_millis(150));
 
         let result = available_clipboard(thread, Selection::Clipboard);
         let _ = child.wait();
