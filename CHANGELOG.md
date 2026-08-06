@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.41.2] - 2026-08-06
+
+### Changed
+
+- **Dependency updates** (lockfile-only; no manifest changes): direct bumps clap
+  4.6.5, ignore 0.4.33, similar 3.1.2, toml 1.1.4, plus transitive bumps (cc,
+  futures, hyper, rustls, syn, time, …). All other direct deps were already at
+  latest stable.
+
 ## [0.41.1] - 2026-08-06
 
 ### Fixed
@@ -5669,7 +5678,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.2...HEAD
+[0.41.2]: https://github.com/kryptic-sh/hjkl/compare/v0.41.1...v0.41.2
 [0.41.1]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.1
 [0.41.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.39.1...v0.40.0
