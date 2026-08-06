@@ -1085,26 +1085,13 @@ impl UndoTree {
         }
     }
 
-    /// Ids on the root→`current` path (inclusive), which pruning must never
-    /// touch. Small (one per undo level), so a `Vec` membership check is fine.
-    fn current_path(&self) -> Vec<NodeId> {
-        let mut path = Vec::new();
-        let mut n = Some(self.current);
-        while let Some(id) = n {
-            path.push(id);
-            n = self.get(id).parent;
-        }
-        path
-    }
-
     /// Lowest-`seq` leaf that is not on the root→`current` path, if any.
     fn lowest_offpath_leaf(&self) -> Option<NodeId> {
-        let path = self.current_path();
         let mut best: Option<(u64, NodeId)> = None;
         for (id, slot) in self.nodes.iter().enumerate() {
             if let Some(n) = slot
                 && n.children.is_empty()
-                && !path.contains(&id)
+                && !n.on_path
                 && best.is_none_or(|(bs, _)| n.seq < bs)
             {
                 best = Some((n.seq, id));
@@ -1133,8 +1120,12 @@ impl UndoTree {
             return false;
         }
         // The child on the path to `current` (the root always has one here).
-        let path = self.current_path();
-        let Some(&child) = self.get(root).children.iter().find(|c| path.contains(c)) else {
+        let Some(&child) = self
+            .get(root)
+            .children
+            .iter()
+            .find(|c| self.get(**c).on_path)
+        else {
             return false;
         };
         // Any OTHER root children are off-path branches; drop them with the root.
