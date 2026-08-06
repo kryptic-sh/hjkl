@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.41.1] - 2026-08-06
+
 ### Fixed
 
 - **`n` (and `*`) no longer gets stuck on a match starting with a multi-byte
@@ -119,6 +121,10 @@ patch bumps.
   paste shifted by one generation; the fd is now popped and closed.
 - **macOS: a custom clipboard mime type containing a NUL returns an error**
   instead of panicking the calling thread.
+- **Word text objects (`iw`/`aw`/`iW`/`aW`) keep blockwise visual mode.** In a
+  `<C-v>` block they collapsed to charwise visual, so `<C-v>iw<` outdented the
+  whole line instead of shifting the block. They now stay a block and extend
+  their columns to the object end, matching nvim.
 
 ### Changed
 
@@ -149,6 +155,15 @@ patch bumps.
   `Arc` into the JSON-RPC frame instead of cloning it into a
   `serde_json::Value`. Wire bytes are unchanged. Measured on a 1.2 MB document:
   one full-document copy eliminated (−1.22 MB allocated).
+- **`)` scans sentence boundaries row by row instead of materializing the whole
+  buffer.** `sentence_step_forward` collected the buffer into a `Vec<Vec<char>>`
+  and ran the flat scan on every keystroke — 31.5 ms per press on a 50k-line
+  buffer with the next boundary three rows away. It now reuses the row-by-row
+  forward scan and reads the tail from the rope: 31.5 ms → 2 µs with a nearby
+  boundary.
+- **Undo-cap pruning no longer pays an O(depth) path-membership scan per node.**
+  `cap` tested `current_path().contains(..)` per node (O(N·depth) total); both
+  prune helpers now read the maintained `UndoNode::on_path` flag directly.
 
 ## [0.41.0] - 2026-08-04
 
@@ -5654,7 +5669,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.1...HEAD
+[0.41.1]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.1
 [0.41.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.39.1...v0.40.0
 [0.39.1]: https://github.com/kryptic-sh/hjkl/compare/v0.39.0...v0.39.1
