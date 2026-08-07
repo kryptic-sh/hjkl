@@ -261,14 +261,31 @@ fn translate_pattern(pat: &str, last_sub: &str) -> (String, Option<bool>) {
 
     while let Some(ch) = chars.next() {
         if in_bracket {
-            // `\a` / `\A` inside a class: rust-regex would read `\a` as Bell
-            // and reject `\A`; vim reads them as the alphabetic class, so
-            // emit the range directly. `\A` → `^A-Za-z` is only correct as
-            // the class's FIRST element (vim treats it as a literal member
-            // otherwise) — best approximation.
-            if ch == '\\' && matches!(chars.peek(), Some('a') | Some('A')) {
+            // vim treats the character-class escapes (`\a`/`\A`/`\d`/`\D`/
+            // `\s`/`\S`/`\w`/`\W`) inside `[...]` as LITERAL members:
+            // `[\d]` is the set {`\`, `d`}, not "digit" — measured against
+            // neovim 0.12.4 (`:s/[\d]/Q/` on "5" leaves it unchanged, and
+            // `:s/[\a]/Q/` on "x5 a" replaces only the literal `a`).
+            // rust-regex would read `\d` inside a class as the Unicode
+            // digit class, so emit the pair escaped — `[\\d]` — which is
+            // exactly the literal set.
+            if ch == '\\'
+                && matches!(
+                    chars.peek(),
+                    Some('a')
+                        | Some('A')
+                        | Some('d')
+                        | Some('D')
+                        | Some('s')
+                        | Some('S')
+                        | Some('w')
+                        | Some('W')
+                )
+            {
                 let c = chars.next().unwrap();
-                out.push_str(if c == 'a' { "A-Za-z" } else { "^A-Za-z" });
+                out.push('\\');
+                out.push('\\');
+                out.push(c);
                 // The consumed pair ends in a non-backslash.
                 bracket_backslash_parity = false;
                 continue;
@@ -299,6 +316,16 @@ fn translate_pattern(pat: &str, last_sub: &str) -> (String, Option<bool>) {
                 Some('a') => out.push_str("[A-Za-z]"),
                 Some('A') => out.push_str("[^A-Za-z]"),
                 Some('e') => out.push('\u{001b}'),
+                // vim `\d` = `[0-9]`, `\s` = `[ \t]`, `\w` =
+                // `[0-9A-Za-z_]`; rust-regex widens all three to Unicode
+                // (verified: rust `\d` matches U+0663, vim's does not). The
+                // negations `\D`/`\S`/`\W` are the same classes negated.
+                Some('d') => out.push_str("[0-9]"),
+                Some('D') => out.push_str("[^0-9]"),
+                Some('s') => out.push_str("[ \t]"),
+                Some('S') => out.push_str("[^ \t]"),
+                Some('w') => out.push_str("[0-9A-Za-z_]"),
+                Some('W') => out.push_str("[^0-9A-Za-z_]"),
                 Some('v') => level = MagicLevel::VeryMagic,
                 Some('V') => level = MagicLevel::VeryNoMagic,
                 Some('m') => level = MagicLevel::Magic,
@@ -704,18 +731,17 @@ mod tests {
         assert_eq!(vim_to_rust_regex(r"\b"), r"\b");
         assert_eq!(vim_to_rust_regex(r"\B"), r"\B");
         // vim default magic: `+` is a literal unless backslashed. `\d\+`
-        // (digit class, one-or-more quantifier) translates to `\d\+` in
-        // rust-regex syntax (identical spelling — `\+` IS rust-regex's own
-        // escaped-literal-plus, but since the quantifier here is coming from
-        // vim's `\+` we want the rust-regex QUANTIFIER `+`, unescaped).
-        assert_eq!(vim_to_rust_regex(r"\d\+"), r"\d+");
-        assert_eq!(vim_to_rust_regex(r"^\w\+$"), r"^\w+$");
+        // (ASCII digit class, one-or-more quantifier) translates to
+        // `[0-9]+` — the class is rewritten to vim's ASCII set, the
+        // quantifier to rust-regex's unescaped `+`.
+        assert_eq!(vim_to_rust_regex(r"\d\+"), r"[0-9]+");
+        assert_eq!(vim_to_rust_regex(r"^\w\+$"), r"^[0-9A-Za-z_]+$");
     }
 
     /// Mixed: `\<\w\+\>` rewrites to `\b\w+\b` — matches whole words.
     #[test]
     fn mixed_boundary_and_word_class() {
-        assert_eq!(vim_to_rust_regex(r"\<\w\+\>"), r"\b\w+\b");
+        assert_eq!(vim_to_rust_regex(r"\<\w\+\>"), r"\b[0-9A-Za-z_]+\b");
     }
 
     // ── Integration: compiled vim patterns match correctly ───────────────────
@@ -880,8 +906,11 @@ mod tests {
     #[test]
     fn very_magic_mode_switch_at_start() {
         // \v: groups/quantifiers/alternation/boundaries are magic unescaped.
-        assert_eq!(vim_to_rust_regex(r"\v(\w+) (\w+)"), r"(\w+) (\w+)");
-        assert_eq!(vim_to_rust_regex(r"\v\d+"), r"\d+");
+        assert_eq!(
+            vim_to_rust_regex(r"\v(\w+) (\w+)"),
+            r"([0-9A-Za-z_]+) ([0-9A-Za-z_]+)"
+        );
+        assert_eq!(vim_to_rust_regex(r"\v\d+"), r"[0-9]+");
         assert_eq!(vim_to_rust_regex(r"\v<foo>"), r"\bfoo\b");
         assert_eq!(vim_to_rust_regex(r"\va=b"), r"a?b");
     }
@@ -932,6 +961,56 @@ mod tests {
         // vim and rust-regex — bracket tracking must not turn them into a
         // group by escaping/unescaping their contents.
         assert_eq!(vim_to_rust_regex("[()]"), "[()]");
+    }
+
+    // ── vim ASCII character classes (`\d`/`\s`/`\w`) ─────────────────────────
+
+    /// vim's `\d`/`\s`/`\w` and their negations are ASCII-only; rust-regex
+    /// widens them to Unicode (verified: rust `\d` matches U+0663). The
+    /// translator must emit vim's ASCII classes, or `:s/\d/` would rewrite
+    /// text vim leaves alone.
+    #[test]
+    fn vim_ascii_classes_are_translated_outside_brackets() {
+        assert_eq!(vim_to_rust_regex(r"\d\+"), r"[0-9]+");
+        assert_eq!(vim_to_rust_regex(r"\d+"), r"[0-9]\+");
+        assert_eq!(vim_to_rust_regex(r"\D"), r"[^0-9]");
+        assert_eq!(vim_to_rust_regex(r"\s"), "[ \t]");
+        assert_eq!(vim_to_rust_regex(r"\S"), "[^ \t]");
+        assert_eq!(vim_to_rust_regex(r"\w"), r"[0-9A-Za-z_]");
+        assert_eq!(vim_to_rust_regex(r"\W"), r"[^0-9A-Za-z_]");
+    }
+
+    /// Inside `[...]` vim treats the class escapes as LITERAL members —
+    /// `[\d]` is the set {`\`, `d`}, not "digit" (measured against neovim
+    /// 0.12.4). The pair is emitted escaped so rust-regex reads it literally
+    /// instead of as its own (Unicode-wide) class.
+    #[test]
+    fn vim_ascii_classes_are_translated_inside_brackets() {
+        assert_eq!(vim_to_rust_regex(r"[\d]"), r"[\\d]");
+        assert_eq!(vim_to_rust_regex(r"[\D]"), r"[\\D]");
+        assert_eq!(vim_to_rust_regex(r"[\s]"), r"[\\s]");
+        assert_eq!(vim_to_rust_regex(r"[\S]"), r"[\\S]");
+        assert_eq!(vim_to_rust_regex(r"[\w]"), r"[\\w]");
+        assert_eq!(vim_to_rust_regex(r"[\W]"), r"[\\W]");
+        assert_eq!(vim_to_rust_regex(r"[a\d]"), r"[a\\d]");
+    }
+
+    /// The translated classes actually MATCH what they claim: ASCII-only.
+    /// `\d` must not match the Arabic-Indic digit U+0663 (vim parity), `\s`
+    /// is strictly `[ \t]`, and `\w` is strictly `[0-9A-Za-z_]` — neovim
+    /// 0.12.4 does not match `é` with `\w` either.
+    #[test]
+    fn vim_ascii_classes_match_ascii_only() {
+        let digit = regex::Regex::new(&vim_to_rust_regex(r"\d")).unwrap();
+        assert!(digit.is_match("5"));
+        assert!(!digit.is_match("٣"), "\\d must not match U+0663");
+        let ws = regex::Regex::new(&vim_to_rust_regex(r"\s")).unwrap();
+        assert!(ws.is_match("\t"));
+        assert!(!ws.is_match("\u{00a0}"), "\\s must be strictly [ \\t]");
+        let word = regex::Regex::new(&vim_to_rust_regex(r"\w")).unwrap();
+        assert!(word.is_match("_"));
+        assert!(!word.is_match("é"), "vim \\w is strictly [0-9A-Za-z_]");
+        assert!(!word.is_match("中"), "CJK is not a vim word char");
     }
 
     // ── search reveals folds ─────────────────────────────────────────────────
@@ -1218,12 +1297,17 @@ mod tests {
         assert_eq!(hits, vec!["1"]);
     }
 
-    /// `[\a]` inside a class is the alphabetic range, not a Bell escape.
+    /// `[\a]` inside a class is the literal set {`\`, `a`}, not the
+    /// alphabetic range and not a Bell escape — measured against neovim
+    /// 0.12.4 (`:s/[\a]/Q/` on "x5 a" replaces only the literal `a`). The
+    /// pair is emitted escaped so rust-regex reads it literally.
     #[test]
-    fn backslash_a_inside_class_is_alpha_range() {
-        assert_eq!(vim_to_rust_regex(r"[\a]"), "[A-Za-z]");
+    fn backslash_a_inside_class_is_literal() {
+        assert_eq!(vim_to_rust_regex(r"[\a]"), r"[\\a]");
         let re = vim_re(r"[\a]");
-        assert!(re.is_match("x"));
+        assert!(re.is_match("a"));
+        assert!(re.is_match("\\"));
+        assert!(!re.is_match("x"));
         assert!(!re.is_match("1"));
     }
 

@@ -1262,6 +1262,27 @@ mod tests {
         assert_eq!(buf_line(&e, 16), "X");
     }
 
+    // ── vim ASCII classes in substitute (`\d`/`\s`/`\w`) ─────────────────────
+
+    /// vim's `\d` is ASCII-only: `:s/\d/X/g` must leave the Arabic-Indic
+    /// digit U+0663 alone while rewriting ASCII digits (the §1.11 finding —
+    /// rust-regex's Unicode `\d` used to match it).
+    #[test]
+    fn substitute_ascii_digit_class_leaves_non_ascii_digits() {
+        let mut e = editor_with("٣ a 123");
+        let cmd = parse_substitute(r"/\d/X/g").unwrap();
+        apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(e.buffer().rope().to_string(), "٣ a XXX");
+    }
+
+    #[test]
+    fn substitute_ascii_digit_class_does_not_match_unicode_digit() {
+        let mut e = editor_with("٣");
+        let cmd = parse_substitute(r"/\d/X/g").unwrap();
+        apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(e.buffer().rope().to_string(), "٣");
+    }
+
     // ── host change records (`take_changes` / `take_content_reset` /
     //    `take_content_edits`) ──────────────────────────────────────────
     //

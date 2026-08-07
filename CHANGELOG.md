@@ -80,6 +80,13 @@ patch bumps.
   first redo from that node walked into the wrong subtree. A `last_child` that
   does not name one of the node's own children is now cleared on load (repaired,
   not rejected — consistent with the existing root→current chain repair).
+- **`\d` / `\s` / `\w` now mean vim's ASCII classes, not rust-regex's
+  Unicode-wide ones.** `:s/\d/` used to match non-ASCII digits (U+0663) and `\s`
+  matched any Unicode whitespace; both now follow vim: `\d` = `[0-9]`, `\s` =
+  `[ \t]`, `\w` = `[0-9A-Za-z_]`, with `\D`/`\S`/`\W` negated the same way.
+  Inside `[...]` all eight class escapes are now the LITERAL set {`\`, letter} —
+  measured against neovim 0.12.4, which also corrects the earlier `[\a]`/`[\A]`
+  "alphabetic range" translation, which nvim does not do.
 
 - **`:retab` no longer panics (divide-by-zero) after a `# vim: ts=0` modeline.**
   The settings-sourced tabstop is clamped to ≥1 like every other consumer;
