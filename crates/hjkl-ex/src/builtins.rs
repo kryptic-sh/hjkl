@@ -523,6 +523,16 @@ fn cd_handler<H: Host>(
     args: &str,
     _range: Option<LineRange>,
 ) -> Option<ExEffect> {
+    // `:cd` rewrites the process working directory, which is the confinement
+    // root the RPC filesystem policy resolves against — a client could
+    // otherwise `:cd /` and make every later `:w`/`:e` escape the original
+    // subtree. Refuse outright while the policy is active. No-op in the TUI,
+    // where the policy is off.
+    if hjkl_engine::policy::fs_restricted() {
+        return Some(ExEffect::Error(
+            ":cd is disabled in RPC mode (filesystem policy is active)".to_string(),
+        ));
+    }
     let raw = args.trim();
     let target = if raw.is_empty() {
         std::env::var("HOME").unwrap_or_else(|_| ".".to_string())

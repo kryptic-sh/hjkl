@@ -903,10 +903,32 @@ impl crate::app::App {
         } else {
             path.to_string()
         };
+        // Confine `:cfile`/`:caddfile` reads to the working-directory subtree
+        // while the RPC filesystem policy is active — the same two-stage gate
+        // as `:r`/`:e`: `check_fs_path` refuses absolute and `..` paths
+        // outright, `resolve_under` catches symlink escapes. No-op in the TUI,
+        // where the policy is off.
+        let resolved = if hjkl_engine::policy::fs_restricted() {
+            if let Err(e) = hjkl_engine::policy::check_fs_path(std::path::Path::new(&resolved)) {
+                self.bus.error(format!("{resolved}: {e}"));
+                return;
+            }
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            match hjkl_fs::resolve_under(&cwd, std::path::Path::new(&resolved)) {
+                Ok(p) => p,
+                Err(e) => {
+                    self.bus.error(format!("{resolved}: {e}"));
+                    return;
+                }
+            }
+        } else {
+            std::path::PathBuf::from(&resolved)
+        };
         let text = match std::fs::read_to_string(&resolved) {
             Ok(s) => s,
             Err(e) => {
-                self.bus.error(format!("cannot read \"{resolved}\": {e}"));
+                self.bus
+                    .error(format!("cannot read \"{}\": {e}", resolved.display()));
                 return;
             }
         };

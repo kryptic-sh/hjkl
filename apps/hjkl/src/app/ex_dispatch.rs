@@ -2148,7 +2148,27 @@ impl App {
             return;
         }
         let path_str = arg.to_string();
-        let path = PathBuf::from(&path_str);
+        let mut path = PathBuf::from(&path_str);
+        // Confine `:e` to the working-directory subtree while the RPC
+        // filesystem policy is active: `check_fs_path` refuses absolute and
+        // `..` paths outright, then `resolve_under` catches symlink escapes a
+        // purely lexical check would miss. Every downstream use (slot
+        // matching, `open_new_slot`, the reload read) then sees the resolved
+        // path. No-op in the TUI, where the policy is off.
+        if hjkl_engine::policy::fs_restricted() {
+            if let Err(e) = hjkl_engine::policy::check_fs_path(&path) {
+                self.bus.error(format!("{path_str}: {e}"));
+                return;
+            }
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            match hjkl_fs::resolve_under(&cwd, &path) {
+                Ok(resolved) => path = resolved,
+                Err(e) => {
+                    self.bus.error(format!("{path_str}: {e}"));
+                    return;
+                }
+            }
+        }
         let target = super::canon_for_match(&path);
 
         // Switch when the path matches an open slot.

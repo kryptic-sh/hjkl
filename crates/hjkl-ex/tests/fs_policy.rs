@@ -79,3 +79,30 @@ fn read_via_symlink_escape_is_refused_and_inside_read_still_works() {
         "expected inserted content, got: {lines:?}"
     );
 }
+
+/// `:cd` is refused outright while the filesystem policy is active: it would
+/// rewrite the process working directory, which is the confinement root the
+/// policy resolves against — a client could `:cd /` and make every later
+/// `:w`/`:e` escape the original subtree. The cwd must be left unchanged.
+#[test]
+fn cd_is_refused_under_policy() {
+    let td = tempfile::tempdir().unwrap();
+    std::env::set_current_dir(td.path()).unwrap();
+    // Idempotent — makes this test order-independent within the binary.
+    hjkl_engine::policy::restrict_fs();
+    assert!(hjkl_engine::policy::fs_restricted());
+    let before = std::env::current_dir().unwrap();
+
+    let reg = default_registry::<DefaultHost>();
+    let mut ed = make_editor();
+    let result = try_dispatch(&reg, &mut ed, "cd /");
+    assert!(
+        matches!(result, Some(ExEffect::Error(_))),
+        ":cd under the fs policy must be refused, got: {result:?}"
+    );
+    let after = std::env::current_dir().unwrap();
+    assert_eq!(
+        before, after,
+        ":cd under the fs policy must not change the working directory"
+    );
+}
