@@ -74,6 +74,12 @@ patch bumps.
   the new cache-only `by_name_cached`; an injected region whose grammar is not
   yet loaded simply contributes no folds until the highlight path (or async
   loader) has loaded it, which is at most a frame later.
+- **Undo files whose `last_child` points at a non-child no longer misdirect the
+  first `<C-r>` after load.** `from_serializable` validated only the pointer's
+  range; a hand-edited or truncated file could name any in-bounds node, so the
+  first redo from that node walked into the wrong subtree. A `last_child` that
+  does not name one of the node's own children is now cleared on load (repaired,
+  not rejected — consistent with the existing root→current chain repair).
 
 - **`:retab` no longer panics (divide-by-zero) after a `# vim: ts=0` modeline.**
   The settings-sourced tabstop is clamped to ≥1 like every other consumer;

@@ -1473,6 +1473,22 @@ impl UndoTree {
                 .last_child = Some(node);
             node = p;
         }
+        // A node's `last_child` is the `<C-r>` direction and must name one of
+        // its OWN children. Range validation above is all a hand-edited file
+        // trips otherwise — a `last_child` pointing at any in-bounds node
+        // loads, and the first `<C-r>` from that node walks into the wrong
+        // subtree. Repair rather than reject (consistent with the path-chain
+        // repair above): clear a `last_child` that names a non-child. The
+        // path loop just ran only ever sets an ancestor's `last_child` to its
+        // on-path child, which IS in its children list, so nothing it did is
+        // undone here.
+        for slot in nodes.iter_mut().flatten() {
+            if let Some(c) = slot.last_child
+                && !slot.children.contains(&c)
+            {
+                slot.last_child = None;
+            }
+        }
         let by_seq = nodes
             .iter()
             .enumerate()
@@ -3200,6 +3216,30 @@ mod serialize_tests {
         let mut ser = headline_tree().to_serializable();
         ser.base = None;
         assert!(UndoTree::from_serializable(&ser).is_none());
+    }
+
+    /// A `last_child` naming an in-bounds node that is not one of the node's
+    /// own children is a hand-edit a `to_serializable` file could never
+    /// produce. Range validation passes it; without the repair the first
+    /// `<C-r>` from that node would walk into the wrong subtree. The loader
+    /// repairs rather than rejects (matching the path-chain repair).
+    #[test]
+    fn from_serializable_clears_last_child_that_names_a_non_child() {
+        let mut ser = headline_tree().to_serializable();
+        let cur = ser.current as usize;
+        let non_child = (0..ser.nodes.len() as u32)
+            .find(|&i| i != ser.root && !ser.nodes[cur].children.contains(&i))
+            .expect("the headline tree has an off-path node");
+        ser.nodes[cur].last_child = Some(non_child);
+        let t = UndoTree::from_serializable(&ser).expect("repair, not rejection");
+        assert_eq!(
+            t.get(t.current).last_child,
+            None,
+            "a last_child that is not a child must be cleared on load"
+        );
+        // And the structural validity of every other link survives: the tree
+        // still walks (a redo from current finds no forward branch).
+        assert!(t.current_node_seq() > 0);
     }
 
     #[test]
