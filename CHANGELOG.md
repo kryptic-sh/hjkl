@@ -32,6 +32,17 @@ patch bumps.
   cost of detection is O(10 lines), independent of file size, and no line table
   is allocated.
 
+### Performance
+
+- **Blockwise and indent/reflow operations no longer rebuild the whole buffer.**
+  `transform_block_case` (`gu`/`gU`/`g~`/`g?` over a block), block `r`,
+  `visual_replace_char`, `gq`/`gw` reflow, and the `>>`/`<<`/`==` indent family
+  collected the entire document into a `Vec<String>` per op; they now read and
+  write only the touched row range through per-row edits (one bounded Replace
+  where the row count changes). Measured on a 100k-line buffer (`--release`,
+  same probe both sides): a block case-op ~58 ms → ~0.1 ms, `gq` ~65 ms → ~0.04
+  ms, peak RSS 43 MB → 27 MB.
+
 ### Security
 
 - **`--nvim-api` / `--embed` filesystem confinement is no longer bypassable.**

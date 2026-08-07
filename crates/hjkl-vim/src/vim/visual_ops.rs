@@ -4,7 +4,7 @@
 
 use hjkl_vim_types::{InsertReason, LastChange, Mode, Motion, Operator, RangeKind, VisualExtent};
 
-use hjkl_engine::rope_util::{rope_line_to_str, rope_to_lines_vec};
+use hjkl_engine::rope_util::rope_line_to_str;
 
 use super::*;
 use crate::vim_state::{vim, vim_mut};
@@ -555,17 +555,16 @@ pub fn transform_block_case<H: hjkl_engine::types::Host>(
     right: usize,
     to_eol: bool,
 ) {
-    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
-    for r in top..=bot.min(lines.len().saturating_sub(1)) {
-        let chars: Vec<char> = lines[r].chars().collect();
+    use hjkl_buffer::{Edit, Position};
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    for r in top..=bot.min(rope.len_lines().saturating_sub(1)) {
+        let chars: Vec<char> = rope_line_to_str(&rope, r).chars().collect();
         if left >= chars.len() {
             continue;
         }
         let row_right = if to_eol { chars.len() } else { right };
         let end = (row_right + 1).min(chars.len());
-        let head: String = chars[..left].iter().collect();
         let mid: String = chars[left..end].iter().collect();
-        let tail: String = chars[end..].iter().collect();
         let transformed = match op {
             Operator::Uppercase => mid.to_uppercase(),
             Operator::Lowercase => mid.to_lowercase(),
@@ -573,11 +572,17 @@ pub fn transform_block_case<H: hjkl_engine::types::Host>(
             Operator::Rot13 => rot13_str(&mid),
             _ => mid,
         };
-        lines[r] = format!("{head}{transformed}{tail}");
+        // Replace only the block's cell span — the row's head/tail are
+        // untouched, so this is byte-identical to rebuilding the whole row.
+        ed.mutate_edit(Edit::Replace {
+            start: Position::new(r, left),
+            end: Position::new(r, end),
+            with: transformed,
+        });
     }
     let saved_yank = ed.yank();
     let saved_linewise = ed.yank_linewise();
-    ed.restore(&lines, (top, left));
+    buf_set_cursor_rc(ed.buffer_mut(), top, left);
     ed.set_yank(saved_yank);
     ed.set_yank_linewise(saved_linewise);
 }
@@ -686,20 +691,23 @@ pub fn block_replace_bounds<H: hjkl_engine::types::Host>(
 ) {
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
-    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
-    for r in top..=bot.min(lines.len().saturating_sub(1)) {
-        let chars: Vec<char> = lines[r].chars().collect();
+    use hjkl_buffer::{Edit, Position};
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    for r in top..=bot.min(rope.len_lines().saturating_sub(1)) {
+        let chars: Vec<char> = rope_line_to_str(&rope, r).chars().collect();
         if left >= chars.len() {
             continue;
         }
         let row_right = if to_eol { chars.len() } else { right };
         let end = (row_right + 1).min(chars.len());
-        let before: String = chars[..left].iter().collect();
+        // Replace only the block's cell span, as in `transform_block_case`.
         let middle: String = std::iter::repeat_n(ch, end - left).collect();
-        let after: String = chars[end..].iter().collect();
-        lines[r] = format!("{before}{middle}{after}");
+        ed.mutate_edit(Edit::Replace {
+            start: Position::new(r, left),
+            end: Position::new(r, end),
+            with: middle,
+        });
     }
-    reset_textarea_lines(ed, &lines);
     vim_mut(ed).mode = Mode::Normal;
     ed.jump_cursor(top, left);
 }
@@ -941,10 +949,11 @@ fn replace_range_with_char<H: hjkl_engine::types::Host>(
 ) {
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
-    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
-    let last_row = bot.0.min(lines.len().saturating_sub(1));
-    for (row, line) in lines.iter_mut().enumerate().take(last_row + 1).skip(top.0) {
-        let chars: Vec<char> = line.chars().collect();
+    use hjkl_buffer::{Edit, Position};
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let last_row = bot.0.min(rope.len_lines().saturating_sub(1));
+    for row in top.0..=last_row {
+        let chars: Vec<char> = rope_line_to_str(&rope, row).chars().collect();
         let lo = if !linewise && row == top.0 { top.1 } else { 0 };
         let hi = if !linewise && row == bot.0 {
             (bot.1 + 1).min(chars.len())
@@ -954,12 +963,14 @@ fn replace_range_with_char<H: hjkl_engine::types::Host>(
         if lo >= hi {
             continue;
         }
-        let before: String = chars[..lo].iter().collect();
+        // Replace only the selection's span — the row's head/tail stay put.
         let middle: String = std::iter::repeat_n(ch, hi - lo).collect();
-        let after: String = chars[hi..].iter().collect();
-        *line = format!("{before}{middle}{after}");
+        ed.mutate_edit(Edit::Replace {
+            start: Position::new(row, lo),
+            end: Position::new(row, hi),
+            with: middle,
+        });
     }
-    reset_textarea_lines(ed, &lines);
     vim_mut(ed).mode = Mode::Normal;
     ed.jump_cursor(top.0, if linewise { 0 } else { top.1 });
 }
@@ -995,16 +1006,4 @@ pub fn replay_visual_replace<H: hjkl_engine::types::Host>(
         }
         VisualExtent::Block { .. } => {}
     }
-}
-/// Replace buffer content with `lines` while preserving the cursor.
-/// Used by indent / outdent / block_replace to wholesale rewrite
-/// rows without going through the per-edit funnel.
-pub fn reset_textarea_lines<H: hjkl_engine::types::Host>(
-    ed: &mut Editor<hjkl_buffer::View, H>,
-    lines: &[String],
-) {
-    let cursor = ed.cursor();
-    hjkl_engine::types::BufferEdit::replace_all(ed.buffer_mut(), &lines.join("\n"));
-    buf_set_cursor_rc(ed.buffer_mut(), cursor.0, cursor.1);
-    ed.mark_content_dirty();
 }

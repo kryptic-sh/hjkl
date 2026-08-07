@@ -4,13 +4,12 @@
 
 use hjkl_vim_types::{Mode, Operator, RangeKind};
 
-use hjkl_engine::rope_util::rope_to_lines_vec;
-
 use super::command::{cut_vim_range_inner, read_vim_range};
 use super::*;
 use crate::vim_state::vim_mut;
 use hjkl_engine::Editor;
 use hjkl_engine::buf_helpers::{buf_line_chars, buf_row_count, buf_set_cursor_rc};
+use hjkl_engine::rope_util::rope_line_to_str;
 
 /// Resolve the range of `i<quote>` (inner quote) at the current cursor
 /// position. `quote` is one of `'"'`, `'\''`, or `` '`' ``. Returns `None`
@@ -149,12 +148,13 @@ pub fn reflow_rows<H: hjkl_engine::types::Host>(
     bot: usize,
 ) {
     let width = ed.settings().textwidth.max(1);
-    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
-    let bot = bot.min(lines.len().saturating_sub(1));
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let n = rope.len_lines();
+    let bot = bot.min(n.saturating_sub(1));
     if top > bot {
         return;
     }
-    let original = lines[top..=bot].to_vec();
+    let original: Vec<String> = (top..=bot).map(|r| rope_line_to_str(&rope, r)).collect();
     let wrapped = greedy_wrap(&original, width);
 
     // vim leaves the cursor on the last NON-BLANK line of the reflowed range
@@ -165,12 +165,35 @@ pub fn reflow_rows<H: hjkl_engine::types::Host>(
         .unwrap_or(0);
     let last_row = top + last_offset;
 
-    // Splice back. push_undo above means `u` reverses.
-    let after: Vec<String> = lines.split_off(bot + 1);
-    lines.truncate(top);
-    lines.extend(wrapped);
-    lines.extend(after);
-    ed.restore(&lines, (last_row, 0));
+    // Splice the reflowed rows back with ONE bounded Replace — the row count
+    // changes, so a per-row edit can't express it. The span runs through the
+    // newline after `bot`; when `bot` IS the buffer's last row the span
+    // instead swallows the newline BEFORE `top` (mirroring
+    // `Editor::splice_row_range`), so a trailing newline is never doubled
+    // nor dropped. push_undo above means `u` reverses.
+    use hjkl_buffer::{Edit, Position};
+    let joined = wrapped.join("\n");
+    let (start, end, with) = if bot + 1 < n {
+        (
+            Position::new(top, 0),
+            Position::new(bot, buf_line_chars(ed.buffer(), bot)),
+            joined,
+        )
+    } else if top > 0 {
+        (
+            Position::new(top - 1, buf_line_chars(ed.buffer(), top - 1)),
+            Position::new(bot, buf_line_chars(ed.buffer(), bot)),
+            format!("\n{joined}"),
+        )
+    } else {
+        (
+            Position::new(0, 0),
+            Position::new(bot, buf_line_chars(ed.buffer(), bot)),
+            joined,
+        )
+    };
+    ed.mutate_edit(Edit::Replace { start, end, with });
+    buf_set_cursor_rc(ed.buffer_mut(), last_row, 0);
     move_first_non_whitespace(ed);
     ed.mark_content_dirty();
 }
@@ -183,19 +206,40 @@ pub fn reflow_rows_keep_cursor<H: hjkl_engine::types::Host>(
     bot: usize,
 ) -> (Vec<String>, Vec<String>) {
     let width = ed.settings().textwidth.max(1);
-    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
-    let bot = bot.min(lines.len().saturating_sub(1));
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let n = rope.len_lines();
+    let bot = bot.min(n.saturating_sub(1));
     if top > bot {
         return (Vec::new(), Vec::new());
     }
-    let original = lines[top..=bot].to_vec();
+    let original: Vec<String> = (top..=bot).map(|r| rope_line_to_str(&rope, r)).collect();
     let wrapped = greedy_wrap(&original, width);
 
-    let after: Vec<String> = lines.split_off(bot + 1);
-    lines.truncate(top);
-    lines.extend(wrapped.clone());
-    lines.extend(after);
-    ed.restore(&lines, (top, 0));
+    // Same single bounded splice as `reflow_rows` — see that fn for the
+    // boundary-newline rationale.
+    use hjkl_buffer::{Edit, Position};
+    let joined = wrapped.join("\n");
+    let (start, end, with) = if bot + 1 < n {
+        (
+            Position::new(top, 0),
+            Position::new(bot, buf_line_chars(ed.buffer(), bot)),
+            joined,
+        )
+    } else if top > 0 {
+        (
+            Position::new(top - 1, buf_line_chars(ed.buffer(), top - 1)),
+            Position::new(bot, buf_line_chars(ed.buffer(), bot)),
+            format!("\n{joined}"),
+        )
+    } else {
+        (
+            Position::new(0, 0),
+            Position::new(bot, buf_line_chars(ed.buffer(), bot)),
+            joined,
+        )
+    };
+    ed.mutate_edit(Edit::Replace { start, end, with });
+    buf_set_cursor_rc(ed.buffer_mut(), top, 0);
     ed.mark_content_dirty();
     (original, wrapped)
 }
@@ -377,16 +421,20 @@ pub fn indent_rows<H: hjkl_engine::types::Host>(
         let spaces = width % tabstop;
         format!("{}{}", "\t".repeat(tabs), " ".repeat(spaces))
     };
-    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
-    let bot = bot.min(lines.len().saturating_sub(1));
-    for line in lines.iter_mut().take(bot + 1).skip(top) {
-        if !line.is_empty() {
-            line.insert_str(0, &pad);
+    use hjkl_buffer::{Edit, Position};
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let bot = bot.min(rope.len_lines().saturating_sub(1));
+    for r in top..=bot {
+        if !rope_line_to_str(&rope, r).is_empty() {
+            ed.mutate_edit(Edit::InsertStr {
+                at: Position::new(r, 0),
+                text: pad.clone(),
+            });
         }
     }
     // Restore cursor to first non-blank of the top row so the next
     // vertical motion aims sensibly — matches vim's `>>` convention.
-    ed.restore(&lines, (top, 0));
+    buf_set_cursor_rc(ed.buffer_mut(), top, 0);
     move_first_non_whitespace(ed);
 }
 /// Render `width` display columns of indent that will START at display
@@ -437,17 +485,24 @@ pub fn indent_block<H: hjkl_engine::types::Host>(
     let width = ed.settings().shiftwidth.saturating_mul(count.max(1));
     let expandtab = ed.settings().expandtab;
     let tabstop = ed.settings().tabstop.max(1);
-    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
-    let bot = bot.min(lines.len().saturating_sub(1));
-    for line in lines.iter_mut().take(bot + 1).skip(top) {
+    use hjkl_buffer::{Edit, Position};
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let bot = bot.min(rope.len_lines().saturating_sub(1));
+    for r in top..=bot {
+        let line = rope_line_to_str(&rope, r);
         if line.chars().count() < left {
             continue;
         }
-        let at_col = hjkl_buffer::geom::char_col_to_visual_col(line, left, tabstop);
-        let byte = line.char_indices().nth(left).map_or(line.len(), |(i, _)| i);
-        line.insert_str(byte, &indent_fill(at_col, width, expandtab, tabstop));
+        let at_col = hjkl_buffer::geom::char_col_to_visual_col(&line, left, tabstop);
+        // `left` doubles as the char index of the insert point: the byte
+        // `char_indices().nth(left)` points at IS the `left`-th char.
+        let fill = indent_fill(at_col, width, expandtab, tabstop);
+        ed.mutate_edit(Edit::InsertStr {
+            at: Position::new(r, left),
+            text: fill,
+        });
     }
-    ed.restore(&lines, (top, left));
+    buf_set_cursor_rc(ed.buffer_mut(), top, left);
 }
 
 /// Blockwise `<` — remove up to `count * shiftwidth` display columns of
@@ -468,19 +523,22 @@ pub fn outdent_block<H: hjkl_engine::types::Host>(
     ed.sync_buffer_content_from_textarea();
     let width = ed.settings().shiftwidth.saturating_mul(count.max(1));
     let tabstop = ed.settings().tabstop.max(1);
-    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
-    let bot = bot.min(lines.len().saturating_sub(1));
-    for line in lines.iter_mut().take(bot + 1).skip(top) {
+    use hjkl_buffer::{Edit, Position};
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let bot = bot.min(rope.len_lines().saturating_sub(1));
+    for r in top..=bot {
+        let line = rope_line_to_str(&rope, r);
         if line.chars().count() < left {
             continue;
         }
-        let start_col = hjkl_buffer::geom::char_col_to_visual_col(line, left, tabstop);
+        let start_col = hjkl_buffer::geom::char_col_to_visual_col(&line, left, tabstop);
         let target = start_col + width;
-        let start_byte = line.char_indices().nth(left).map_or(line.len(), |(i, _)| i);
         let mut col = start_col;
-        let mut end_byte = start_byte;
+        // Char-index twin of the old byte-walk: the removed span
+        // `[left, end)` holds exactly the whitespace chars consumed below.
+        let mut end = left;
         let mut leftover = 0usize;
-        for ch in line[start_byte..].chars() {
+        for ch in line.chars().skip(left) {
             if !matches!(ch, ' ' | '\t') || col >= target {
                 break;
             }
@@ -489,7 +547,7 @@ pub fn outdent_block<H: hjkl_engine::types::Host>(
             } else {
                 col + 1
             };
-            end_byte += ch.len_utf8();
+            end += 1;
             if next_col > target {
                 // The tab straddles the boundary — keep the columns past it.
                 leftover = next_col - target;
@@ -497,11 +555,15 @@ pub fn outdent_block<H: hjkl_engine::types::Host>(
             }
             col = next_col;
         }
-        if end_byte > start_byte {
-            line.replace_range(start_byte..end_byte, &" ".repeat(leftover));
+        if end > left {
+            ed.mutate_edit(Edit::Replace {
+                start: Position::new(r, left),
+                end: Position::new(r, end),
+                with: " ".repeat(leftover),
+            });
         }
     }
-    ed.restore(&lines, (top, left));
+    buf_set_cursor_rc(ed.buffer_mut(), top, left);
 }
 
 /// Remove up to `count * shiftwidth` leading spaces (or tabs) from
@@ -516,9 +578,11 @@ pub fn outdent_rows<H: hjkl_engine::types::Host>(
     ed.sync_buffer_content_from_textarea();
     let width = ed.settings().shiftwidth.saturating_mul(count.max(1));
     let tabstop = ed.settings().tabstop.max(1);
-    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
-    let bot = bot.min(lines.len().saturating_sub(1));
-    for line in lines.iter_mut().take(bot + 1).skip(top) {
+    use hjkl_buffer::{Edit, MotionKind, Position};
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let bot = bot.min(rope.len_lines().saturating_sub(1));
+    for r in top..=bot {
+        let line = rope_line_to_str(&rope, r);
         let mut strip = 0;
         let mut visual_width = 0;
         for ch in line.chars() {
@@ -533,14 +597,18 @@ pub fn outdent_rows<H: hjkl_engine::types::Host>(
             if next_width > width {
                 break;
             }
-            strip += ch.len_utf8();
+            strip += 1;
             visual_width = next_width;
         }
         if strip > 0 {
-            line.drain(..strip);
+            ed.mutate_edit(Edit::DeleteRange {
+                start: Position::new(r, 0),
+                end: Position::new(r, strip),
+                kind: MotionKind::Char,
+            });
         }
     }
-    ed.restore(&lines, (top, 0));
+    buf_set_cursor_rc(ed.buffer_mut(), top, 0);
     move_first_non_whitespace(ed);
 }
 /// Count the number of open/close bracket pairs on a single line for the
@@ -652,24 +720,37 @@ pub fn auto_indent_rows<H: hjkl_engine::types::Host>(
         "\t".to_string()
     };
 
-    let mut lines: Vec<String> = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
-    let bot = bot.min(lines.len().saturating_sub(1));
+    use hjkl_buffer::{Edit, Position};
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let bot = bot.min(rope.len_lines().saturating_sub(1));
 
     // Accumulate bracket depth from row 0 up to `top - 1` so we start with
     // the correct depth for the first line of the target range.
     let mut depth: i32 = 0;
-    for line in lines.iter().take(top) {
-        depth += bracket_net(line);
+    for r in 0..top {
+        let line = rope_line_to_str(&rope, r);
+        depth += bracket_net(&line);
         if depth < 0 {
             depth = 0;
         }
     }
 
-    for line in lines.iter_mut().take(bot + 1).skip(top) {
+    for r in top..=bot {
+        let line = rope_line_to_str(&rope, r);
+        let line_chars = line.chars().count();
         let trimmed_owned = line.trim_start().to_owned();
         // Empty / whitespace-only lines stay empty.
         if trimmed_owned.is_empty() {
-            *line = String::new();
+            // Only whitespace-only lines need an edit — a truly empty line is
+            // already the target text (the old whole-buffer restore rewrote it
+            // to the same "").
+            if !line.is_empty() {
+                ed.mutate_edit(Edit::Replace {
+                    start: Position::new(r, 0),
+                    end: Position::new(r, line_chars),
+                    with: String::new(),
+                });
+            }
             // depth contribution from an empty line is zero; no bracket scan needed.
             continue;
         }
@@ -715,11 +796,15 @@ pub fn auto_indent_rows<H: hjkl_engine::types::Host>(
             depth = 0;
         }
 
-        *line = new_line;
+        ed.mutate_edit(Edit::Replace {
+            start: Position::new(r, 0),
+            end: Position::new(r, line_chars),
+            with: new_line,
+        });
     }
 
     // Restore cursor to the first non-blank of `top` (vim parity for `==`).
-    ed.restore(&lines, (top, 0));
+    buf_set_cursor_rc(ed.buffer_mut(), top, 0);
     move_first_non_whitespace(ed);
     // Record the touched row range so the host can display a visual flash.
     ed.set_last_indent_range(Some((top, bot)));
@@ -757,7 +842,7 @@ pub fn clamp_cursor_to_normal_mode<H: hjkl_engine::types::Host>(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_case_op_to_selection, outdent_rows, toggle_case_str};
+    use super::{apply_case_op_to_selection, outdent_rows, reflow_rows, toggle_case_str};
     use hjkl_buffer::{View, rope_line_str};
     use hjkl_engine::{DefaultHost, Editor, Options};
 
@@ -779,6 +864,85 @@ mod tests {
         outdent_rows(&mut ed, 0, 0, 1);
 
         assert_eq!(rope_line_str(&ed.buffer().rope(), 0), "\tfoo");
+    }
+
+    // ── reflow splice boundaries ─────────────────────────────────────────────
+
+    /// `gq` over a mid-buffer range replaces only the range; the trailing
+    /// newline and the rows after it are byte-identical. The wrap changes the
+    /// row count, so the splice must express the new rows through ONE bounded
+    /// Replace (a per-row edit cannot).
+    #[test]
+    fn reflow_rows_mid_buffer_range() {
+        let options = Options {
+            textwidth: 4,
+            ..Options::default()
+        };
+        let mut ed = Editor::new(
+            View::from_str("a b c d e f g h\nTAIL\n"),
+            DefaultHost::new(),
+            options,
+        );
+        reflow_rows(&mut ed, 0, 0);
+        let rope = ed.buffer().rope();
+        assert_eq!(rope_line_str(&rope, 0), "a b");
+        assert_eq!(rope_line_str(&rope, 1), "c d");
+        assert_eq!(rope_line_str(&rope, 2), "e f");
+        assert_eq!(rope_line_str(&rope, 3), "g h");
+        assert_eq!(rope_line_str(&rope, 4), "TAIL");
+    }
+
+    /// `gq` over the last row with rows above it: the splice swallows the
+    /// newline before `top` rather than doubling or dropping a terminator.
+    #[test]
+    fn reflow_rows_last_row_keeps_preceding_separator() {
+        let options = Options {
+            textwidth: 4,
+            ..Options::default()
+        };
+        let mut ed = Editor::new(
+            View::from_str("KEEP\na b c d e"),
+            DefaultHost::new(),
+            options,
+        );
+        reflow_rows(&mut ed, 1, 1);
+        let rope = ed.buffer().rope();
+        assert_eq!(rope_line_str(&rope, 0), "KEEP");
+        assert_eq!(rope_line_str(&rope, 1), "a b");
+        assert_eq!(rope_line_str(&rope, 2), "c d");
+        assert_eq!(rope_line_str(&rope, 3), "e");
+    }
+
+    /// Whole-buffer `gq` (top 0, bot the only row): no preceding separator to
+    /// steal.
+    #[test]
+    fn reflow_rows_whole_buffer() {
+        let options = Options {
+            textwidth: 4,
+            ..Options::default()
+        };
+        let mut ed = Editor::new(View::from_str("a b c d e"), DefaultHost::new(), options);
+        reflow_rows(&mut ed, 0, 0);
+        let rope = ed.buffer().rope();
+        assert_eq!(rope_line_str(&rope, 0), "a b");
+        assert_eq!(rope_line_str(&rope, 1), "c d");
+        assert_eq!(rope_line_str(&rope, 2), "e");
+    }
+
+    /// A trailing newline survives a whole-buffer reflow (phantom last row).
+    #[test]
+    fn reflow_rows_preserves_trailing_newline() {
+        let options = Options {
+            textwidth: 4,
+            ..Options::default()
+        };
+        let mut ed = Editor::new(View::from_str("a b c d e\n"), DefaultHost::new(), options);
+        reflow_rows(&mut ed, 0, 0);
+        let rope = ed.buffer().rope();
+        assert_eq!(rope_line_str(&rope, 0), "a b");
+        assert_eq!(rope_line_str(&rope, 1), "c d");
+        assert_eq!(rope_line_str(&rope, 2), "e");
+        assert_eq!(rope_line_str(&rope, 3), "");
     }
 
     // ── case operators must not touch registers / clipboard ──────────────────
