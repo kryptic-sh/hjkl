@@ -1879,25 +1879,27 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         } else {
             (start, end)
         };
-        // NOTE: only the WORD objects stay blockwise here (handled above —
-        // the block keeps its rows and the cursor extends its columns to the
-        // object end); everything else still collapses out of blockwise
-        // visual, and that is not always what vim does. Measured on neovim
-        // 0.12.4 from a `<C-v>j` block:
+        // NOTE: only the WORD objects stay blockwise and EXTEND the block
+        // (handled above — the block keeps its rows and the cursor extends
+        // its columns to the object end); BRACKET and TAG objects are
+        // selection no-ops, and paragraph / sentence still collapse out of
+        // blockwise visual. Measured on neovim 0.12.4 from a `<C-v>j` block:
         //
         //   - `iw` / `aw` / `iW` / `aW` / `ip` / `is` stay BLOCKWISE and just
         //     extend the cursor (so the block keeps its rows and takes the
         //     object's columns);
-        //   - `ib` / `ab` / `iB` collapse to charwise AND to the cursor's
-        //     single row, which is what this branch does;
-        //   - `i"` / `it` do nothing at all.
+        //   - `ib` / `ab` / `iB` / `it` leave the block EXACTLY as the block
+        //     motion made it — mode stays visual_block, cursor keeps the
+        //     post-motion position; the object is found but the selection
+        //     does not change (`<C-v>jib~` flips the same cells as
+        //     `<C-v>j~`). hjkl used to collapse these to charwise;
+        //   - `i"` does nothing at all (the object is not found from a block
+        //     at the measured position).
         //
         // So the remaining mismatches — paragraph / sentence (collapse where
-        // nvim stays blockwise) and tags (collapse where nvim does nothing) —
-        // stay tracked in docs/backlog.md §1.5b. Quotes already no-op in hjkl
-        // too at the measured position (the object is not found from the
-        // block), matching nvim. The word objects additionally write
-        // `block_vcol` so `block_bounds` sees the new column.
+        // nvim stays blockwise) — stay tracked in docs/backlog.md §1.5b.
+        // Quotes already no-op in hjkl too. The word objects additionally
+        // write `block_vcol` so `block_bounds` sees the new column.
         if crate::vim_state::vim(self).mode == FsmMode::VisualBlock {
             // Word objects keep the selection blockwise: the block spans
             // anchor-column..object-end-column, matching nvim.
@@ -1906,6 +1908,13 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 self.jump_cursor(er, ec);
                 crate::vim_state::vim_mut(self).block_vcol = ec;
                 crate::vim_state::vim_mut(self).block_to_eol = false;
+                return;
+            }
+            // Bracket and tag objects are selection no-ops in blockwise
+            // visual (nvim-measured): return without touching mode or
+            // cursor. `end` was computed above but is deliberately unused —
+            // the block keeps the post-motion geometry.
+            if let TextObject::Bracket(_) | TextObject::XmlTag = obj {
                 return;
             }
             match kind {

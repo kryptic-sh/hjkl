@@ -87,6 +87,12 @@ patch bumps.
   Inside `[...]` all eight class escapes are now the LITERAL set {`\`, letter} —
   measured against neovim 0.12.4, which also corrects the earlier `[\a]`/`[\A]`
   "alphabetic range" translation, which nvim does not do.
+- **Bracket and tag text objects no longer collapse a blockwise selection.**
+  `ib` / `ab` / `iB` / `it` in `<C-v>` blockwise visual used to collapse to
+  charwise and flip/outdent whole lines; neovim 0.12.4 keeps the block exactly
+  as the block motion made it — the object is found but the selection does not
+  change (`<C-v>jib~` flips the same cells as `<C-v>j~`). Word objects still
+  extend the block. Pinned by four new corpus cases measured against neovim.
 
 - **`:retab` no longer panics (divide-by-zero) after a `# vim: ts=0` modeline.**
   The settings-sourced tabstop is clamped to ≥1 like every other consumer;

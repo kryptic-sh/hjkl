@@ -216,3 +216,45 @@ keys = "<C-v>ji\""
 expected_buffer = "a\"hello\nworld\"b\n"
 expected_cursor = [1, 0]
 expected_mode = "visual_block"
+
+# ── blockwise visual + bracket/tag objects are selection NO-OPS ─────────────
+# neovim 0.12.4 keeps the block exactly as the block motion made it: mode
+# stays visual_block and the cursor keeps the post-motion position. The
+# object is found but the selection does not change — `<C-v>jib~` flips the
+# same cells as `<C-v>j~`. hjkl used to collapse these to charwise, which
+# flipped the whole lines. Verified against neovim 0.12.4 via dfcase.
+
+[[cases]]
+name = "blockwise_ib_keeps_block_mode"
+initial_buffer = "(ab\ncd)\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jib"
+expected_buffer = "(ab\ncd)\n"
+expected_cursor = [1, 0]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_ib_tilde_flips_plain_block"
+initial_buffer = "(ab\ncd)\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jib~"
+expected_buffer = "(ab\nCd)\n"
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_ab_keeps_block_mode"
+initial_buffer = "(x\ny)\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jab"
+expected_buffer = "(x\ny)\n"
+expected_cursor = [1, 0]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_it_noop"
+initial_buffer = "<a>x\ny</a>\n"
+initial_cursor = [0, 3]
+keys = "<C-v>jit"
+expected_buffer = "<a>x\ny</a>\n"
+expected_cursor = [1, 3]
+expected_mode = "visual_block"
