@@ -19,6 +19,12 @@
 //!    The caller polls `handle.try_recv()` each tick and calls
 //!    `complete_load` when the handle resolves.
 //!
+//! Remote loading can be disabled with [`LanguageDirectory::set_allow_remote`]
+//! (the default `new()` allows it). When disabled, a true miss returns
+//! `GrammarRequest::Unknown` instead of firing a clone+compile, so a remote
+//! caller cannot force network fetch+compile+`dlopen` on demand. The cache
+//! and on-disk fast paths above keep working unchanged.
+//!
 //! # Example
 //!
 //! ```
@@ -79,6 +85,10 @@ pub struct LanguageDirectory {
     registry: GrammarRegistry,
     async_loader: AsyncGrammarLoader,
     cache: Mutex<HashMap<String, Arc<Grammar>>>,
+    /// Whether a true miss may kick off a network clone+compile. Default
+    /// `true`; set `false` when the process must never fetch grammars from
+    /// the network (restricted RPC modes).
+    allow_remote: bool,
 }
 
 impl LanguageDirectory {
@@ -92,7 +102,17 @@ impl LanguageDirectory {
             registry,
             async_loader,
             cache: Mutex::new(HashMap::new()),
+            allow_remote: true,
         })
+    }
+
+    /// Control whether a true miss may kick off a background clone+compile
+    /// (network fetch + `$CC` build + install + `dlopen`). Default `true`.
+    /// Callers that restrict filesystem access (the RPC entry points) set this
+    /// to `false` so a remote caller cannot force grammar compilation on
+    /// demand; the cache and on-disk installed tiers keep working either way.
+    pub fn set_allow_remote(&mut self, allow: bool) {
+        self.allow_remote = allow;
     }
 
     // ── Async-friendly API (UI-thread callers) ────────────────────────────────
@@ -153,6 +173,12 @@ impl LanguageDirectory {
         }
 
         // Slow path: kick off (or subscribe to) a background clone+compile.
+        // Gated: when remote loading is disabled (restricted RPC modes), a
+        // true miss stays a miss — plain text for this buffer, and no
+        // network fetch+compile the remote caller could trigger on demand.
+        if !self.allow_remote {
+            return GrammarRequest::Unknown;
+        }
         let handle = self
             .async_loader
             .load_async(name, spec.clone(), meta.clone());
@@ -260,5 +286,20 @@ mod tests {
         for _ in 0..10 {
             let _ = dir.request_by_name("nolang");
         }
+    }
+
+    #[test]
+    fn disabled_remote_loading_never_returns_loading() {
+        // With remote loading off (as the restricted RPC modes set it), a true
+        // miss must resolve to Unknown — never a network clone+compile. The
+        // result may be Cached if "rust" happens to be installed on disk;
+        // either way it must not be Loading.
+        let mut dir = LanguageDirectory::new().unwrap();
+        dir.set_allow_remote(false);
+        let result = dir.request_by_name("rust");
+        assert!(
+            !matches!(result, GrammarRequest::Loading { .. }),
+            "remote loading disabled but request_by_name(\"rust\") returned Loading"
+        );
     }
 }

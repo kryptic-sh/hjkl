@@ -2250,7 +2250,14 @@ impl App {
         // (hjkl-bonsai's bundled DotFallbackTheme is left untouched
         // for other consumers).
         let theme = crate::theme::AppTheme::default_dark();
-        let directory = std::sync::Arc::new(hjkl_lang::LanguageDirectory::new()?);
+        let mut directory = hjkl_lang::LanguageDirectory::new()?;
+        if hjkl_engine::policy::fs_restricted() {
+            // Restricted RPC modes (`--nvim-api` / `--embed`): never let a
+            // remote caller force a network clone+compile+dlopen on demand —
+            // resolve grammars from the cache / on-disk tiers only.
+            directory.set_allow_remote(false);
+        }
+        let directory = std::sync::Arc::new(directory);
         let mut syntax = syntax::layer_with_theme(theme.syntax.clone(), directory.clone());
         let buffer_id: BufferId = 1;
         // App::new uses bundled config defaults; main wires the XDG-merged
