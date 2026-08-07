@@ -34,10 +34,6 @@ constraints.
   case, and `u` / `<C-r>`, are distance 1.
 - **A freshly deserialized undofile has no keyframes**, so its first deep jump
   is O(depth). Eager construction may waste work and memory; not measured.
-- `from_serializable` normalises `last_child` along the loaded root->current
-  chain. A file written by `to_serializable` already agrees, so it is a no-op
-  there — but a hand-edited or truncated undofile used to be repaired by the
-  next full-chain rewrite, and nothing repairs it now.
 - **Considered and declined: renumbering `depth` in `prune_root_side`
   (2026-08-03).** When the root's on-path child is promoted, it keeps its
   original `depth` instead of restarting at 0 the way `clear_all` does. That is
@@ -171,12 +167,11 @@ Left undone by the injected-folds work (2026-08-03), all in
   macro body and yielded 2 extra folds on that file. If this ever shows up in a
   keystroke profile, the cheap lever is a setting to disable injected folds, or
   skipping regions whose language equals the host's.
-- **`resolve` can block.** `SyntaxLayer::extract_fold_ranges` passes
-  `LanguageDirectory::by_name`, which clones + compiles a grammar on first use.
-  Same exposure the highlight path already has (`walk_rows` passes the same
-  closure), and it is gated behind `builtin_folds(lang).is_some()` so only
-  foldable languages can trigger it — but a fold pass CAN now be what fetches a
-  grammar. A cache-only lookup would need a new `LanguageDirectory` method.
+- **`resolve` can block.** The highlight path's exposure is accepted; the fold
+  path's was closed 2026-08-07 (`45aab1cc`): the injected-folds pass now
+  resolves via the new cache-only `LanguageDirectory::by_name_cached`, so a fold
+  pass can never be the trigger for a clone+compile+fetch. An unloaded injected
+  region contributes no folds until the highlight path loads it.
 - **An injected fold that starts on a host fold's start row is dropped.** The
   `by_start` map keeps the widest span, unchanged from before. Deliberate:
   `View::set_auto_folds` keys folds by start row too, so the second one could
@@ -303,49 +298,50 @@ neovim 0.12.4 (word mode + `~`/`<` consequences, quote no-op).
 The 2026-08-04 behaviour table was re-measured against neovim 0.12.4 during that
 work, and two of its rows did not reproduce at the positions probed:
 
-- **Brackets (`ib`/`ab`/`iB`) stayed BLOCKWISE in nvim** at every position
-  probed (`(x\ny)`, `(ab\ncd)`, `a(b\nc)d`, cursors on rows 0 and 1) — the
-  "collapses to charwise AND to the cursor's single row" claim, and the
-  `<C-v>jib` cursor-on-row-0 claim, did not reproduce. hjkl still collapses them
-  (or no-ops when the object is not found, e.g. cursor on `d` outside the parens
-  — there hjkl and nvim already agree).
+- **Brackets (`ib`/`ab`/`iB`) and tags (`it`) fixed 2026-08-07 (`ddc81797`).**
+  They stayed BLOCKWISE in nvim at every position probed (`(x\ny)`, `(ab\ncd)`,
+  `a(b\nc)d`, `<a>x\ny</a>`, cursors on rows 0 and 1) — and the block is a
+  selection NO-OP: the object is found but mode stays `visual_block` and the
+  cursor keeps the post-motion position (`<C-v>jib~` flips the same cells as
+  `<C-v>j~`). hjkl now returns without touching mode or cursor for
+  `TextObject::Bracket` / `TextObject::XmlTag` in blockwise visual; the NOTE at
+  `visual_text_obj_extend` was corrected (it claimed brackets collapse — that
+  row of the 2026-08-04 table did not reproduce). Four corpus cases pinned
+  against neovim 0.12.4.
 - **Quotes (`i"`) no-op on both sides** at the measured position
   (`a"hello\nworld"b`, cursor inside the content) — hjkl's `text_object_range`
   returns no object from that row, so hjkl already matches nvim. Pinned by the
   `blockwise_quote_obj_noop` corpus case.
-- **Tags (`it`) collapse in hjkl, no-op in nvim** at the measured position
-  (`<a>x\ny</a>`, cursor inside the content): hjkl goes charwise and `~` flips
-  both rows, nvim flips only the cursor row.
 - **`ip`/`is` stay blockwise in nvim but hjkl collapses** (to visual-line /
   visual). The cursor lands identically, but the block's column/row EXTENT after
   the object is not yet measured per position (`<C-v>jip~` on `"one\n\ntwo"`
   flipped both paragraphs' first word in nvim, which is more than "rows kept,
   cursor extends") — so the fix shape is not yet determined.
 
-Open per-object routing for paragraph / sentence / brackets / tags; each needs
-its measured corpus cases first. The word-object code documents this in the NOTE
-comment at `visual_text_obj_extend`.
+Open per-object routing for paragraph / sentence; each needs its measured corpus
+cases first. The word-object code documents this in the NOTE comment at
+`visual_text_obj_extend`.
 
 **`H` / `L` / `gE` in blockwise visual still diverge on motion and cursor.**
 `<C-v>H>` is the standing repro. Blockwise `~` is correct.
 
-**Every edit clones its payload for the change log.** `editor::edit_to_editops`
-does `replacement: text.clone()` for `InsertStr` / `Replace`, so a paste holds
-the payload roughly three times at peak: the `yank.repeat(count)` (or the
-linewise `join` + `format!`), this clone, and the rope's own copy. That is the
-~3.1x charwise / ~4.1x linewise peak-RSS multiple measured on 2026-08-02 —
-linewise pays the extra copy because it builds the repeated text and then
-re-wraps it with a newline. `ContentEdit` fan-out is coordinates only and costs
-nothing, so this clone is the one lever worth pulling. Making the change log
-carry an `Arc<str>` (or borrow) would remove one whole payload copy from every
-edit, not just paste. Not attempted: it changes a type the change log's
-consumers read, so it is its own change rather than a paste fix.
+**Every edit used to clone its payload for the change log — closed 2026-08-07
+(`1f062fe0`), but not the way the note below proposed.** The `Vec<EngineEdit>`
+built per edit had NO consumer anywhere in hjkl or its checked-out siblings
+(every `take_changes` call site is a test), and the proposed `Arc<str>` in the
+log would not have reduced the paste peak anyway: the payload is freshly built
+per paste, so an `Arc::from` still copies. The log is now opt-in
+(`View::set_change_log_enabled`, default OFF) and `mutate_edit` skips
+`edit_to_editops` entirely when unsubscribed — measured peak RSS 651 MB → 456 MB
+on the paste path, 45 MB → 18 MB on a keystroke burst. The 2026-08-02
+~3.1x/~4.1x peak-RSS multiple is gone. The public API is unchanged.
 
 **Left open by the blockwise-paste rewrite (2026-08-02).**
 
-- **`visual_paste` was not examined.** Its blockwise branch may still carry the
-  whole-document `Vec<String>` rebuild that was removed from `do_block_paste`;
-  nothing there was read or measured.
+- **`visual_paste` was examined 2026-08-07 and cleared.** Neither it nor
+  `do_block_paste` (`vim/command.rs`) uses `rope_to_lines_vec` — they build
+  yank-sized `segments`/`chunks`, never a whole-document `Vec<String>`. The §1.7
+  suspicion did not reproduce.
 - **`content()` hides trailing-newline bugs from unit tests.** It appends a
   newline when the rope lacks one, so a paste that eats the buffer's terminator
   compares equal through it. That is why the first version of the rewrite passed
@@ -361,12 +357,15 @@ in both post-mutation sync paths (`App::drain_engine_errors`). An empty register
 is still silent (vim says nothing there either), and nothing rate-limits the
 queue, so code that pushes per-iteration would flood the toast bar.
 
-**A corpus case cannot pin a value when nvim is absent.** Every oracle test
-skips wholesale without nvim, so the corpus expectations guard nothing on a
-machine that has no neovim — including CI lanes that do not install it. The
-`expected_*` fields are all checked against nvim's outcome
-(`diff.rs::run_single`), but nothing compares hjkl against the authored values
-on its own.
+**A corpus case could not pin a value when nvim was absent — closed 2026-08-07
+(`6cddabde`).** `run_single` now runs the hjkl driver first and, when nvim is
+missing, compares its outcome against the authored `expected_*` fields — a real
+pass-or-mismatch instead of a wholesale skip (every case carries an
+`expected_buffer`). The corpus tests' nvim early-returns are gone (the five
+author-error tests keep theirs, since they sanity-check nvim itself); verified
+by running the whole corpus with nvim hidden from PATH: 75/75 pass via the
+fallback. The `expected_*` fields now guard hjkl on every machine, CI lanes
+without neovim included.
 
 **The `:s` curswant fix has no oracle case.** It is covered by two unit tests in
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
@@ -403,6 +402,18 @@ the oracle divergence counts were unchanged. Remaining phases:
    and reduce `apply_sticky_col` to the vertical clamp.
 5. Report counts by `Move` variant and justify every `Move::Raw` site. Keep the
    compat oracle and PTY e2e behavior unchanged.
+
+**Assessment 2026-08-07: needs-guidance, not started.** Phase 2 is the backlog's
+largest item (~100 `buf_set_cursor_rc` write sites across the vim layer) and was
+not attempted this round: the shipped debug invariant deliberately does NOT
+check insert/visual/operator cursor moves (the curswant.rs doc enumerates them
+as a different bug class), so nothing in the gate distinguishes a correct
+per-site `Move` classification from a mechanical `Raw` translation — the exact
+failure the §5 note warns "would compile while preserving the bug class". A
+rushed full pass would ship that silently. The phases exist to widen the
+invariant after each class is clean, which makes it inherently multi-session;
+the honest next step is one dedicated session on the insert path with the
+invariant widened per class.
 
 Design and measured violation classes are in §5.
 
@@ -467,10 +478,20 @@ unknown.
   so `:!git commit` or `:!less` cannot work. Vim suspends the TUI and passes the
   terminal through. Either implement the suspend or document the limitation on
   `:!`.
-- **The trash directory has no reaper.** `$XDG_CACHE_HOME/hjkl/trash/` grows
-  without bound and `MAX_RETRIES = 1000` means the 1001st deletion of a
-  same-named file fails rather than recycling a slot. 0.40.0 documented this;
-  nothing reclaims it.
+- **The trash directory has no reaper — NEEDS A DECISION (assessed
+  2026-08-07).** `$XDG_CACHE_HOME/hjkl/trash/` grows without bound and
+  `MAX_RETRIES = 1000` means the 1001st deletion of a same-named file fails
+  rather than recycling a slot. But `crates/hjkl-app/src/trash.rs` documents the
+  no-reaper behavior as DELIBERATE: "the whole point of trashing rather than
+  deleting is that the editor does not get to decide when the data is gone", and
+  the slot-exhaustion failure as "the intended failure mode — a full trash
+  surfaces as a failed delete, not as a silent overwrite of something the user
+  still has". A reaper contradicts that stated contract, so the decision is the
+  user's: keep the documented design (do nothing), add an explicit
+  `:Trash`-style command, or cap by count/size with a clearly-labeled policy.
+  The slot-exhaustion half alone (a naming scheme that cannot collide) is
+  fixable without deleting anything, but the "intended failure mode" doc would
+  need updating too.
 - **Mutex-poisoning policy is documented, not enforced.** `buffer.rs` now states
   that `lock().unwrap()` on buffer state is deliberate and a poisoned lock is
   fatal. The ~110 call sites are unchanged, so one panic while any of those
@@ -646,9 +667,10 @@ with ripgrep installed are unaffected.
     Deliberately not done.
 
 - **Full-buffer allocation on motions and rectangular edits (2026-08-03).** Each
-  of these rebuilds the whole document into a `Vec` for an edit or query whose
-  extent is small. None is a correctness bug and none is measured; they are
-  recorded so the next perf pass has the list.
+  of these rebuilt the whole document into a `Vec` for an edit or query whose
+  extent is small. None was a correctness bug and none was measured; the
+  2026-08-07 pass fixed the whole family (see the Record) with row-range
+  reads/writes:
   - `vim::text_object::sentence_step_forward` collected the entire buffer into a
     `Vec<Vec<char>>` on every `)` keystroke — fixed 2026-08-06 (`8a7f3613`): it
     now reuses the row-by-row forward scan extracted from `sentence_boundary`
@@ -658,11 +680,16 @@ with ripgrep installed are unaffected.
     the scan must visit every row either way, and the shared per-row closures
     collect each row a few times — the same shape `(`'s backward scan already
     ships with. If it ever matters, cache each row once per loop.
-  - `vim::visual_ops::transform_block_case` and
-    `vim::visual_ops::block_replace_bounds` collect a full `Vec<String>` via
-    `rope_to_lines_vec` to edit one rectangle.
-  - `vim::text_object_ops`' `reflow_rows` and its bounds helper do the same for
-    a `gq` over a row range.
+  - `vim::visual_ops::transform_block_case`, `block_replace_bounds` and
+    `visual_replace_char`, `vim::text_object_ops::reflow_rows` /
+    `reflow_rows_keep_cursor` and the indent family (`indent_rows`,
+    `indent_block`, `outdent_block`, `outdent_rows`, `auto_indent_rows`) — all
+    ten fixed 2026-08-07 (`f2b5661f`): each now reads only the touched rows via
+    `rope_line_to_str` and writes per-row `Edit`s (one bounded Replace where the
+    row count changes, mirroring `Editor::splice_row_range`). Measured on a
+    100k-line buffer: block case-op 57.7 ms → 0.125 ms, `gq` 65.4 ms → 0.041 ms,
+    peak RSS 43.1 MB → 27.5 MB. Reflow splice boundaries pinned by four unit
+    tests.
 
 - **"CI green" does not include the Cron workflow.** miri / fuzz / deny / bench
   run on a separate weekly schedule and are not checked by a release. They were
@@ -740,10 +767,18 @@ The full report is in §8. All 15 code findings with a feasible fix shipped the
 same day (commits `0518ca77`..`77c2be3a` — see the Record, §7). Still open, each
 with its §8 finding number:
 
-- **`\d`/`\s`/`\w` are Unicode-wide in rust-regex, ASCII-only in vim** (§8 #11).
-  Translating them needs in-class handling (`\D`/`\S`/`\W` negations are only
-  correct as a class's first element) and vim's `\s` is strictly `[ \t]` —
-  deferred as a semantics decision, not a corruption.
+- **`\d`/`\s`/`\w` are Unicode-wide in rust-regex, ASCII-only in vim — closed
+  2026-08-07 (`cf83b533`).** The translator now rewrites them out of class (`\d`
+  → `[0-9]`, `\s` → `[ \t]`, `\w` → `[0-9A-Za-z_]`, plus `\D`/`\S`/`\W`), and
+  inside `[...]` all eight class escapes are emitted as the LITERAL set {`\`,
+  letter} — measured against neovim 0.12.4, which also disproved the shipped
+  `[\a]`/`[\A]` "alphabetic range" translation (nvim treats them literally too).
+  Substitute + translation tests pin it. New adjacent finding: vim's `\b` is the
+  BACKSPACE char, not a word boundary, and rust-regex's only boundary token is
+  `\b` — which the `\<`/`\>` word-boundary rewrite emits. hjkl keeps `\b` = word
+  boundary (a literal-backspace pattern is rare; every word search needs the
+  boundary), so a user pattern containing `\b` diverges from vim. Accepted
+  trade-off; recorded so a parity pass does not "fix" it blindly.
 - **vim `\ze`/`\zs` (start/end of match) mis-translate** (§8 #10 half) — needs
   match-boundary rewriting rust-regex has no anchor for; currently compiles to
   nonsense or nothing rather than corrupting.
@@ -1167,6 +1202,39 @@ section.
   (`Tracker::reset` in `mouse.rs`) deliberately kept per the author's note. One
   intended behavior change: prompt `command_line_is_runnable` now uses the ASCII
   word class via `command_word_range`.
+
+### Backlog-work session 2026-08-07 (evening — the filetype + backlog pass)
+
+- **Filetype detection for extensionless files (`8abf957c`, `a1a62ebb`)** —
+  `LanguageDirectory::detect` seam (known basename → extension → modeline `ft=`
+  → shebang), bounded modeline scan (first/last 5 lines × 500 chars, later-lines
+  win, nvim-verified), live `:set filetype=` re-attaches grammar + LSP. See the
+  changelog.
+- **Row-range reads in the vim ops (`f2b5661f`)** — all ten `rope_to_lines_vec`
+  sites (block case/char-replace, reflow, indent family) now read/write only the
+  touched rows; 57.7 ms → 0.125 ms block case-op on a 100k-line buffer, peak RSS
+  43.1 → 27.5 MB. See §1.7.
+- **Change log opt-in (`1f062fe0`)** — the per-edit `Vec<EngineEdit>` had no
+  consumer in hjkl or any checked-out sibling (all `take_changes` sites are
+  tests); recording now defaults off and `mutate_edit` skips it entirely. Peak
+  RSS 651 → 456 MB on the paste path. See §1.5b.
+- **Fold pass cache-only grammar resolution (`45aab1cc`)** — injected folds use
+  the new `LanguageDirectory::by_name_cached`, so a fold pass never triggers a
+  clone+compile+fetch. See §1.4b.
+- **`from_serializable` clears a `last_child` that names a non-child
+  (`9dfd143a`)** — a hand-edited undofile's redo direction can no longer walk
+  into the wrong subtree on the first `<C-r>`; repaired, not rejected. See §1.1.
+- **Corpus pins expectations without nvim (`6cddabde`)** — `run_single` compares
+  hjkl against the authored `expected_*` values when nvim is absent; 75/75
+  corpus cases pass via the fallback with nvim hidden from PATH. See §1.5b.
+- **vim ASCII `\d`/`\s`/`\w` (`cf83b533`)** — translator emits vim's ASCII
+  classes (and literal `{\, letter}` inside `[...]`); the shipped `[\a]`/`[\A]`
+  "alphabetic range" translation was disproved by nvim 0.12.4 and corrected. See
+  §1.11.
+- **Blockwise bracket/tag objects are no-ops (`ddc81797`)** — `ib`/`ab`/`iB`/
+  `it` in `<C-v>` no longer collapse the block; nvim keeps the selection as the
+  block motion made it. Four corpus cases pinned against neovim 0.12.4. See
+  §1.5b.
 
 ## 8. 2026-08-05 code review (audit depth)
 
