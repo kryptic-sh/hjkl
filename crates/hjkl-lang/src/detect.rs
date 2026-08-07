@@ -13,17 +13,19 @@
 //!    `filetype.vim` lists `meson.build` before any `*.build` pattern.)
 //! 2. **Extension** — the grammar manifest's extension table (`foo.rs` →
 //!    `rust`).
-//! 3. **Shebang** — the interpreter named on the first line
-//!    (`#!/usr/bin/env bash` → `bash`).
-//! 4. **Modeline** — a `vim:` / `vi:` / `ex:` modeline `ft=` / `filetype=`
-//!    token. Deliberately the lowest precedence: a shebang is a stronger
-//!    signal than a comment. (vim itself lets a modeline override everything;
-//!    hjkl's ordering is the one the user-facing contract states.)
+//! 3. **Modeline** — a `vim:` / `vi:` / `ex:` modeline `ft=` / `filetype=`
+//!    token. Beats a shebang, matching vim: a modeline is an explicit
+//!    author-stated type, the shebang a heuristic. (vim lets a modeline beat
+//!    the extension too; hjkl's extension step still runs first — the two
+//!    rarely disagree, and a `.py` file staying `python` is the less
+//!    surprising outcome.)
+//! 4. **Shebang** — the interpreter named on the first line
+//!    (`#!/usr/bin/env bash` → `bash`). Lowest precedence.
 //!
 //! The basename and extension steps are cheap and need no content; the
-//! shebang and modeline steps read at most a couple of lines. Callers that
-//! only have a path (no content yet) can pass an empty string and get steps
-//! 1–2.
+//! modeline and shebang steps read at most the first/last `'modelines'`
+//! (default 5) lines, capped at 500 chars each. Callers that only have a
+//! path (no content yet) can pass an empty string and get steps 1–2.
 //!
 //! The tables map to **grammar names in the bonsai manifest** where one
 //! exists, and to the closest grammar otherwise (`sh`/`zsh` → `bash`, since
@@ -78,18 +80,18 @@ impl LanguageDirectory {
         if let Some(name) = self.registry.name_for_path(path) {
             return Some(name.to_string());
         }
-        // 3. Shebang on the first line.
-        if let Some(line) = content.lines().next()
-            && let Some(name) = shebang_language(line)
-        {
-            return Some(name.to_string());
-        }
-        // 4. Modeline `ft=` / `filetype=` — lowest precedence: a shebang is
-        //    a stronger signal than a comment.
+        // 3. Modeline `ft=` / `filetype=` — beats a shebang (vim parity: an
+        //    explicit author-stated type outranks the shebang heuristic).
         if opts.modeline
             && let Some(name) = modeline_filetype(content, opts.modelines)
         {
             return Some(name);
+        }
+        // 4. Shebang on the first line — lowest precedence.
+        if let Some(line) = content.lines().next()
+            && let Some(name) = shebang_language(line)
+        {
+            return Some(name.to_string());
         }
         None
     }
@@ -249,34 +251,67 @@ fn interpreter_language_exact(name: &str) -> Option<&'static str> {
 
 // ── Modeline `ft=` ────────────────────────────────────────────────────────────
 
+/// Cap on how much of a scanned line the modeline parser reads, in chars.
+/// A modeline is a short comment (`# vim: ft=rust`); nothing realistic sits
+/// past this, and the cap bounds the worst case (a single giant line) no
+/// matter how big the file is. A deliberate hjkl bound — neovim scans the
+/// whole line, but only the first/last `'modelines'` lines.
+const MODELINE_LINE_CAP: usize = 500;
+
+/// First [`MODELINE_LINE_CAP`] chars of `line`, cut at a char boundary.
+fn cap_modeline_line(line: &str) -> &str {
+    match line.char_indices().nth(MODELINE_LINE_CAP) {
+        Some((byte_idx, _)) => &line[..byte_idx],
+        None => line,
+    }
+}
+
 /// Extract the `ft=` / `filetype=` value from the first/last `depth` lines of
 /// `content`, mirroring the marker, `set` keyword and terminating-colon rules
 /// of the full modeline parser (`hjkl-app`'s `modeline` module) but reading
-/// only the filetype token. Where several `ft=` tokens appear, the last one
-/// wins (vim applies options left to right).
+/// only the filetype token.
+///
+/// Scan order and per-line bound follow the perf contract: only the first
+/// and last `depth` lines are examined — never the middle — and each line is
+/// read for at most [`MODELINE_LINE_CAP`] chars. `lines().rev()` is
+/// double-ended, so the bottom pass starts from the end via a backward
+/// newline search: a huge file costs O(depth) lines, not O(lines), and no
+/// line table is allocated.
+///
+/// Later lines win, matching vim/nvim: every scanned modeline applies in
+/// line order, so the `ft=` on the highest line number overrides earlier
+/// ones (verified against neovim 0.12.4 — a top `ft=bash` with a bottom
+/// `ft=python` yields `python`, including when the two scans overlap on a
+/// small file). Within a line, the last `ft=` token wins (vim applies
+/// options left to right).
 fn modeline_filetype(content: &str, depth: usize) -> Option<String> {
-    let lines: Vec<&str> = content.lines().collect();
-    let total = lines.len();
-    let top_end = depth.min(total);
-    let bot_start = total.saturating_sub(depth);
-
-    let mut indices: Vec<usize> = (0..top_end).collect();
-    for i in bot_start..total {
-        if i >= top_end {
-            indices.push(i);
-        }
-    }
-    for idx in indices {
-        if let Some(ft) = modeline_filetype_on_line(lines[idx]) {
+    // Bottom `depth` lines first, highest line number first: the first hit
+    // is on the highest line carrying an `ft=`, which is the winner — every
+    // bottom line outranks every top-only line (the ranges only overlap
+    // where the bottom pass has already looked).
+    for line in content.lines().rev().take(depth) {
+        if let Some(ft) = modeline_filetype_on_line(line) {
             return Some(ft);
         }
     }
-    None
+    // Top `depth` lines, reached only when no bottom line had an `ft=`.
+    // Scan forward and keep the last hit so the highest top line wins.
+    // Overlapping lines were already scanned by the bottom pass; they are
+    // re-checked here only when they carried no `ft=` (they would have
+    // returned above), so the redundancy is bounded by `depth` and harmless.
+    let mut found = None;
+    for line in content.lines().take(depth) {
+        if let Some(ft) = modeline_filetype_on_line(line) {
+            found = Some(ft);
+        }
+    }
+    found
 }
 
 /// `ft=` extraction for a single line; `None` when the line carries no
-/// modeline or no filetype token.
+/// modeline or no filetype token. Reads at most [`MODELINE_LINE_CAP`] chars.
 fn modeline_filetype_on_line(line: &str) -> Option<String> {
+    let line = cap_modeline_line(line);
     let (marker_start, rest) = find_modeline_marker(line)?;
     // The character before the marker must be line start or non-alphanumeric,
     // so `xvim:` is rejected but `// vim:` and `#vim:` are accepted.
@@ -500,11 +535,13 @@ mod tests {
     }
 
     #[test]
-    fn shebang_script_with_shebang() {
+    fn modeline_beats_shebang() {
+        // vim parity: an explicit modeline `ft=` outranks the shebang
+        // heuristic, even when the shebang contradicts it.
         let content = "#!/usr/bin/env bash\n# vim: ft=python\n";
         assert_eq!(
             detect("script", content, &DetectOptions::default()),
-            Some("bash".into())
+            Some("python".into())
         );
     }
 
@@ -596,6 +633,69 @@ mod tests {
                 &DetectOptions::default()
             ),
             None
+        );
+    }
+
+    #[test]
+    fn modeline_bottom_line_wins() {
+        // Later lines win (verified against neovim 0.12.4): a bottom
+        // `ft=` overrides a top `ft=`.
+        let mut lines: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
+        lines[0] = "# vim: ft=bash".to_string();
+        lines[99] = "# vim: ft=python".to_string();
+        let content = lines.join("\n");
+        assert_eq!(
+            detect("script", &content, &DetectOptions::default()),
+            Some("python".into())
+        );
+    }
+
+    #[test]
+    fn modeline_later_line_wins_with_overlap() {
+        // 8-line file, depth 5: top scan covers 0-4, bottom covers 3-7, so
+        // lines 3 and 4 are in both ranges. Line 4 is later and must win
+        // (verified against neovim 0.12.4).
+        let mut lines: Vec<String> = (0..8).map(|i| format!("line {i}")).collect();
+        lines[3] = "# vim: ft=bash".to_string();
+        lines[4] = "# vim: ft=python".to_string();
+        let content = lines.join("\n");
+        assert_eq!(
+            detect("script", &content, &DetectOptions::default()),
+            Some("python".into())
+        );
+    }
+
+    #[test]
+    fn modeline_beyond_line_cap_is_not_detected() {
+        // Per-line scan is capped at MODELINE_LINE_CAP chars; a modeline
+        // sitting past the cap is invisible (deliberate hjkl bound).
+        let mut line = "x".repeat(600);
+        line.push_str(" # vim: ft=bash");
+        let content = format!("{line}\n");
+        assert_eq!(detect("script", &content, &DetectOptions::default()), None);
+    }
+
+    #[test]
+    fn modeline_within_line_cap_is_detected() {
+        let mut line = "x".repeat(400);
+        line.push_str(" # vim: ft=bash");
+        let content = format!("{line}\n");
+        assert_eq!(
+            detect("script", &content, &DetectOptions::default()),
+            Some("bash".into())
+        );
+    }
+
+    #[test]
+    fn modeline_cap_respects_char_boundaries() {
+        // Multibyte chars before the modeline must not panic the slice — the
+        // cap is taken at a char boundary.
+        let mut line = "你".repeat(300); // 900 bytes, 300 chars
+        line.push_str(" # vim: ft=bash");
+        let content = format!("{line}\n");
+        assert_eq!(
+            detect("script", &content, &DetectOptions::default()),
+            Some("bash".into())
         );
     }
 

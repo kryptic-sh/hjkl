@@ -14,17 +14,23 @@ patch bumps.
   `LanguageDirectory::detect` seam — the single place the editor resolves "what
   language is this file", in precedence order: known basename (`Makefile`,
   `CMakeLists.txt`, `Dockerfile*`, `PKGBUILD`, `Gemfile`, …) → extension →
-  shebang (`#!/usr/bin/env bash`, incl. `env -S` / `-u VAR` and version-suffixed
-  interpreters like `python3.11`) → `vim:`/`vi:`/`ex:` modeline `ft=` /
-  `filetype=`. The app routes every open, reload and rename, plus every
-  language-keyed consumer (grammar attach, LSP attach, status-line filetype
-  label, comment lead), through the seam: an extensionless file with
-  `#!/usr/bin/env bash` or `# vim: ft=bash` now gets syntax highlighting, the
-  `filetype` option, commentstring and LSP attach. The basename step runs before
-  the extension lookup so `meson.build` resolves to `meson`, not the `systemd`
-  grammar's catch-all `build` claim. Modelines remain lowest precedence (a
-  shebang is a stronger signal than a comment) — a stated divergence from vim,
-  which lets a modeline override everything.
+  `vim:`/`vi:`/`ex:` modeline `ft=` / `filetype=` → shebang
+  (`#!/usr/bin/env bash`, incl. `env -S` / `-u VAR` and version-suffixed
+  interpreters like `python3.11`). The app routes every open, reload, rename and
+  `:set filetype=` — plus every language-keyed consumer (grammar attach, LSP
+  attach, status-line filetype label, comment lead) — through the seam: an
+  extensionless file with `#!/usr/bin/env bash` or `# vim: ft=bash` now gets
+  syntax highlighting, the `filetype` option, commentstring and LSP attach. A
+  modeline `ft=` beats a shebang (vim parity: an explicit author-stated type
+  outranks the heuristic); the basename step runs before the extension lookup so
+  `meson.build` resolves to `meson`, not the `systemd` grammar's catch-all
+  `build` claim. (vim lets a modeline beat the extension too; hjkl keeps the
+  extension step first — the two rarely disagree, and a `.py` file staying
+  `python` is the less surprising outcome.) The modeline scan is bounded: only
+  the first and last `'modelines'` lines (default 5) are examined, at most the
+  first 500 chars each, and later lines win (nvim-verified) — the whole-file
+  cost of detection is O(10 lines), independent of file size, and no line table
+  is allocated.
 
 ### Security
 

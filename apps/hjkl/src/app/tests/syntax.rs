@@ -149,11 +149,11 @@ fn extensionless_modeline_ft_sets_filetype() {
 }
 
 #[test]
-fn shebang_beats_modeline_ft() {
-    // The seam's stated precedence: hashbang is a stronger signal than a
-    // modeline comment (the user-facing contract, diverging from vim).
+fn modeline_beats_shebang() {
+    // vim parity: an explicit modeline ft= outranks the shebang heuristic,
+    // even when the shebang contradicts it.
     let slot = slot_with_file("#!/usr/bin/env bash\n# vi: ft=python\n", "script", true);
-    assert_eq!(slot.settings.filetype, "bash");
+    assert_eq!(slot.settings.filetype, "python");
 }
 
 #[test]
@@ -195,4 +195,56 @@ fn unvalidated_modeline_ft_flows_through() {
     // (vim semantics) — the grammar attach resolves to Unknown downstream.
     let slot = slot_with_file("# vim: ft=bogus_lang\n", "script", true);
     assert_eq!(slot.settings.filetype, "bogus_lang");
+}
+
+// ── Live `:set filetype=` propagation ────────────────────────────────────────
+
+#[test]
+fn set_ft_updates_slot_template_and_editor() {
+    // vim's FileType-autocmd behaviour: `:set ft=…` must reach the slot's
+    // settings template (the seam's source of truth) and re-attach, not just
+    // sit on the focused window's editor. `bogus_lang` names no grammar, so
+    // the attach resolves to Unknown without touching the network — the
+    // hermetic-lane contract.
+    let mut app = App::new(None, false, None, None).unwrap();
+    assert_eq!(app.active().settings.filetype, "");
+
+    app.dispatch_ex("set ft=bogus_lang");
+
+    assert_eq!(
+        app.active().settings.filetype,
+        "bogus_lang",
+        ":set ft= must write the slot's settings template"
+    );
+    assert_eq!(
+        app.active_editor().settings().filetype,
+        "bogus_lang",
+        ":set ft= must keep the focused window's editor in sync"
+    );
+}
+
+#[test]
+fn set_filetype_alias_and_clear_work() {
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    app.dispatch_ex("set filetype=bogus_lang");
+    assert_eq!(app.active().settings.filetype, "bogus_lang");
+
+    // `:set ft=` (empty) clears the filetype; the slot template follows.
+    app.dispatch_ex("set ft=");
+    assert_eq!(
+        app.active().settings.filetype,
+        "",
+        ":set ft= must clear the slot's filetype"
+    );
+}
+
+#[test]
+fn set_ft_query_does_not_reattach() {
+    // `:set ft?` reads the option — it must not clobber the detected
+    // filetype with a re-attach.
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("set ft=bogus_lang");
+    app.dispatch_ex("set ft?");
+    assert_eq!(app.active().settings.filetype, "bogus_lang");
 }

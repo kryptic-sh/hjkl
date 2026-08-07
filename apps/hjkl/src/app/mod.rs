@@ -918,8 +918,8 @@ pub fn build_slot(
     config.options.apply_to_settings(&mut settings);
     // Non-blocking: returns immediately; Loading case is handled by
     // poll_grammar_loads each tick. Detection runs through the filetype seam
-    // (`hjkl_lang::detect`): known basename → extension → shebang → modeline
-    // `ft=`. The modeline step honours the same `modeline`/`modelines`
+    // (`hjkl_lang::detect`): known basename → extension → modeline `ft=` →
+    // shebang. The modeline step honours the same `modeline`/`modelines`
     // settings the option overlay above used.
     if let Some(ref p) = path {
         let opts = DetectOptions {

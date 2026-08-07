@@ -546,12 +546,28 @@ impl App {
         // file, so the session and the file never disagree. Runs before
         // `handle_ex_effect` only because that consumes `effect`; the guard is
         // on `effect` either way — a rejected `:set` must not persist.
+        // A live `:set filetype=…` is buffer-local state the engine applies
+        // only to the focused window's editor; mirror it onto the slot
+        // template and re-attach grammar + LSP — vim's FileType autocmd,
+        // which the bare engine `:set` never fired.
         if let Some(body) = set_body
             && !matches!(effect, ExEffect::Error(_) | ExEffect::Unknown(_))
         {
             self.persist_set_options(&body);
+            if Self::set_body_names_filetype(&body) {
+                self.apply_live_filetype_set();
+            }
         }
         self.handle_ex_effect(effect);
+    }
+
+    /// True when a `:set` body names the `filetype` / `ft` option. The query
+    /// form (`ft?`) is excluded — it reads the option, it does not set it.
+    fn set_body_names_filetype(body: &str) -> bool {
+        body.split_whitespace().any(|tok| {
+            let name = tok.split(['=', '+', '-']).next().unwrap_or(tok);
+            matches!(name, "ft" | "filetype")
+        })
     }
 
     /// Write every persistable option named in a `:set` line back to the

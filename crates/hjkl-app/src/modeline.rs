@@ -17,36 +17,64 @@ use hjkl_engine::types::{OptionValue, Options};
 
 // ── Parser ────────────────────────────────────────────────────────────────────
 
+/// Cap on how much of a scanned line the modeline parser reads, in chars.
+/// A modeline is a short comment (`# vim: set ts=2`); nothing realistic sits
+/// past this, and the cap bounds the worst case (a single giant line) no
+/// matter how big the file is. Mirrors the seam's bound in `hjkl-lang`
+/// (`detect::MODELINE_LINE_CAP`), which reads `ft=` from the same lines.
+const MODELINE_LINE_CAP: usize = 500;
+
+/// First [`MODELINE_LINE_CAP`] chars of `line`, cut at a char boundary.
+fn cap_modeline_line(line: &str) -> &str {
+    match line.char_indices().nth(MODELINE_LINE_CAP) {
+        Some((byte_idx, _)) => &line[..byte_idx],
+        None => line,
+    }
+}
+
 /// Scan `content` for vim modelines and return the parsed option overrides.
 ///
 /// `scan_depth` lines from the top AND bottom of the file are checked
-/// (matching vim's `modelines` default of 5). Duplicates are not collapsed —
-/// later entries win when the caller applies them left-to-right.
+/// (matching vim's `modelines` default of 5); the middle is never examined —
+/// `lines().rev()` is double-ended, so the bottom pass starts from the end
+/// via a backward newline search and a huge file costs O(depth) lines, not
+/// O(lines). Each line is read for at most [`MODELINE_LINE_CAP`] chars.
+///
+/// Later lines win: entries are emitted top-first, then the bottom lines in
+/// line order, and the caller applies them left to right (vim applies every
+/// modeline's options in line order, later ones overriding earlier ones).
+/// A file with fewer than 2×depth lines has its top and bottom ranges
+/// overlap, so it is scanned whole, in line order — exactly the lines the
+/// two ranges would cover, once each.
 pub fn parse_modelines(content: &str, scan_depth: usize) -> Vec<(String, OptionValue)> {
-    let lines: Vec<&str> = content.lines().collect();
-    let total = lines.len();
-
-    // Build the set of line indices to scan — first N and last N, deduplicated.
-    // We collect into a Vec and process in order so callers get a stable result.
-    let top_end = scan_depth.min(total);
-    let bot_start = total.saturating_sub(scan_depth);
-
-    let mut indices: Vec<usize> = (0..top_end).collect();
-    for i in bot_start..total {
-        if i >= top_end {
-            indices.push(i);
-        }
-    }
-
     let mut out = Vec::new();
-    for idx in indices {
-        parse_line(lines[idx], &mut out);
+    // Count up to 2×depth lines to see whether the top and bottom ranges
+    // overlap. Bounded by 2×depth even on a huge file.
+    let total = content.lines().take(2 * scan_depth).count();
+    if total < 2 * scan_depth {
+        // Small file: the ranges collide, so scan every line once, in order.
+        for line in content.lines() {
+            parse_line(line, &mut out);
+        }
+        return out;
+    }
+    // Top `scan_depth` lines, then the bottom `scan_depth` in line order
+    // (`rev()` yields them bottom-up) — no overlap, each line once.
+    for line in content.lines().take(scan_depth) {
+        parse_line(line, &mut out);
+    }
+    let mut bottom: Vec<&str> = content.lines().rev().take(scan_depth).collect();
+    bottom.reverse();
+    for line in bottom {
+        parse_line(line, &mut out);
     }
     out
 }
 
 /// Try to extract modeline options from a single line, appending to `out`.
+/// Reads at most [`MODELINE_LINE_CAP`] chars of the line.
 fn parse_line(line: &str, out: &mut Vec<(String, OptionValue)>) {
+    let line = cap_modeline_line(line);
     // Find a `vim:` / `ex:` / `vi:` marker.  The character immediately before
     // the marker must be start-of-line, whitespace, or a non-alphanumeric
     // character — so `xvim:` is rejected but `// vim:` and `#vim:` are accepted.
@@ -281,6 +309,50 @@ mod tests {
                 .iter()
                 .any(|(n, v)| n == "ts" && *v == OptionValue::Int(99)),
             "modeline at line 5 in a 12-line file with depth=5 should NOT be picked up"
+        );
+    }
+
+    // ── parse_modeline_later_line_wins ────────────────────────────────────────
+
+    #[test]
+    fn parse_modeline_later_line_wins() {
+        // vim applies every modeline in line order, later ones overriding
+        // earlier ones — a bottom ts=4 must beat a top ts=2.
+        let mut lines: Vec<String> = (0..100).map(|i| format!("line {i}")).collect();
+        lines[0] = "# vim: ts=2:".to_string();
+        lines[99] = "# vim: ts=4:".to_string();
+        let content = lines.join("\n");
+        let opts = opts_with_modeline(&content);
+        assert_eq!(opts.tabstop, 4, "bottom modeline must override the top one");
+    }
+
+    #[test]
+    fn parse_modeline_small_file_scans_every_line_once() {
+        // A file smaller than 2×depth has overlapping ranges; every line is
+        // scanned exactly once (later lines still win), and a single line is
+        // not double-applied.
+        let entries = parse_modelines("# vim: ts=2 sw=2 et:\n", 5);
+        assert_eq!(
+            entries.len(),
+            3,
+            "a single-line file must yield exactly 3 entries, not duplicates"
+        );
+    }
+
+    // ── parse_modeline_beyond_line_cap ────────────────────────────────────────
+
+    #[test]
+    fn parse_modeline_beyond_line_cap_is_ignored() {
+        // Per-line scan is capped at MODELINE_LINE_CAP chars; an option
+        // sitting past the cap is invisible (deliberate bound). 4 is the
+        // engine default, untouched by the cap'd-out modeline.
+        let mut line = "x".repeat(600);
+        line.push_str(" # vim: ts=7:");
+        let content = format!("{line}\n");
+        let opts = opts_with_modeline(&content);
+        assert_eq!(
+            opts.tabstop, 4,
+            "modeline beyond the line cap must not apply"
         );
     }
 

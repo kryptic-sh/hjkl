@@ -338,6 +338,29 @@ impl App {
         }
     }
 
+    /// Propagate a `:set filetype=…` on the focused editor to the slot
+    /// template and re-attach grammar + LSP — vim's FileType-autocmd
+    /// behaviour, which a bare engine `:set ft=` previously skipped (the
+    /// value lived only on the focused window's editor, so nothing re-attached
+    /// and the slot's template stayed stale). Called after a successful `:set`
+    /// whose body named `filetype` / `ft`.
+    pub(crate) fn apply_live_filetype_set(&mut self) {
+        let idx = self.focused_slot_idx();
+        let filetype = self.active_editor().settings().filetype.clone();
+        self.slots[idx].set_filetype(&filetype);
+        // Buffer-local: every window already showing this slot sees the same
+        // filetype (the focused window's editor was just written by the
+        // engine; the others were not).
+        for wid in self.windows_for_slot(idx) {
+            if let Some(ed) = self.window_editors.get_mut(&wid) {
+                ed.settings_mut().filetype.clone_from(&filetype);
+            }
+        }
+        self.set_language_for_slot(idx);
+        self.lsp_attach_buffer(idx);
+        self.pending_recompute = true;
+    }
+
     /// Poll in-flight async grammar loads and wire any that completed.
     ///
     /// Returns `true` when at least one load resolved and a redraw is needed.
