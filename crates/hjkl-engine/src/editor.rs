@@ -2672,8 +2672,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         let (pre_edit_row, pre_edit_col) = buf_cursor_rc(&self.buffer);
         // Map the underlying buffer edit to a SPEC EditOp for
         // change-log emission before consuming it. Coarse — see
-        // change_log field doc on the struct.
-        self.buffer.extend_change_log(edit_to_editops(&edit));
+        // change_log field doc on the struct. Skipped entirely when no
+        // host subscribed (default): the Vec build + payload clone were
+        // the per-edit cost the opt-in exists to remove.
+        if self.buffer.change_log_enabled() {
+            self.buffer.extend_change_log(edit_to_editops(&edit));
+        }
         // Compute ContentEdit fan-out from the pre-edit buffer state.
         // Done before `apply_buffer_edit` consumes `edit` so we can
         // inspect the operation's fields and the buffer's pre-edit row
@@ -3770,6 +3774,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// call. Empty when no edits ran. Pull-model, complementary to
     /// [`Editor::take_content_change`] which gives back the new full
     /// content.
+    ///
+    /// Recording is opt-in: nothing in hjkl reads this log, so it defaults
+    /// OFF and every `mutate_edit` would otherwise pay a payload clone plus
+    /// a `Vec` build for an entry no host consumes. A host that wants the
+    /// log calls `buffer_mut().set_change_log_enabled(true)` once.
     ///
     /// Mapping coverage:
     /// - InsertChar / InsertStr → exact `EditOp` with empty range +

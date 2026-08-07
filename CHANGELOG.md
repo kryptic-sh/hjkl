@@ -42,6 +42,14 @@ patch bumps.
   where the row count changes). Measured on a 100k-line buffer (`--release`,
   same probe both sides): a block case-op ~58 ms → ~0.1 ms, `gq` ~65 ms → ~0.04
   ms, peak RSS 43 MB → 27 MB.
+- **The change log is now opt-in, cutting a payload copy from every edit.**
+  `Editor::take_changes`' log was recorded on every `mutate_edit` — building a
+  `Vec<EngineEdit>` with a payload clone per edit — but nothing in hjkl or its
+  sibling projects reads it (drain sites are tests). Recording now defaults OFF
+  (`View::set_change_log_enabled(true)` opts in), so the edit funnel skips the
+  clone and Vec entirely. Measured (`--release`, same probe both sides, fresh
+  process): a paste-heavy workload's peak RSS 651 MB → 456 MB, and a 200k-edit
+  keystroke burst 45 MB → 18 MB.
 
 ### Security
 

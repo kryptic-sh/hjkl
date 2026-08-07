@@ -172,6 +172,7 @@ proptest! {
     ) {
         let mut ed = hjkl_vim::vim_editor(hjkl_buffer::View::new(), DefaultHost::new(), Options::default());
         ed.set_content(&text);
+        ed.buffer_mut().set_change_log_enabled(true);
         // Enter insert mode, type some chars, exit.
         hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         for i in 0..edits {

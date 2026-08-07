@@ -707,8 +707,30 @@ impl View {
         std::mem::take(&mut self.content.lock().unwrap().pending_fold_ops)
     }
 
+    /// Record `edits` into the change log drained by `Editor::take_changes`.
+    ///
+    /// A no-op unless [`Self::set_change_log_enabled`] was called — hjkl has
+    /// no in-tree consumer of the log, so recording defaults off and every
+    /// `mutate_edit` would otherwise pay a payload clone plus a `Vec` build
+    /// for an entry no host reads.
     pub fn extend_change_log(&self, edits: impl IntoIterator<Item = crate::EngineEdit>) {
-        self.content.lock().unwrap().change_log.extend(edits);
+        let mut content = self.content.lock().unwrap();
+        if !content.change_log_enabled {
+            return;
+        }
+        content.change_log.extend(edits);
+    }
+
+    /// Opt in to recording the change log drained by `Editor::take_changes`.
+    /// Default off — see [`Self::extend_change_log`].
+    pub fn set_change_log_enabled(&self, enabled: bool) {
+        self.content.lock().unwrap().change_log_enabled = enabled;
+    }
+
+    /// Whether change-log recording is enabled (see
+    /// [`Self::set_change_log_enabled`]).
+    pub fn change_log_enabled(&self) -> bool {
+        self.content.lock().unwrap().change_log_enabled
     }
 
     pub fn take_change_log(&self) -> Vec<crate::EngineEdit> {

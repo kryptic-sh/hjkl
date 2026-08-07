@@ -157,6 +157,7 @@ fn take_changes_emits_per_row_for_block_insert() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("aaa\nbbb\nccc\nddd");
+    e.buffer_mut().set_change_log_enabled(true);
     // Place cursor at (0, 0), enter visual-block, extend down 2.
     hjkl_vim_tui::handle_key(
         &mut e,
@@ -188,6 +189,7 @@ fn take_changes_drains_after_insert() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("abc");
+    e.buffer_mut().set_change_log_enabled(true);
     // Empty initially.
     assert!(e.take_changes().is_empty());
     // Type a char in insert mode.

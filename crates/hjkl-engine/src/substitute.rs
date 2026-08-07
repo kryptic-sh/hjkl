@@ -882,6 +882,7 @@ mod tests {
 
     fn editor_with(content: &str) -> Editor<View, DefaultHost> {
         let mut e = Editor::new(View::new(), DefaultHost::new(), Options::default());
+        e.buffer_mut().set_change_log_enabled(true);
         e.set_content(content);
         e
     }

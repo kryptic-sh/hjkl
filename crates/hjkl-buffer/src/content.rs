@@ -106,7 +106,16 @@ pub struct Buffer {
     pub(crate) pending_fold_ops: Vec<crate::FoldOp>,
     /// Pending edit log drained by `Editor::take_changes`. Each entry is
     /// a [`crate::EngineEdit`] mapped from the underlying buffer edit.
+    ///
+    /// Only recorded while [`Self::change_log_enabled`] is set. hjkl itself
+    /// has no consumer of this log (drain sites are tests), so recording
+    /// defaults OFF — every `mutate_edit` would otherwise pay a payload
+    /// clone plus a `Vec` build for an entry no host reads. Hosts that want
+    /// the log opt in via `View::set_change_log_enabled`.
     pub(crate) change_log: Vec<crate::EngineEdit>,
+    /// Whether [`Self::change_log`] records entries. Default false — see
+    /// the field's doc.
+    pub(crate) change_log_enabled: bool,
     /// Pending `ContentEdit` records emitted by `mutate_edit`. Drained by
     /// hosts via `Editor::take_content_edits` for fan-in to a syntax tree.
     pub(crate) pending_content_edits: Vec<crate::ContentEdit>,
@@ -155,6 +164,7 @@ impl Buffer {
             cached_editor_content: None,
             pending_fold_ops: Vec::new(),
             change_log: Vec::new(),
+            change_log_enabled: false,
             pending_content_edits: Vec::new(),
             pending_content_reset: false,
             marks: std::collections::BTreeMap::new(),
@@ -184,6 +194,7 @@ impl Buffer {
             cached_editor_content: None,
             pending_fold_ops: Vec::new(),
             change_log: Vec::new(),
+            change_log_enabled: false,
             pending_content_edits: Vec::new(),
             pending_content_reset: false,
             marks: std::collections::BTreeMap::new(),
