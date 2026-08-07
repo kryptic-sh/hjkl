@@ -1,17 +1,15 @@
 use std::path::PathBuf;
 
 /// Load `rel_path` (relative to the crate manifest), run it through the oracle,
-/// and assert every case passes (or is skipped). Skips entirely when nvim is
-/// not on PATH.
+/// and assert every case passes (or is skipped).
+///
+/// Without nvim on PATH, `run_oracle` falls back to pinning hjkl against the
+/// corpus's authored `expected_*` values, so the corpus still guards hjkl on
+/// machines without neovim instead of skipping every case wholesale.
 async fn run_corpus(rel_path: &str) {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join(rel_path);
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
-
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
 
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
     let failures: Vec<_> = results
@@ -31,11 +29,6 @@ async fn sample_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/sample.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
-
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
 
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
@@ -57,11 +50,6 @@ async fn tier1_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier1.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
-
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
 
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
@@ -224,11 +212,6 @@ async fn tier2_case_indent_join_corpus_passes() {
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_case_indent_join.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
 
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
-
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
     let failures: Vec<_> = results
@@ -249,11 +232,6 @@ async fn tier2_indent_count_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_indent_count.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
-
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
 
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
@@ -427,11 +405,6 @@ async fn tier2_paragraph_word_corpus_passes() {
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_paragraph_word.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
 
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
-
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
     let failures: Vec<_> = results
@@ -452,11 +425,6 @@ async fn tier2_macros_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_macros.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
-
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
 
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
@@ -479,11 +447,6 @@ async fn tier2_search_corpus_passes() {
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_search.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
 
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
-
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
     let failures: Vec<_> = results
@@ -504,11 +467,6 @@ async fn tier2_dot_repeat_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_dot_repeat.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
-
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
 
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
@@ -531,11 +489,6 @@ async fn tier2_visual_corpus_passes() {
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_visual.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
 
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
-
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
     let failures: Vec<_> = results
@@ -556,11 +509,6 @@ async fn tier2_advanced_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_advanced.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
-
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
 
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
@@ -583,11 +531,6 @@ async fn tier2_visual_block_corpus_passes() {
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_visual_block.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
 
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
-
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
     let failures: Vec<_> = results
@@ -608,11 +551,6 @@ async fn tier2_text_objects_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_text_objects.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
-
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
 
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
@@ -635,11 +573,6 @@ async fn tier2_change_yank_objects_corpus_passes() {
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_change_yank_objects.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
 
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
-
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
     let failures: Vec<_> = results
@@ -661,11 +594,6 @@ async fn tier2_marks_corpus_passes() {
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_marks.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
 
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
-
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
     let failures: Vec<_> = results
@@ -686,11 +614,6 @@ async fn known_divergences_report() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/known_divergences.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
-
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
 
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
@@ -820,11 +743,6 @@ async fn tier2_gaps_corpus_passes() {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_gaps.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
-
-    if !hjkl_compat_oracle::nvim_available() {
-        eprintln!("skipping: nvim not installed");
-        return;
-    }
 
     let results = hjkl_compat_oracle::run_oracle(&corpus).await;
 
