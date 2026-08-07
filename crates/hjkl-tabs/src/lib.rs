@@ -203,7 +203,8 @@ impl<Id: Eq + Clone> TabBar<Id> {
 
     /// Close the tab with `id`. If the closed tab was active, focus shifts to
     /// the nearest remaining tab (prefers the tab at the same index, then the
-    /// one before it).
+    /// one before it); closing a NON-active tab leaves focus where it was
+    /// (adjusted only for the index shift the removal causes).
     ///
     /// ```
     /// use hjkl_tabs::TabBar;
@@ -219,12 +220,19 @@ impl<Id: Eq + Clone> TabBar<Id> {
     /// ```
     pub fn close(&mut self, id: &Id) {
         if let Some(pos) = self.tabs.iter().position(|t| &t.id == id) {
+            let was_active = self.active == Some(pos);
+            let active = self.active;
             self.tabs.remove(pos);
-            self.active = if self.tabs.is_empty() {
-                None
-            } else {
-                let new_idx = pos.min(self.tabs.len() - 1);
-                Some(new_idx)
+            self.active = match (active, self.tabs.is_empty()) {
+                // Bar is now empty, or no tab was focused to begin with.
+                (_, true) | (None, _) => None,
+                // The closed tab was focused: nearest remaining (same index,
+                // else the one before it).
+                (Some(a), _) if was_active => Some(a.min(self.tabs.len() - 1)),
+                // A later tab shifted down by the removal.
+                (Some(a), _) if a > pos => Some(a - 1),
+                // Focus was before the closed tab — unchanged.
+                (Some(a), _) => Some(a),
             };
         }
     }
@@ -497,6 +505,26 @@ mod tests {
         bar.close(&2);
         assert_eq!(bar.len(), 2);
         // Focus should land on what was index 2 (now "c" at index 1).
+        assert_eq!(bar.active().unwrap().id, 3);
+    }
+
+    #[test]
+    fn close_non_active_tab_keeps_focus() {
+        // tabs [1,2,3], focus on 1; closing 3 must leave focus on 1 — the
+        // removed tab was after the active one, so only the index shift could
+        // apply, and it doesn't move the active index.
+        let mut bar = bar_with(&[1, 2, 3], &["a", "b", "c"]);
+        bar.focus(&1);
+        bar.close(&3);
+        assert_eq!(bar.len(), 2);
+        assert_eq!(bar.active().unwrap().id, 1);
+
+        // Closing a tab BEFORE the active one shifts the active index down by
+        // one — focus stays on the same tab.
+        let mut bar = bar_with(&[1, 2, 3], &["a", "b", "c"]);
+        bar.focus(&3);
+        bar.close(&1);
+        assert_eq!(bar.len(), 2);
         assert_eq!(bar.active().unwrap().id, 3);
     }
 
