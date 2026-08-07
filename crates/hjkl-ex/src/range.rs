@@ -311,8 +311,7 @@ pub fn parse_range<'a, H: hjkl_engine::Host>(
     // command follows is only known once the whole range is parsed (rest), so
     // the flag is computed here and applied at each path below.
     let last_i = hjkl_engine::motions::content_row_count(editor.buffer()).max(1) as i64;
-    let number_past_eof =
-        |addr: &Address, offset: i64| matches!(addr, Address::Number(n) if (*n as i64 + offset) > last_i);
+    let number_past_eof = |addr: &Address, offset: i64| matches!(addr, Address::Number(n) if (*n as i64 + offset) > last_i);
     let start_past_eof = number_past_eof(&start_addr, start_offset);
 
     let start = resolve_address(start_addr, start_offset, editor, None)?;
