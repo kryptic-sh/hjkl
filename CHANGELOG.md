@@ -8,6 +8,33 @@ patch bumps.
 
 ## [Unreleased]
 
+### Security
+
+- **`--nvim-api` / `--embed` filesystem confinement is no longer bypassable.**
+  `:e` / `:cfile` (and `l*` variants) now run the same `check_fs_path` +
+  `resolve_under` gate as `:r` and the write path, so a remote client cannot
+  read paths outside the working directory (including through symlink escapes),
+  and `:cd` is refused while the policy is active so the write-side confinement
+  root cannot be moved. `:w`/`:e`/`:r` were already gated.
+- **Restricted RPC modes no longer fetch grammars from the network.** Opening a
+  file over the RPC could previously trigger a clone+compile+`dlopen` of
+  upstream tree-sitter source on demand. In `--nvim-api` / `--embed` mode a
+  grammar miss now resolves to plain text instead (cache and on-disk installed
+  grammars still load); the interactive TUI keeps remote loading.
+
+### Fixed
+
+- **`:retab` no longer panics (divide-by-zero) after a `# vim: ts=0` modeline.**
+  The settings-sourced tabstop is clamped to ≥1 like every other consumer;
+  `:retab 0` was already rejected.
+- **A numeric range address past EOF now errors `E16: Invalid range` instead of
+  silently clamping** — `:5d` on a 3-line buffer deleted the last line; nvim
+  errors and deletes nothing. The bare `:N` goto still clamps, and derived
+  addresses (`.`, `$`, marks, search) are unchanged.
+- **`hjkl-tabs` `TabBar::close` keeps focus when closing a non-active tab** (it
+  used to focus the tab at the removed index); focus only moves when the closed
+  tab was active.
+
 ## [0.41.2] - 2026-08-06
 
 ### Changed
