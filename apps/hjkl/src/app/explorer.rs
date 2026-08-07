@@ -1368,11 +1368,11 @@ impl super::App {
         }
 
         // Language may change with the extension (`notes.txt` → `notes.rs`).
-        let bid = self.slots[idx].buffer_id;
-        let _ = self.syntax.set_language_for_path(bid, &new_path);
-        if let Some(lang) = self.syntax.language_name_for_path(&new_path) {
-            self.slots[idx].set_filetype(&lang);
-        }
+        // Content is unchanged by a rename, so the buffer is the content
+        // source for the seam — an extensionless target with a shebang or
+        // modeline `ft=` detects correctly too.
+        let content = self.slots[idx].buffer().content_joined();
+        self.redetect_language_for_slot(idx, &content);
         if idx == self.focused_slot_idx() {
             self.pending_recompute = true;
         }

@@ -40,6 +40,7 @@
 //! ```
 
 pub mod comment;
+pub mod detect;
 
 use std::collections::HashMap;
 use std::path::Path;

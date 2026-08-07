@@ -8,6 +8,24 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- **Filetype detection for files with no known extension.** New
+  `LanguageDirectory::detect` seam — the single place the editor resolves "what
+  language is this file", in precedence order: known basename (`Makefile`,
+  `CMakeLists.txt`, `Dockerfile*`, `PKGBUILD`, `Gemfile`, …) → extension →
+  shebang (`#!/usr/bin/env bash`, incl. `env -S` / `-u VAR` and version-suffixed
+  interpreters like `python3.11`) → `vim:`/`vi:`/`ex:` modeline `ft=` /
+  `filetype=`. The app routes every open, reload and rename, plus every
+  language-keyed consumer (grammar attach, LSP attach, status-line filetype
+  label, comment lead), through the seam: an extensionless file with
+  `#!/usr/bin/env bash` or `# vim: ft=bash` now gets syntax highlighting, the
+  `filetype` option, commentstring and LSP attach. The basename step runs before
+  the extension lookup so `meson.build` resolves to `meson`, not the `systemd`
+  grammar's catch-all `build` claim. Modelines remain lowest precedence (a
+  shebang is a stronger signal than a comment) — a stated divergence from vim,
+  which lets a modeline override everything.
+
 ### Security
 
 - **`--nvim-api` / `--embed` filesystem confinement is no longer bypassable.**

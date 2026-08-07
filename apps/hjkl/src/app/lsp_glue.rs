@@ -277,6 +277,20 @@ pub(super) fn language_id_for_ext(
     directory.name_for_ext(&lower)
 }
 
+/// Language-name → LSP language id — the name counterpart of
+/// [`language_id_for_ext`]. The tree-sitter grammar name and the LSP id agree
+/// for almost every language; the exceptions mirror the extension overrides:
+/// `tsx` → `typescript`, `jsx` → `javascript`, and `cpp` → `c` (the grammar
+/// the manifest routes `.h` to, whose filetype wants the c server).
+fn language_id_for_name(name: &str) -> String {
+    match name {
+        "tsx" => "typescript".to_string(),
+        "jsx" => "javascript".to_string(),
+        "cpp" => "c".to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// Convert a `lsp_types::DiagnosticSeverity` to our `DiagSeverity`.
 fn convert_severity(s: Option<lsp_types::DiagnosticSeverity>) -> DiagSeverity {
     match s {
@@ -702,17 +716,25 @@ impl App {
         change_kind == 2
     }
 
+    /// LSP language id for `slot_idx` — the slot's resolved filetype
+    /// (open-time detection through the filetype seam, or a manual
+    /// `:set filetype=`) when set, else the extension lookup. One seam for
+    /// every language-keyed consumer, so an extensionless file detected by
+    /// shebang/modeline reaches its LSP server, comment lead and status label.
+    pub(crate) fn slot_language_id(&self, slot_idx: usize) -> Option<String> {
+        let slot = self.slots.get(slot_idx)?;
+        if !slot.settings.filetype.is_empty() {
+            return Some(language_id_for_name(&slot.settings.filetype));
+        }
+        let ext = slot.filename.as_ref()?.extension()?.to_str()?;
+        language_id_for_ext(&self.directory, ext)
+    }
+
     /// The initialized [`LspServerInfo`] for the server attached to
     /// `slot_idx`'s language, if any. Shared lookup used by both the
     /// incremental-sync capability gate and [`Self::position_encoding_for_slot`].
     fn lsp_server_info_for_slot(&self, slot_idx: usize) -> Option<&LspServerInfo> {
-        let lang = self
-            .slots
-            .get(slot_idx)
-            .and_then(|s| s.filename.as_ref())
-            .and_then(|p| p.extension())
-            .and_then(|e| e.to_str())
-            .and_then(|e| language_id_for_ext(&self.directory, e))?;
+        let lang = self.slot_language_id(slot_idx)?;
         self.lsp_state
             .iter()
             .find(|(k, _)| k.language == lang)
@@ -749,14 +771,7 @@ impl App {
     /// a TOML server with no completion support) leaves the "LSP:…" status
     /// spinner stuck.
     fn lsp_active_supports(&self, pointer: &str) -> bool {
-        let Some(lang) = self
-            .active()
-            .filename
-            .as_ref()
-            .and_then(|p| p.extension())
-            .and_then(|e| e.to_str())
-            .and_then(|e| language_id_for_ext(&self.directory, e))
-        else {
+        let Some(lang) = self.slot_language_id(self.focused_slot_idx()) else {
             return false;
         };
         self.lsp_state.iter().any(|(k, info)| {
@@ -769,23 +784,25 @@ impl App {
         })
     }
 
-    /// File-type label for the active buffer — the language id string when
-    /// the extension is recognized, otherwise the raw extension, otherwise
-    /// `"(none)"`.
+    /// File-type label for the active buffer — the detected language id when
+    /// one is resolved (extension, known basename, shebang, modeline `ft=`, or
+    /// a manual `:set filetype=`), otherwise the raw extension when the file
+    /// has one, otherwise `"(none)"`.
     ///
     /// Used by the status-line right-click menu to show `Filetype: rust`.
     pub(crate) fn active_filetype_label(&self) -> String {
-        let ext = self
-            .active()
+        if let Some(lang) = self.slot_language_id(self.focused_slot_idx()) {
+            return lang;
+        }
+        // No detection — keep the old raw-extension fallback for files that
+        // have an extension no grammar claims.
+        self.active()
             .filename
             .as_ref()
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
-            .unwrap_or("");
-        if ext.is_empty() {
-            return "(none)".to_string();
-        }
-        language_id_for_ext(&self.directory, ext).unwrap_or_else(|| ext.to_string())
+            .filter(|e| !e.is_empty())
+            .map_or_else(|| "(none)".to_string(), |e| e.to_string())
     }
 
     /// Single-line comment lead for the active buffer's language (e.g. `"//"`
@@ -794,13 +811,9 @@ impl App {
     /// read like a trailing comment. Falls back to `"//"` for unknown
     /// languages.
     pub(crate) fn active_comment_lead(&self) -> &'static str {
-        self.active()
-            .filename
-            .as_ref()
-            .and_then(|p| p.extension())
-            .and_then(|e| e.to_str())
-            .and_then(|e| language_id_for_ext(&self.directory, e))
-            .and_then(|lang| hjkl_lang::comment::commentstring_for_lang(&lang))
+        self.slot_language_id(self.focused_slot_idx())
+            .as_deref()
+            .and_then(|lang| hjkl_lang::comment::commentstring_for_lang(lang))
             .map_or("//", |(start, _)| start)
     }
 
@@ -811,13 +824,7 @@ impl App {
     /// one-server-per-language setup used today).
     pub(crate) fn active_lsp_server_name(&self) -> Option<String> {
         self.lsp.as_ref()?;
-        let lang = self
-            .active()
-            .filename
-            .as_ref()
-            .and_then(|p| p.extension())
-            .and_then(|e| e.to_str())
-            .and_then(|e| language_id_for_ext(&self.directory, e))?;
+        let lang = self.slot_language_id(self.focused_slot_idx())?;
         self.lsp_state
             .keys()
             .find(|k| k.language == lang)
@@ -865,14 +872,7 @@ impl App {
         if self.lsp.is_none() {
             return false;
         }
-        let lang = self
-            .active()
-            .filename
-            .as_ref()
-            .and_then(|p| p.extension())
-            .and_then(|e| e.to_str())
-            .and_then(|e| language_id_for_ext(&self.directory, e));
-        let Some(lang) = lang else {
+        let Some(lang) = self.slot_language_id(self.focused_slot_idx()) else {
             return false;
         };
         self.lsp_state.keys().any(|k| k.language == lang)
@@ -891,8 +891,7 @@ impl App {
             None => return,
         };
 
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let Some(language_id) = language_id_for_ext(&self.directory, ext) else {
+        let Some(language_id) = self.slot_language_id(slot_idx) else {
             return;
         };
 

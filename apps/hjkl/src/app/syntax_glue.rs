@@ -13,6 +13,7 @@ use hjkl_lang::GrammarRequest;
 use ratatui::style::{Color, Style};
 
 use super::App;
+use super::syntax::DetectOptions;
 
 /// Convert a host-agnostic [`GitChange`] into a ratatui-flavored [`Sign`].
 ///
@@ -285,6 +286,58 @@ impl App {
         redraw
     }
 
+    /// Re-attach the grammar for `slot_idx`, honouring the slot's already
+    /// detected filetype before re-deriving from the path.
+    ///
+    /// `slot.settings.filetype` is the buffer's language resolved at open time
+    /// through the filetype seam, so an extensionless file detected by
+    /// shebang/modeline keeps its grammar across re-attach — the path alone
+    /// would re-resolve to Unknown. A file with no filetype at all falls back
+    /// to the path lookup, which is a no-op (`Unknown`) for plain text.
+    pub(crate) fn set_language_for_slot(&mut self, idx: usize) {
+        let (buffer_id, filetype) = {
+            let slot = &self.slots[idx];
+            (slot.buffer_id, slot.settings.filetype.clone())
+        };
+        if !filetype.is_empty() {
+            let _ = self.syntax.set_language_by_name(buffer_id, &filetype);
+        } else if let Some(p) = self.slots[idx].filename.clone() {
+            let _ = self.syntax.set_language_for_path(buffer_id, &p);
+        }
+    }
+
+    /// Re-run the filetype seam for `slot_idx` against freshly loaded
+    /// `content` and re-attach the grammar. Used by the reload paths (`:e`,
+    /// autoreload), where vim re-detects on BufRead: a file that gained a
+    /// shebang or modeline `ft=` picks up its language on reload, and one
+    /// that lost them falls back to plain text.
+    pub(crate) fn redetect_language_for_slot(&mut self, idx: usize, content: &str) {
+        let (buffer_id, path, modeline, modelines) = {
+            let slot = &self.slots[idx];
+            (
+                slot.buffer_id,
+                slot.filename.clone(),
+                slot.settings.modeline,
+                slot.settings.modelines as usize,
+            )
+        };
+        let Some(path) = path else { return };
+        let opts = DetectOptions {
+            modeline,
+            modelines,
+        };
+        match self.syntax.detect_language(&path, Some(content), &opts) {
+            Some(name) => {
+                self.slots[idx].set_filetype(&name);
+                let _ = self.syntax.set_language_by_name(buffer_id, &name);
+            }
+            None => {
+                self.slots[idx].set_filetype("");
+                let _ = self.syntax.set_language_for_path(buffer_id, &path);
+            }
+        }
+    }
+
     /// Poll in-flight async grammar loads and wire any that completed.
     ///
     /// Returns `true` when at least one load resolved and a redraw is needed.
@@ -298,11 +351,12 @@ impl App {
             hjkl_syntax::SyntaxLayer::dispatch_load_event(event, |kind| match kind {
                 LoadEventKind::Ready { id, name } => {
                     tracing::debug!("grammar load complete: {name} (buffer {id})");
-                    // Re-attach the grammar now that it's ready.
-                    if let Some(slot) = self.slots.iter().find(|s| s.buffer_id == id)
-                        && let Some(ref p) = slot.filename.clone()
-                    {
-                        let _ = self.syntax.set_language_for_path(id, p);
+                    // Re-attach the grammar now that it's ready — by the
+                    // slot's detected filetype, so a content-detected
+                    // extensionless buffer keeps the grammar the path alone
+                    // cannot resolve.
+                    if let Some(idx) = self.slots.iter().position(|s| s.buffer_id == id) {
+                        self.set_language_for_slot(idx);
                     }
                 }
                 LoadEventKind::Failed { id, name, error } => {
@@ -750,10 +804,7 @@ impl App {
             }
         } else {
             for i in 0..self.slots.len() {
-                let buffer_id = self.slots[i].buffer_id;
-                if let Some(p) = self.slots[i].filename.clone() {
-                    let _ = self.syntax.set_language_for_path(buffer_id, &p);
-                }
+                self.set_language_for_slot(i);
             }
             self.recompute_and_install();
         }

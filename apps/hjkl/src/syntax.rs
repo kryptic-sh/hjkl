@@ -16,6 +16,7 @@ use hjkl_syntax_tui::render_output_ref_to_tui;
 use hjkl_lang::LanguageDirectory;
 
 // Re-export agnostic types used by app/mod.rs and syntax_glue.rs.
+pub use hjkl_lang::detect::DetectOptions;
 pub use hjkl_syntax::{BufferId, LoadEvent, LoadEventKind, SetLanguageOutcome};
 
 // ---------------------------------------------------------------------------
@@ -84,9 +85,23 @@ impl SyntaxLayer {
         self.inner.set_language_for_path(id, path)
     }
 
-    /// Resolve a path to its canonical language name without loading any grammar.
-    pub fn language_name_for_path(&self, path: &Path) -> Option<String> {
-        self.inner.directory().name_for_path(path)
+    /// Attach a grammar by its canonical language name (content-detected or
+    /// `:set filetype=`), bypassing path detection.
+    pub fn set_language_by_name(&mut self, id: BufferId, name: &str) -> SetLanguageOutcome {
+        self.inner.set_language_by_name(id, name)
+    }
+
+    /// Run the filetype-detection seam over a path + its content. See
+    /// [`hjkl_lang::detect`] for the precedence order.
+    pub fn detect_language(
+        &self,
+        path: &Path,
+        content: Option<&str>,
+        opts: &DetectOptions,
+    ) -> Option<String> {
+        self.inner
+            .directory()
+            .detect(path, content.unwrap_or(""), opts)
     }
 
     /// Poll all in-flight grammar loads. Call once per tick.

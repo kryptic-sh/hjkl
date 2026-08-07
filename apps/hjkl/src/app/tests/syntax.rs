@@ -101,3 +101,98 @@ fn resize_sets_pending_recompute() {
     assert_eq!(vp.width, 120);
     assert_eq!(vp.height, 40 - STATUS_LINE_HEIGHT);
 }
+
+// ── Open-time filetype detection through the seam ────────────────────────────
+
+/// Build a slot for a temp file with `content`, through the real `build_slot`
+/// path. The language directory has remote loading disabled so no test in the
+/// hermetic CI lane can trigger a network clone+compile — installed grammars
+/// still attach (Cached), missing ones resolve to Unknown without a load.
+fn slot_with_file(content: &str, name: &str, modeline: bool) -> BufferSlot {
+    let td = tempfile::tempdir().unwrap();
+    let path = td.path().join(name);
+    std::fs::write(&path, content).unwrap();
+
+    let mut directory = hjkl_lang::LanguageDirectory::new().expect("language directory");
+    directory.set_allow_remote(false);
+    let directory = std::sync::Arc::new(directory);
+    let theme = std::sync::Arc::new(hjkl_bonsai::DotFallbackTheme::dark());
+    let mut syntax = crate::syntax::layer_with_theme(theme, directory);
+
+    build_slot(
+        &mut syntax,
+        1,
+        Some(path),
+        &hjkl_app::config::Config::default(),
+        Some((modeline, 5)),
+        &hjkl_app::swap::SwapRoot::Xdg,
+    )
+    .expect("build_slot must succeed for a readable temp file")
+}
+
+#[test]
+fn extensionless_shebang_sets_filetype() {
+    let slot = slot_with_file("#!/usr/bin/env python3\nprint('hi')\n", "script", true);
+    assert_eq!(
+        slot.settings.filetype, "python",
+        "an extensionless file with a python shebang must detect as python"
+    );
+}
+
+#[test]
+fn extensionless_modeline_ft_sets_filetype() {
+    let slot = slot_with_file("# vim: ft=bash\nprintf 'hi'\n", "script", true);
+    assert_eq!(
+        slot.settings.filetype, "bash",
+        "a modeline ft= must detect for extensionless files"
+    );
+}
+
+#[test]
+fn shebang_beats_modeline_ft() {
+    // The seam's stated precedence: hashbang is a stronger signal than a
+    // modeline comment (the user-facing contract, diverging from vim).
+    let slot = slot_with_file("#!/usr/bin/env bash\n# vi: ft=python\n", "script", true);
+    assert_eq!(slot.settings.filetype, "bash");
+}
+
+#[test]
+fn modeline_disabled_ignores_ft() {
+    let slot = slot_with_file("# vim: ft=bash\n", "script", false);
+    assert_eq!(
+        slot.settings.filetype, "",
+        "with modeline off, a modeline ft= must not set the filetype"
+    );
+}
+
+#[test]
+fn known_basename_sets_filetype() {
+    let slot = slot_with_file("all:\n\techo hi\n", "Makefile", true);
+    assert_eq!(slot.settings.filetype, "make");
+}
+
+#[test]
+fn extension_still_wins_through_the_seam() {
+    let slot = slot_with_file("fn main() {}\n", "main.rs", true);
+    assert_eq!(
+        slot.settings.filetype, "rust",
+        "a known extension must still resolve through the seam"
+    );
+}
+
+#[test]
+fn extensionless_no_signal_stays_plain() {
+    let slot = slot_with_file("just some prose\n", "notes", true);
+    assert_eq!(
+        slot.settings.filetype, "",
+        "a file with no signal must stay plain text"
+    );
+}
+
+#[test]
+fn unvalidated_modeline_ft_flows_through() {
+    // A modeline ft= that names no grammar is still the file's filetype
+    // (vim semantics) — the grammar attach resolves to Unknown downstream.
+    let slot = slot_with_file("# vim: ft=bogus_lang\n", "script", true);
+    assert_eq!(slot.settings.filetype, "bogus_lang");
+}

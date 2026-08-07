@@ -563,6 +563,46 @@ impl SyntaxLayer {
         }
     }
 
+    /// Attach a grammar by its canonical language name, bypassing path
+    /// detection entirely. The name may come from content detection (shebang,
+    /// modeline `ft=`) or a manual `:set filetype=`.
+    ///
+    /// Identical semantics to [`Self::set_language_for_path`] once the name
+    /// is known; an unrecognised name resolves to [`SetLanguageOutcome::Unknown`]
+    /// without attaching anything.
+    pub fn set_language_by_name(&mut self, id: BufferId, name: &str) -> SetLanguageOutcome {
+        match self.directory.request_by_name(name) {
+            GrammarRequest::Cached(grammar) => {
+                self.attach_grammar(id, grammar.clone());
+                let c = self.client_mut(id);
+                c.current_lang = Some(grammar);
+                c.has_language = true;
+                SetLanguageOutcome::Ready
+            }
+            GrammarRequest::Loading { name, handle } => {
+                let c = self.client_mut(id);
+                c.current_lang = None;
+                c.has_language = false;
+                c.highlighter = None;
+                c.invalidate_cache();
+                self.pending_loads.push(PendingLoad {
+                    id,
+                    name: name.clone(),
+                    handle,
+                });
+                SetLanguageOutcome::Loading(name)
+            }
+            GrammarRequest::Unknown | _ => {
+                let c = self.client_mut(id);
+                c.current_lang = None;
+                c.has_language = false;
+                c.highlighter = None;
+                c.invalidate_cache();
+                SetLanguageOutcome::Unknown
+            }
+        }
+    }
+
     /// Attach a grammar to a buffer, creating/replacing the Highlighter.
     fn attach_grammar(&mut self, id: BufferId, grammar: Arc<Grammar>) {
         let c = self.clients.entry(id).or_default();
@@ -1636,6 +1676,21 @@ mod tests {
         assert!(
             !layer
                 .set_language_for_path(TID, Path::new("a.unknownext"))
+                .is_known()
+        );
+        assert!(layer.render_viewport(TID, &buf, 0, 10).is_none());
+    }
+
+    #[test]
+    fn set_language_by_name_unknown_name_returns_unknown() {
+        // Same contract as the path form: an unrecognised name must resolve
+        // to Unknown (never Loading, never a panic) and leave the buffer
+        // plain text.
+        let buf = View::from_str("hello world");
+        let mut layer = default_layer();
+        assert!(
+            !layer
+                .set_language_by_name(TID, "definitely_not_a_real_language")
                 .is_known()
         );
         assert!(layer.render_viewport(TID, &buf, 0, 10).is_none());

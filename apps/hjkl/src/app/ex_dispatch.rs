@@ -2326,8 +2326,10 @@ impl App {
         self.active_mut().disk_state = DiskState::Synced;
         let buffer_id = self.active().buffer_id;
         // Non-blocking: Loading case activates via poll_grammar_loads each tick.
-        let outcome = self.syntax.set_language_for_path(buffer_id, &path);
-        let _ = outcome.is_known(); // Suppresses unused-result warning.
+        // Re-detect through the filetype seam — a reload is a load (vim
+        // re-runs filetype detection on BufRead), so a shebang / modeline `ft=`
+        // added since open is picked up here.
+        self.redetect_language_for_slot(self.focused_slot_idx(), &content);
         self.syntax.reset(buffer_id);
 
         self.active_editor_mut().install_ratatui_syntax_spans(&[]);
@@ -2482,9 +2484,11 @@ impl App {
                     self.slots[idx].snapshot_saved();
                     // Refresh syntax + git for the reloaded slot.
                     let buffer_id = self.slots[idx].buffer_id;
-                    // Non-blocking: Loading case activates via poll_grammar_loads each tick.
-                    let outcome = self.syntax.set_language_for_path(buffer_id, &path);
-                    let _ = outcome.is_known(); // Suppresses unused-result warning.
+                    // Non-blocking: Loading case activates via poll_grammar_loads
+                    // each tick. Re-detect through the filetype seam (a reload
+                    // is a load), so a shebang / modeline `ft=` gained on disk
+                    // is picked up here.
+                    self.redetect_language_for_slot(idx, &content);
                     self.syntax.reset(buffer_id);
 
                     if idx == self.focused_slot_idx() {
@@ -3001,11 +3005,10 @@ impl App {
         match slot.filename.as_ref() {
             None => lines.push("Active buffer: [No Name] — no LSP attach possible".into()),
             Some(p) => {
-                let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("(none)");
-                let lang = super::lsp_glue::language_id_for_ext(&self.directory, ext);
-                lines.push(format!("Active buffer: {} (ext: {ext})", p.display()));
+                let lang = self.slot_language_id(self.focused_slot_idx());
+                lines.push(format!("Active buffer: {}", p.display()));
                 match lang {
-                    None => lines.push(format!("  → no language id mapped for .{ext} extension")),
+                    None => lines.push("  → no language id mapped for this file".into()),
                     Some(lang_id) => {
                         let configured = self.config.lsp.servers.contains_key(lang_id.as_str());
                         lines.push(format!("  → language: {lang_id}"));

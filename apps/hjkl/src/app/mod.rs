@@ -23,7 +23,7 @@ pub const START_SCREEN_TTL: Duration = Duration::from_secs(2);
 use crate::keymap_actions::AppAction;
 
 use crate::host::TuiHost;
-use crate::syntax::{self, BufferId, SyntaxLayer};
+use crate::syntax::{self, BufferId, DetectOptions, SyntaxLayer};
 use hjkl_app::git_worker::{BlameWorker, GitSignsWorker};
 use std::collections::HashSet;
 
@@ -917,17 +917,28 @@ pub fn build_slot(
     // precedence.
     config.options.apply_to_settings(&mut settings);
     // Non-blocking: returns immediately; Loading case is handled by
-    // poll_grammar_loads each tick.
+    // poll_grammar_loads each tick. Detection runs through the filetype seam
+    // (`hjkl_lang::detect`): known basename → extension → shebang → modeline
+    // `ft=`. The modeline step honours the same `modeline`/`modelines`
+    // settings the option overlay above used.
     if let Some(ref p) = path {
-        let outcome = syntax.set_language_for_path(buffer_id, p);
-        let _ = outcome; // Outcome handled via poll_grammar_loads for Loading.
-        // Mirror the language detection onto the engine's filetype setting
-        // so filetype-aware features (comment-continuation, `gcc` toggle,
-        // `:set commentstring` defaults, future modeline knobs) light up
-        // automatically on file open. Cheap synchronous extension lookup;
-        // no grammar load.
-        if let Some(lang) = syntax.language_name_for_path(p) {
-            settings.filetype = lang;
+        let opts = DetectOptions {
+            modeline: ec_opts.modeline,
+            modelines: ec_opts.modelines as usize,
+        };
+        match syntax.detect_language(p, file_content.as_deref(), &opts) {
+            Some(lang) => {
+                // Mirror the detected language onto the engine's filetype
+                // setting so filetype-aware features (comment-continuation,
+                // `gcc` toggle, `:set commentstring` defaults, modeline knobs)
+                // light up automatically on file open. Attach by name — the
+                // detected name may not be derivable from the path alone.
+                settings.filetype.clone_from(&lang);
+                let _ = syntax.set_language_by_name(buffer_id, &lang);
+            }
+            None => {
+                let _ = syntax.set_language_for_path(buffer_id, p);
+            }
         }
     }
 
