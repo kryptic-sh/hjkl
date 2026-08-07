@@ -789,7 +789,11 @@ impl SyntaxLayer {
             &rope,
             injections,
             &mut client.fold_injections,
-            |name| directory.by_name(name),
+            // Cache-only: a fold pass must never be what clone+compiles a
+            // grammar. Injected grammars are loaded (and cached) by the
+            // highlight path; until then that region simply contributes no
+            // folds, and a later frame picks it up.
+            |name| directory.by_name_cached(name),
         ))
     }
 

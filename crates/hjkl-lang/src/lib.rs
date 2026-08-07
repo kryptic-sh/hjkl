@@ -220,6 +220,19 @@ impl LanguageDirectory {
         Some(self.cache_insert(name, grammar))
     }
 
+    /// Cache-only variant of [`Self::by_name`]: returns a grammar already
+    /// loaded by an earlier request, and `None` otherwise. NEVER loads —
+    /// no clone, compile, install or network fetch.
+    ///
+    /// Use this on paths that must not be the trigger for grammar
+    /// acquisition — a per-frame fold pass can otherwise block the UI
+    /// thread on a first-use clone+compile+dlopen. Grammars loaded by the
+    /// highlight path or the async loader are already cached, so a buffer
+    /// that has rendered once resolves here the same way `by_name` would.
+    pub fn by_name_cached(&self, name: &str) -> Option<Arc<Grammar>> {
+        self.cache_get(name)
+    }
+
     // ── Cache helpers ─────────────────────────────────────────────────────────
 
     fn cache_get(&self, name: &str) -> Option<Arc<Grammar>> {
@@ -271,6 +284,17 @@ mod tests {
     fn in_flight_names_is_empty_on_fresh_directory() {
         let dir = LanguageDirectory::new().unwrap();
         assert!(dir.in_flight_names().is_empty());
+    }
+
+    #[test]
+    fn by_name_cached_never_loads_synchronously() {
+        // A fresh directory has nothing in the cache, so the cache-only
+        // lookup must return None even for a language `by_name` would load
+        // from the installed tier (on a machine with grammars present).
+        // It never clone+compiles or fetches — the whole point.
+        let dir = LanguageDirectory::new().unwrap();
+        assert!(dir.by_name_cached("rust").is_none());
+        assert!(dir.by_name_cached("python").is_none());
     }
 
     #[test]

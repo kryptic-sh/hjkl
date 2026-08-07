@@ -67,6 +67,14 @@ patch bumps.
 
 ### Fixed
 
+- **A fold pass can no longer block the UI thread on a grammar fetch.** The
+  injected-folds pass resolved injected-region grammars through
+  `LanguageDirectory::by_name`, which clone+compiles (and can network-fetch) a
+  grammar on first use — a per-frame fold pass could be the trigger. It now uses
+  the new cache-only `by_name_cached`; an injected region whose grammar is not
+  yet loaded simply contributes no folds until the highlight path (or async
+  loader) has loaded it, which is at most a frame later.
+
 - **`:retab` no longer panics (divide-by-zero) after a `# vim: ts=0` modeline.**
   The settings-sourced tabstop is clamped to ≥1 like every other consumer;
   `:retab 0` was already rejected.
