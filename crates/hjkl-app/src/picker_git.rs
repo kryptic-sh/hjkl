@@ -1305,11 +1305,10 @@ impl PickerLogic for GitBranchPicker {
         if self.is_sentinel.load(Ordering::Acquire) && idx == 0 {
             return None;
         }
-        let (is_head, kind, name_len) = self.items.lock().ok().and_then(|g| {
+        let (is_head, kind, _) = self.items.lock().ok().and_then(|g| {
             g.get(idx)
                 .map(|i| (i.is_head, i.kind, i.name.chars().count()))
         })?;
-        let _ = name_len;
         let mut out: Vec<(std::ops::Range<usize>, EngineStyle)> = Vec::new();
 
         // Marker at char index 2..3.

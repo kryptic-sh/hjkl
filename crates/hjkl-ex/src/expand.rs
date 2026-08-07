@@ -134,74 +134,85 @@ fn apply_modifiers(mut value: String, modifiers: &str, cwd: Option<&Path>) -> Op
     Some(value)
 }
 
+/// Expand one of the five recognized tokens (`%`, `#`, `<cword>`, `<cWORD>`,
+/// `<cfile>`, each with an optional `:mod` chain) against its base source.
+/// Matches when `token` is exactly `prefix` or `prefix:` + modifiers; returns
+/// `None` when the token isn't that form or the base source is unavailable.
+fn expand_one(
+    base: Option<String>,
+    token: &str,
+    prefix: &str,
+    cwd: Option<&Path>,
+) -> Option<String> {
+    let mods = token
+        .strip_prefix(prefix)
+        .filter(|rest| rest.is_empty() || rest.starts_with(':'))
+        .map(|rest| rest.strip_prefix(':').unwrap_or(""))?;
+    apply_modifiers(base?, mods, cwd)
+}
+
 /// Expand a single token (`%`, `#`, `<cword>`, `<cWORD>`, `<cfile>`, possibly with
 /// modifier suffix `:p:h:t`) to its literal value. Returns None when the
 /// token isn't a recognized expansion form OR when the underlying source
 /// is unavailable (e.g. `%` with no current_path).
 pub fn expand_filename(ctx: &ExpandContext<'_>, token: &str) -> Option<String> {
-    // Try `%` with optional `:mod` chain.
-    if token == "%" || token.starts_with("%:") {
-        let base = ctx.current_path?.display().to_string();
-        let mods = token
-            .strip_prefix('%')
-            .unwrap()
-            .strip_prefix(':')
-            .unwrap_or("");
-        return apply_modifiers(base, mods, ctx.cwd);
+    // `%` with optional `:mod` chain.
+    if let Some(expanded) = expand_one(
+        ctx.current_path.map(|p| p.display().to_string()),
+        token,
+        "%",
+        ctx.cwd,
+    ) {
+        return Some(expanded);
     }
 
-    // Try `#` with optional `:mod` chain.
-    if token == "#" || token.starts_with("#:") {
-        let base = ctx.alt_path?.display().to_string();
-        let mods = token
-            .strip_prefix('#')
-            .unwrap()
-            .strip_prefix(':')
-            .unwrap_or("");
-        return apply_modifiers(base, mods, ctx.cwd);
+    // `#` with optional `:mod` chain.
+    if let Some(expanded) = expand_one(
+        ctx.alt_path.map(|p| p.display().to_string()),
+        token,
+        "#",
+        ctx.cwd,
+    ) {
+        return Some(expanded);
     }
 
-    // Try `<cword>` with optional `:mod` chain.
-    if token == "<cword>" || token.starts_with("<cword>:") {
-        let base = ctx.cword.as_deref()?.to_string();
-        let mods = token
-            .strip_prefix("<cword>")
-            .unwrap()
-            .strip_prefix(':')
-            .unwrap_or("");
-        return apply_modifiers(base, mods, ctx.cwd);
+    // `<cword>` with optional `:mod` chain.
+    if let Some(expanded) = expand_one(
+        ctx.cword.as_deref().map(String::from),
+        token,
+        "<cword>",
+        ctx.cwd,
+    ) {
+        return Some(expanded);
     }
 
-    // Try `<cWORD>` with optional `:mod` chain.
-    if token == "<cWORD>" || token.starts_with("<cWORD>:") {
-        let base = ctx.cwword.as_deref()?.to_string();
-        let mods = token
-            .strip_prefix("<cWORD>")
-            .unwrap()
-            .strip_prefix(':')
-            .unwrap_or("");
-        return apply_modifiers(base, mods, ctx.cwd);
+    // `<cWORD>` with optional `:mod` chain.
+    if let Some(expanded) = expand_one(
+        ctx.cwword.as_deref().map(String::from),
+        token,
+        "<cWORD>",
+        ctx.cwd,
+    ) {
+        return Some(expanded);
     }
 
-    // Try `<cfile>` with optional `:mod` chain.
-    if token == "<cfile>" || token.starts_with("<cfile>:") {
-        let base = ctx.cfile.as_deref()?.to_string();
-        let mods = token
-            .strip_prefix("<cfile>")
-            .unwrap()
-            .strip_prefix(':')
-            .unwrap_or("");
-        return apply_modifiers(base, mods, ctx.cwd);
+    // `<cfile>` with optional `:mod` chain.
+    if let Some(expanded) = expand_one(
+        ctx.cfile.as_deref().map(String::from),
+        token,
+        "<cfile>",
+        ctx.cwd,
+    ) {
+        return Some(expanded);
     }
 
     None
 }
 
 /// Extract the expansion token starting at `s` (which must start with `%`,
-/// `#`, `<cword>`, `<cWORD>`, or `<cfile>`). Returns `(token, rest)` where `token`
-/// includes any trailing `:mod` chain consumed, and `rest` is the unconsumed
-/// tail of `s`.
-fn extract_token(s: &str) -> (&str, &str) {
+/// `#`, `<cword>`, `<cWORD>`, or `<cfile>`). Returns the token including any
+/// trailing `:mod` chain consumed; the caller advances past it.
+fn extract_token(s: &str) -> &str {
     // Determine the base length.
     let base_len =
         if s.starts_with("<cword>") || s.starts_with("<cWORD>") || s.starts_with("<cfile>") {
@@ -210,7 +221,7 @@ fn extract_token(s: &str) -> (&str, &str) {
             1
         } else {
             // Should not be called without a known prefix.
-            return (s, "");
+            return s;
         };
 
     // Consume optional `:mod` chain.
@@ -230,7 +241,7 @@ fn extract_token(s: &str) -> (&str, &str) {
             break;
         }
     }
-    (&s[..end], &s[end..])
+    &s[..end]
 }
 
 /// Walk an arg string left-to-right, replacing every `%[:mods]`, `#[:mods]`,
@@ -264,7 +275,7 @@ pub fn expand_args(ctx: &ExpandContext<'_>, args: &str) -> String {
             || rest.starts_with("<cWORD>")
             || rest.starts_with("<cfile>")
         {
-            let (token, after) = extract_token(rest);
+            let token = extract_token(rest);
             match expand_filename(ctx, token) {
                 Some(expanded) => {
                     result.push_str(&expanded);
@@ -274,8 +285,9 @@ pub fn expand_args(ctx: &ExpandContext<'_>, args: &str) -> String {
                     result.push_str(token);
                 }
             }
+            // `token` includes any trailing `:mod` chain, so advancing by its
+            // length skips exactly the consumed portion.
             i += token.len();
-            let _ = after; // i is already advanced past token
             continue;
         }
 

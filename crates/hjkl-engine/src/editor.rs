@@ -3737,14 +3737,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     }
 
     pub fn set_content(&mut self, text: &str) {
-        let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
-        while lines.last().is_some_and(|l| l.is_empty()) {
-            lines.pop();
-        }
-        if lines.is_empty() {
-            lines.push(String::new());
-        }
-        let _ = lines;
         crate::types::BufferEdit::replace_all(&mut self.buffer, text);
         self.buffer.clear_undo_redo();
         // Whole-buffer replace supersedes any queued ContentEdits.
@@ -3765,14 +3757,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// new edit invalidates redo).
     pub fn set_content_undoable(&mut self, text: &str) {
         self.push_undo();
-        let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
-        while lines.last().is_some_and(|l| l.is_empty()) {
-            lines.pop();
-        }
-        if lines.is_empty() {
-            lines.push(String::new());
-        }
-        let _ = lines;
         crate::types::BufferEdit::replace_all(&mut self.buffer, text);
         // Whole-buffer replace supersedes any queued ContentEdits.
         self.buffer.clear_pending_content_edits();
@@ -4367,9 +4351,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             .max(0)
             .min((total_rows - 1).max(0)) as usize;
         self.host.viewport_mut().top_row = new_top;
-        // Mirror to textarea so its viewport reads (still consumed by
-        // a couple of helpers) stay accurate.
-        let _ = cur_top;
         if height == 0 {
             return;
         }

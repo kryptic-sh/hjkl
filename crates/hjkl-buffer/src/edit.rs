@@ -308,7 +308,7 @@ impl View {
                     // Collect the removed rows as a joined string (needed for inverse).
                     let mut removed_lines: Vec<String> = Vec::with_capacity(hi - lo + 1);
                     for r in lo..=hi {
-                        removed_lines.push(rope_line_str_locked(&c.text, r));
+                        removed_lines.push(crate::buffer::rope_line_str(&c.text, r));
                     }
 
                     // Compute char range to remove.
@@ -574,37 +574,6 @@ impl View {
 }
 
 // ── Internals — char surgery (free functions over &mut ropey::Rope) ──
-
-/// Get logical line `row` as a `String`, stripping the FULL line separator.
-/// ropey's `line()` includes the separator, and under the default
-/// `unicode_lines` splitting that is `\n`, `\r\n`, `\r`, U+000B, U+000C,
-/// U+0085, U+2028 and U+2029 — stripping only a trailing `'\n'` left the
-/// others embedded in the content, and the linewise-delete inverse then
-/// carried them plus a pushed `'\n'`: a phantom extra line break.
-/// Identical to `rope_line_str` but takes a lock guard's rope by ref
-/// (avoids re-importing the pub(crate) helper from buffer.rs inside this module).
-fn rope_line_str_locked(rope: &ropey::Rope, row: usize) -> String {
-    let start = rope.line_to_byte(row);
-    rope.byte_slice(start..rope_line_content_end_locked(rope, row))
-        .to_string()
-}
-
-/// Absolute byte index where row `row`'s content ends — the first byte of the
-/// separator ropey split on, or `len_bytes()` for the final row. Mirrors
-/// `buffer::rope_line_content_end` exactly: the separators are 1–3 bytes wide
-/// and `line_to_byte(row + 1)` points just past one, so stepping back a single
-/// byte lands *inside* a multi-byte separator; flooring to the enclosing char
-/// start snaps to the separator's first byte, which is the end of this row's
-/// content. `\r\n` is unaffected — `\n` begins a char, the floor is the
-/// identity, and a CRLF row keeps its trailing `\r` (the same rule
-/// `rope_line_str` applies).
-fn rope_line_content_end_locked(rope: &ropey::Rope, row: usize) -> usize {
-    if row + 1 >= rope.len_lines() {
-        return rope.len_bytes();
-    }
-    let step_back = rope.line_to_byte(row + 1).saturating_sub(1);
-    crate::buffer::floor_char_boundary(rope, step_back)
-}
 
 /// Remove `[start, end)` (charwise) from the rope and return the
 /// removed text as a `String` (with `\n` between rows).

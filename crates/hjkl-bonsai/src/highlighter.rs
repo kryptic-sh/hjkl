@@ -459,6 +459,25 @@ fn compile_artifacts(grammar: &Grammar) -> Result<CompiledArtifacts> {
     })
 }
 
+/// `true` when `name` is a plausible injection language name: non-empty,
+/// ≤ 64 bytes, ASCII alphanumerics / `-` / `_` only. Tree-sitter language
+/// names are ASCII, so anything else is captured text, not a language.
+fn valid_injection_lang(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Push `(name, range)` onto `injections` when `name` passes
+/// [`valid_injection_lang`].
+fn push_injection(injections: &mut Vec<(String, Range<usize>)>, name: String, range: Range<usize>) {
+    if valid_injection_lang(&name) {
+        injections.push((name, range));
+    }
+}
+
 pub struct Highlighter {
     parser: Parser,
     /// Shared, immutable compilation artifacts. Cloned (Arc) from the global
@@ -1143,15 +1162,7 @@ impl Highlighter {
                 }
 
                 if let (Some(name), Some(range)) = (lang_name, content_range) {
-                    // Reject non-ASCII or suspiciously long language names.
-                    if !name.is_empty()
-                        && name.len() <= 64
-                        && name
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                    {
-                        injections.push((name, range));
-                    }
+                    push_injection(&mut injections, name, range);
                 }
             }
         }
@@ -1350,14 +1361,7 @@ impl Highlighter {
                     if range.start >= byte_range.end || range.end <= byte_range.start {
                         continue;
                     }
-                    if !name.is_empty()
-                        && name.len() <= 64
-                        && name
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                    {
-                        injections.push((name, range));
-                    }
+                    push_injection(&mut injections, name, range);
                 }
             }
         }
@@ -1773,14 +1777,7 @@ impl Highlighter {
                     if range.start >= byte_range.end || range.end <= byte_range.start {
                         continue;
                     }
-                    if !name.is_empty()
-                        && name.len() <= 64
-                        && name
-                            .chars()
-                            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-                    {
-                        injections.push((name, range));
-                    }
+                    push_injection(&mut injections, name, range);
                 }
             }
         }

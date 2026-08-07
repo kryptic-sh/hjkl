@@ -3209,8 +3209,9 @@ pub fn cursor_word_tokens(app: &App) -> (Option<String>, Option<String>, Option<
 ///
 /// `cword` / `cwword` / `cfile` are sourced from the active buffer's cursor
 /// via [`cursor_word_tokens`] (owned strings, so they don't extend any borrow
-/// of `app`).
-fn build_expand_context(app: &App) -> hjkl_ex::ExpandContext<'_> {
+/// of `app`). Shared with the Tab-time inline expansion in prompt.rs. `pub`
+/// only because clippy flags `pub(crate)` in this private module.
+pub fn build_expand_context(app: &App) -> hjkl_ex::ExpandContext<'_> {
     let alt_path = app
         .prev_active
         .and_then(|i| app.slots.get(i))

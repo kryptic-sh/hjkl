@@ -2560,13 +2560,6 @@ mod tests {
         assert_eq!(reads, vec![3]);
     }
 
-    /// Encode a buffer handle `Value::Ext(BUFFER_EXT, encode_id(id))` suitable
-    /// for passing as a param to dispatch.
-    #[allow(dead_code)]
-    fn make_buf_param(id: u64) -> Value {
-        buf_handle(id)
-    }
-
     /// Decode a buffer ext handle back to its u64 id.
     fn decode_buf_id(v: &Value) -> u64 {
         match v {

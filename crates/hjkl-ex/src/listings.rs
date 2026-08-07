@@ -97,7 +97,6 @@ pub fn format_jumps<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::View, H>)
     // Display as descending jump numbers: back.len() at oldest, 1 at newest, 0 = current.
     // Then jump_fwd (forward history) at negative-1, -2, …  vim shows >0 for fwd.
     // We keep it simple: back list reversed with ascending index, then fwd list.
-    let back_len = back.len();
     for (i, &(row, col)) in back.iter().rev().enumerate() {
         let jump_num = i + 1;
         lines.push(format!("{jump_num:>5}  {:>4}  {:>4}", row + 1, col));
@@ -108,7 +107,6 @@ pub fn format_jumps<H: Host>(editor: &hjkl_engine::Editor<hjkl_buffer::View, H>)
         let jump_num = -(i as isize + 1);
         lines.push(format!("{jump_num:>5}  {:>4}  {:>4}", row + 1, col));
     }
-    let _ = back_len; // used above
     lines.join("\n")
 }
 

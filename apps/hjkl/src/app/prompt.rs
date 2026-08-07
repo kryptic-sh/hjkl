@@ -13,25 +13,46 @@ pub fn set_field_text(field: &mut TextFieldEditor, text: &str) {
     field.enter_insert_at_end();
 }
 
-/// Build an [`hjkl_ex::ExpandContext`] from app state for tab-time inline
-/// expansion. Same wiring as `build_expand_context` in ex_dispatch.rs:
-/// `<cword>`/`<cWORD>`/`<cfile>` come from the active buffer's cursor.
-fn build_inline_expand_context(app: &App) -> hjkl_ex::ExpandContext<'_> {
-    let alt_path = app
-        .prev_active
-        .and_then(|i| app.slots.get(i))
-        .and_then(|s| s.filename.as_deref());
+/// Byte offset of the field's cursor caret within its own text: `cursor()`
+/// reports the column in chars, while callers index the text by bytes (safe
+/// for ASCII command lines, UTF-8-correct via char_indices for non-ASCII).
+fn field_caret_byte(field: &TextFieldEditor) -> usize {
+    let line = field.text();
+    let (_, col) = field.cursor();
+    line.char_indices().nth(col).map_or(line.len(), |(b, _)| b)
+}
 
-    let (cword, cwword, cfile) = super::ex_dispatch::cursor_word_tokens(app);
-
-    hjkl_ex::ExpandContext {
-        current_path: app.active().filename.as_deref(),
-        alt_path,
-        cword: cword.map(std::borrow::Cow::Owned),
-        cwword: cwword.map(std::borrow::Cow::Owned),
-        cfile: cfile.map(std::borrow::Cow::Owned),
-        cwd: None,
+/// Step a prompt history on Up/Down (C-p/C-n): save the current typed input
+/// on the first nav, then apply the entry at the new index to `field`
+/// (falling back to the saved input when the nav leaves the history).
+/// Returns `true` when history existed and the field was updated.
+fn step_history(
+    history: &[String],
+    is_prev: bool,
+    prompt_history_index: &mut Option<usize>,
+    prompt_user_input: &mut Option<String>,
+    field: &mut TextFieldEditor,
+) -> bool {
+    if history.is_empty() {
+        return false;
     }
+    // Save current typed input on first history nav.
+    if prompt_history_index.is_none() {
+        *prompt_user_input = Some(field.text());
+    }
+    let len = history.len();
+    let new_idx = if is_prev {
+        history_prev(*prompt_history_index, len)
+    } else {
+        history_next(*prompt_history_index, len)
+    };
+    *prompt_history_index = new_idx;
+    let text = match new_idx {
+        Some(i) => history[i].clone(),
+        None => prompt_user_input.clone().unwrap_or_default(),
+    };
+    set_field_text(field, &text);
+    true
 }
 
 /// Walk backwards from `caret` to find the start of the token under the
@@ -181,10 +202,9 @@ impl App {
             .as_ref()
             .expect("cmdline mode implies command_field (is_none guard above)");
         let line = field.text();
-        let (_, col) = field.cursor();
         // Convert char-indexed col to a byte index (safe for ASCII command
         // lines, UTF-8-correct via char_indices for non-ASCII).
-        let caret = line.char_indices().nth(col).map_or(line.len(), |(b, _)| b);
+        let caret = field_caret_byte(field);
 
         let host_reg = super::ex_host_cmds::host_registry();
         let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
@@ -337,28 +357,24 @@ impl App {
     /// the top-ranked candidate (`wall`) instead of running `:w`. Aliases
     /// resolve here so `:w<Enter>` executes directly.
     pub(crate) fn command_line_is_runnable(&self) -> bool {
+        // Resolve the same leading command word the completion popup operates
+        // on (see [`Self::command_word_range`]). The word class is deliberately
+        // ASCII-only — ex command registry names are ASCII, so a leading
+        // non-ASCII-alphanumeric token can never resolve to a command.
+        let Some(word) = self.command_word_range() else {
+            return false;
+        };
         let line = match self.command_field.as_ref() {
             Some(f) => f.text(),
             None => return false,
         };
-        // Skip a leading range/count prefix (`%`, `2`, `.,$`, `'a,'b`, …) so a
-        // ranged command like `:8,3d` resolves its command token (`d`) and Enter
-        // executes it directly, rather than accepting the popup that command-name
-        // completion now surfaces for ranged commands.
-        let after_range = &line[hjkl_ex::range_prefix_len(&line).min(line.len())..];
-        // Leading command word: alphanumeric / `_` run after trimming leading
-        // whitespace.
-        let token: String = after_range
-            .trim_start()
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect();
+        let token = &line[word];
         if token.is_empty() {
             return false;
         }
         let host_reg = super::ex_host_cmds::host_registry();
         let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
-        host_reg.resolve(&token).is_some() || editor_reg.resolve(&token).is_some()
+        host_reg.resolve(token).is_some() || editor_reg.resolve(token).is_some()
     }
 
     /// Byte range of the leading command word — what
@@ -391,13 +407,12 @@ impl App {
     /// `e`), so Enter ran the half-typed line and the popup's selection was
     /// simply discarded unless the user had first moved off item 0.
     pub(crate) fn command_completion_is_arg(&self) -> bool {
-        let (Some(range), Some(field)) = (
+        let (Some(range), _) = (
             self.command_completion_range.as_ref(),
             self.command_field.as_ref(),
         ) else {
             return false;
         };
-        let _ = field;
         self.command_word_range()
             .is_some_and(|word| range.start > word.end)
     }
@@ -486,11 +501,10 @@ impl App {
                     .as_ref()
                     .expect("guarded by command_field.is_some() above");
                 let line = field.text();
-                // Expand at the REAL caret, not end-of-line. `cursor()` reports
-                // the column in chars; translate it to a byte offset so the
-                // token slice / splice below index correctly on multi-byte lines.
-                let (_, col) = field.cursor();
-                let caret = line.char_indices().nth(col).map_or(line.len(), |(b, _)| b);
+                // Expand at the REAL caret, not end-of-line — `cursor()`
+                // reports the column in chars, and the token slice / splice
+                // below index by bytes.
+                let caret = field_caret_byte(field);
                 let token_start = find_token_start(&line, caret);
                 let token = &line[token_start..caret];
                 if token.starts_with('%')
@@ -499,7 +513,7 @@ impl App {
                     || token.starts_with("<cWORD>")
                     || token.starts_with("<cfile>")
                 {
-                    let ctx = build_inline_expand_context(self);
+                    let ctx = super::ex_dispatch::build_expand_context(self);
                     if let Some(expanded) = hjkl_ex::expand_filename(&ctx, token) {
                         let new_text =
                             format!("{}{}{}", &line[..token_start], expanded, &line[caret..]);
@@ -552,31 +566,16 @@ impl App {
             }
             // Otherwise, history navigation.
             let history = self.ex_history.clone();
-            if !history.is_empty() {
-                // Save current typed input on first history nav.
-                if self.prompt_history_index.is_none() {
-                    let cur = self
-                        .command_field
-                        .as_ref()
-                        .map(|f| f.text())
-                        .unwrap_or_default();
-                    self.prompt_user_input = Some(cur);
-                }
-                let len = history.len();
-                let new_idx = if is_ctrl_p {
-                    history_prev(self.prompt_history_index, len)
-                } else {
-                    history_next(self.prompt_history_index, len)
-                };
-                self.prompt_history_index = new_idx;
-                let text = match new_idx {
-                    Some(i) => history[i].clone(),
-                    None => self.prompt_user_input.clone().unwrap_or_default(),
-                };
-                if let Some(f) = self.command_field.as_mut() {
-                    set_field_text(f, &text);
-                }
-            }
+            let Some(field) = self.command_field.as_mut() else {
+                return;
+            };
+            step_history(
+                &history,
+                is_ctrl_p,
+                &mut self.prompt_history_index,
+                &mut self.prompt_user_input,
+                field,
+            );
             return;
         }
 
@@ -719,8 +718,11 @@ impl App {
         self.active_editor_mut().set_search_pattern(None);
     }
 
-    pub(crate) fn cancel_search_prompt(&mut self) {
-        self.search_field = None;
+    /// Restore the search pattern from the last committed search, clearing it
+    /// when there is none or it no longer compiles. Both [`Self::cancel_search_prompt`]
+    /// and the `<C-f>` search-field branch cancel the live-preview side-effect
+    /// this way.
+    fn restore_last_search_pattern(&mut self) {
         let last = self.active_editor().last_search();
         match last {
             Some(p) if !p.is_empty() => {
@@ -732,6 +734,11 @@ impl App {
             }
             _ => self.active_editor_mut().set_search_pattern(None),
         }
+    }
+
+    pub(crate) fn cancel_search_prompt(&mut self) {
+        self.search_field = None;
+        self.restore_last_search_pattern();
     }
 
     pub(crate) fn handle_search_field_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -746,29 +753,16 @@ impl App {
             } else {
                 self.search_history_backward.clone()
             };
-            if !history.is_empty() {
-                if self.prompt_history_index.is_none() {
-                    let cur = self
-                        .search_field
-                        .as_ref()
-                        .map(|f| f.text())
-                        .unwrap_or_default();
-                    self.prompt_user_input = Some(cur);
-                }
-                let len = history.len();
-                let new_idx = if is_ctrl_p {
-                    history_prev(self.prompt_history_index, len)
-                } else {
-                    history_next(self.prompt_history_index, len)
-                };
-                self.prompt_history_index = new_idx;
-                let text = match new_idx {
-                    Some(i) => history[i].clone(),
-                    None => self.prompt_user_input.clone().unwrap_or_default(),
-                };
-                if let Some(f) = self.search_field.as_mut() {
-                    set_field_text(f, &text);
-                }
+            let Some(field) = self.search_field.as_mut() else {
+                return;
+            };
+            if step_history(
+                &history,
+                is_ctrl_p,
+                &mut self.prompt_history_index,
+                &mut self.prompt_user_input,
+                field,
+            ) {
                 self.live_preview_search();
             }
             return;
@@ -785,17 +779,7 @@ impl App {
                 self.prompt_history_index = None;
                 self.prompt_user_input = None;
                 // Restore the previous pattern (cancel live-preview side-effect).
-                let last = self.active_editor().last_search();
-                match last {
-                    Some(p) if !p.is_empty() => {
-                        if let Ok(re) = regex::Regex::new(&p) {
-                            self.active_editor_mut().set_search_pattern(Some(re));
-                        } else {
-                            self.active_editor_mut().set_search_pattern(None);
-                        }
-                    }
-                    _ => self.active_editor_mut().set_search_pattern(None),
-                }
+                self.restore_last_search_pattern();
                 let win_kind = match self.search_dir {
                     SearchDir::Forward => CmdLineKind::SearchForward,
                     SearchDir::Backward => CmdLineKind::SearchBackward,

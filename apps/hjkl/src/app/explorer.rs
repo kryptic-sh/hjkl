@@ -937,7 +937,6 @@ impl super::App {
         self.refresh_explorer_git();
 
         // Apply the reveal cursor position if we found the active file.
-        let _ = new_win_id;
         if let Some(row) = reveal_row {
             self.set_explorer_window_cursor(row, 0, None);
         }
@@ -1053,7 +1052,6 @@ impl super::App {
                 .as_ref()
                 .map_or(0, |ep| ep.tree.nodes.len().saturating_sub(1)),
         );
-        let _ = win_id;
         self.set_explorer_window_cursor(clamped, 0, None);
     }
 
@@ -1665,7 +1663,6 @@ impl super::App {
             }
         };
         // Set the explorer window editor cursor + scroll directly (#151 Phase D).
-        let _ = win_id;
         self.set_explorer_window_cursor(row, 0, Some(new_top));
     }
 
@@ -1722,7 +1719,7 @@ impl super::App {
             Some(n) if n.is_dir => n,
             _ => return false,
         };
-        let Some(slot_idx) = self.explorer_slot_idx() else {
+        let Some(_slot_idx) = self.explorer_slot_idx() else {
             return false;
         };
         // Expand the dir (lazy-load its one level) so the new line lands as its
@@ -1739,7 +1736,6 @@ impl super::App {
         // Dispatch to the focused window's editor (#151 Phase D / #252) — that's
         // the one render + reconcile read; the slot editor is just a content
         // bridge and is never the dispatched editor.
-        let _ = slot_idx;
         hjkl_vim_tui::handle_key(
             self.active_editor_mut(),
             crossterm::event::KeyEvent::new(
