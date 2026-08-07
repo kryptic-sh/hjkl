@@ -3419,7 +3419,10 @@ fn retab_impl<H: Host>(
         }
     };
 
-    let tabstop = explicit_tabstop.unwrap_or_else(|| editor.settings().tabstop);
+    // The explicit-arg path is guarded above; the settings-sourced path is not
+    // — a `# vim: ts=0` modeline bypasses the registry's min=1 and would make
+    // `convert_whitespace` divide by zero below. Clamp like every sibling.
+    let tabstop = explicit_tabstop.unwrap_or_else(|| editor.settings().tabstop.max(1));
     let expandtab = editor.settings().expandtab;
 
     let rope = editor.buffer().rope();
@@ -5185,6 +5188,48 @@ mod tests {
         assert_eq!(buf_line(&ed, 0), "  hello");
         // Editor's tabstop setting should NOT be persisted.
         assert_eq!(ed.settings().tabstop, 4);
+    }
+
+    #[test]
+    fn retab_zero_tabstop_setting_does_not_panic() {
+        // A `# vim: ts=0` modeline reaches the settings-sourced path with
+        // tabstop == 0 — the registry's min=1 only guards `:set`. Both
+        // `convert_whitespace` arms modulo by tabstop, so without the clamp
+        // this panics with "attempt to calculate the remainder with a divisor
+        // of zero". The clamp treats 0 as 1; the guarantee is a sane result,
+        // not vim's (vim rejects `ts=0` outright).
+        for expandtab in [true, false] {
+            let mut ed = make_editor_with_opts("\t\thello", expandtab, 0);
+            let result = retab_handler(&mut ed, "", None);
+            assert_eq!(result, Some(ExEffect::Ok));
+            // ts=0 clamped to 1: expandtab=true widens each tab to one space;
+            // expandtab=false round-trips (tab → 1 space → 1 tab). The point
+            // is the clamp, not the exact columns.
+            let expected = if expandtab { "  hello" } else { "\t\thello" };
+            assert_eq!(buf_line(&ed, 0), expected, "expandtab={expandtab}");
+        }
+    }
+
+    #[test]
+    fn delete_past_eof_errors_e16_and_deletes_nothing() {
+        // nvim parity (verified against nvim 0.12.4): `:5d` on a 3-line
+        // buffer errors E16 and deletes nothing — it must not silently
+        // clamp to the last line and delete it.
+        let mut ed = make_editor_with_lines(&["a", "b", "c"]);
+        let result = dispatch(&mut ed, "5d");
+        assert!(
+            matches!(result, Some(ExEffect::Error(ref e)) if e.contains("E16")),
+            "expected E16, got: {result:?}"
+        );
+        assert_eq!(buf_lines(&ed), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn delete_in_range_still_deletes() {
+        // The E16 gate must not break legitimate deletes.
+        let mut ed = make_editor_with_lines(&["a", "b", "c"]);
+        assert_eq!(dispatch(&mut ed, "2d"), Some(ExEffect::Ok));
+        assert_eq!(buf_lines(&ed), vec!["a", "c"]);
     }
 
     #[test]

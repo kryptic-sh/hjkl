@@ -304,6 +304,17 @@ pub fn parse_range<'a, H: hjkl_engine::Host>(
         return Ok((None, cmd));
     };
 
+    // nvim rejects a literal numeric address past EOF with E16 when a command
+    // follows the range (`:5d` on a 3-line buffer errors and deletes nothing),
+    // but the bare `:N` goto clamps silently. Derived bases (`.`, `$`, marks,
+    // search) always clamp — `resolve_address` keeps doing that. Whether a
+    // command follows is only known once the whole range is parsed (rest), so
+    // the flag is computed here and applied at each path below.
+    let last_i = hjkl_engine::motions::content_row_count(editor.buffer()).max(1) as i64;
+    let number_past_eof =
+        |addr: &Address, offset: i64| matches!(addr, Address::Number(n) if (*n as i64 + offset) > last_i);
+    let start_past_eof = number_past_eof(&start_addr, start_offset);
+
     let start = resolve_address(start_addr, start_offset, editor, None)?;
 
     // A `,` or `;` separator introduces a second (end) address. They differ
@@ -340,6 +351,9 @@ pub fn parse_range<'a, H: hjkl_engine::Host>(
         // `;` moves the cursor to `start` (1-based) before the end address
         // resolves; `,` resolves it from the real cursor (no override).
         let end_from = semicolon.then_some(start);
+        if (start_past_eof || number_past_eof(&end_addr, end_offset)) && !rest.trim().is_empty() {
+            return Err("E16: Invalid range".into());
+        }
         let end = resolve_address(end_addr, end_offset, editor, end_from)?;
         if start > end {
             // Vim parity: a backward range (`:8,3d`) is rejected outright in
@@ -353,6 +367,12 @@ pub fn parse_range<'a, H: hjkl_engine::Host>(
         return Ok((Some(LineRange::new(start, end)), rest));
     }
 
+    // A literal numeric start past EOF with a command following is E16 (the
+    // bare `:N` goto and the two-address gate above keep the clamping
+    // behavior — see the comment at the top of this function).
+    if start_past_eof && !after_start.trim().is_empty() {
+        return Err("E16: Invalid range".into());
+    }
     Ok((Some(LineRange::single(start)), after_start))
 }
 
@@ -527,10 +547,13 @@ mod tests {
 
     #[test]
     fn range_followed_by_command() {
-        let (r, rest) = parse("5,10w").unwrap();
-        // 10 clamped to 5 (5-line buffer)
-        assert_eq!(r, Some((5, 5)));
-        assert_eq!(rest, "w");
+        // `:5,10w` on the 5-line fixture: the end address is past EOF and a
+        // command follows, so nvim errors E16 (verified against nvim 0.12.4)
+        // — it must not silently clamp to (5, 5). `numeric_address_past_eof_
+        // errors_when_command_follows` pins the same rule for `:d`.
+        let result = parse("5,10w");
+        let err = result.expect_err("range past EOF with a command must error E16");
+        assert!(err.contains("E16"), "got: {err}");
     }
 
     #[test]
@@ -560,6 +583,29 @@ mod tests {
     }
 
     // ---- audit A3: backward ranges error (E493) instead of silently swapping
+
+    #[test]
+    fn numeric_address_past_eof_errors_when_command_follows() {
+        // nvim parity (verified against nvim 0.12.4): a literal number past
+        // EOF is E16 when a command follows the range (`:5d` on a 3-line
+        // buffer errors and deletes nothing), while the bare `:N` goto clamps.
+        let ed = make_editor_with_lines(&["a", "b", "c"]);
+
+        let err = parse_range("5d", &ed).unwrap_err();
+        assert!(err.contains("E16"), "got: {err}");
+
+        let err = parse_range("3,10d", &ed).unwrap_err();
+        assert!(err.contains("E16"), "got: {err}");
+
+        // Bare goto still clamps to the last line.
+        let (r, rest) = parse_range("100", &ed).unwrap();
+        assert_eq!(r, Some(LineRange::new(3, 3)));
+        assert!(rest.trim().is_empty());
+
+        // In-range numbers unaffected.
+        let (r, _) = parse_range("2d", &ed).unwrap();
+        assert_eq!(r, Some(LineRange::new(2, 2)));
+    }
 
     #[test]
     fn backward_numeric_range_returns_e493() {
