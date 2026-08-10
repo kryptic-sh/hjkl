@@ -788,6 +788,32 @@ with its §8 finding number:
 
 (The macOS NUL fix and the X11/Wayland clipboard fixes are in `4323e39d`.)
 
+### 1.12 Open from the 2026-08-10 sweep + user reports
+
+Full reports in §9 (review), §10 (audit), §11 (tidy), §12 (perf). The two
+user-reported bugs are the top items. Worked as slices: delegate → review →
+commit → push; each slice pruned from this list on completion.
+
+1. **Explorer sidebar render borking (user report 2026-08-10).** With the cursor
+   in the sidebar/explorer, `eee` / `llll` motions that scroll the sidebar
+   content corrupt the sidebar render. Add a regression test, then fix.
+2. **`e`/`E` line-ending wrap (user report 2026-08-10).** `eeee` wraps around
+   line endings wrong; add an oracle test, then fix any e/E end-of-line wrap
+   bugs.
+3. **HIGH — `--nvim-api` arbitrary file read bypassing `restrict_fs`** (§10 #1).
+   Gate `reload_current`/`checktime_slot` with `check_fs_path` + `resolve_under`
+   (or validate names in `nvim_set_buffer_name`).
+4. **MEDIUM — `:Anvil` host commands un-gated in `--nvim-api`** (§10 #2). Gate
+   on `fs_restricted()`/`shell_disabled()` like `:make`/`:grep`/`:!`.
+5. **RPC `:e` reads unbounded** (§10 hardening) — route the two `--embed`/
+   `--nvim-api` read sites through the capped reader.
+6. **Tidy §11 items 1–9** — dead SHA consts, rope→lines duplication,
+   display_width / leading-vcol dedup, `feed` copies, root-finder dedup,
+   `Loading(String)` payload, SHIFT divergence (§11 #8 — a decision, not
+   mechanical).
+7. **Perf §12 items 1–4** — picker per-keystroke label/sort, `:s` full-buffer
+   materialization, O(rows × folds) scans.
+
 ## 2. Blocked on platform access
 
 | Finding                                                      | Location                                                         | Blocker                                                                             |
@@ -1623,3 +1649,405 @@ user-data clobber (#2), one silent clipboard truncation (#3). Fix order: (1)
 guard or drop the confirm session on buffer reload/switch; (2) stop routing case
 ops through the delete funnel (or snapshot/restore clipboard + registers); (3)
 check `bytes_after` in `read_property`.
+
+## 9. 2026-08-10 code review — whole workspace (correctness)
+
+Scope: clean tree, whole workspace (~264k lines, 57 crates + app). Method:
+read-only sub-agent sweep, every candidate re-traced against the real code
+before inclusion.
+
+### Findings
+
+**None confirmed.** The highest-risk paths (ropey index arithmetic, ex/vim input
+parsing, search/substitute, undo deltas, LSP framing, swap-file parsing,
+fs-watch debounce, atomic writes, tree-sitter range handling) were traced; no
+defect satisfied the verification contract (guarded, reachable, traced to
+return, with an expressible repro). Candidates that failed the trace are under
+Cleared.
+
+### Hardening (correct today, fragile by design)
+
+- **fs-watch `RenameMode::To` pairing** (`hjkl-fs-watch/src/lib.rs:453-458`) —
+  the merge picks the most recent pending `RenameFrom` globally; interleaved
+  renames in one debounce window can mis-pair. Unreachable on Linux (inotify
+  emits `Both`/cookie-matched pairs); a per-path pending map would be more
+  robust.
+- **`apply_collected_matches` stale-match application**
+  (`hjkl-engine/src/ substitute.rs:611-631`) — a match collected
+  pre-buffer-change whose byte offsets still index valid (but different) text is
+  applied at the wrong spot; only char-boundary violations are skipped.
+  Interactive `:s///c` applies immediately so the window is tiny; the guard is
+  best-effort.
+- **LSP `pending` map growth** (`hjkl-lsp/src/server.rs:161-168,515`) — an
+  unanswered request leaks one `(id, app_id)` entry, reaped only on response.
+  Bounded by user-initiated requests; never reaped. Server-initiated
+  `workspace/configuration` auto-answers prevent the common case.
+- **`read_message` exact-limit boundary** (`hjkl-lsp/src/codec.rs:52-58`) — a
+  header section of exactly `MAX_HEADER_BYTES` is rejected (needs to be strictly
+  under); off-by-one in a DoS guard only, harmless.
+
+### Cleared (suspected, disproved)
+
+- `hjkl-fuzzy` `pct * PCT_SCALE` overflow — `pct ≤ 100` on every `Some` path
+  (`needle_len ≤ hay_len`).
+- substitute post-split `last_changed_row` arithmetic — verified numerically
+  against the multi-row `\r` test.
+- undo `diff()` suffix snap — `a_end` snapped to char boundary keeps `b_end` on
+  one (equal trailing bytes); mid-char cases traced to correct deltas.
+- `matching_bracket_pos` backward scan — `here_pos = c - i` exact after the
+  reversed walk.
+- word motions vs vim's `bck_word`/`fwd_word` — virtual-EOL cell semantics
+  mirrored; phantom trailing rope row unreachable.
+- `search_backward` skip-current byte-stepping — `pos_at_byte(cb-1)` always
+  lands strictly before the match start; byte-0 wrap branch correct.
+- tag multibyte slicing — callers convert char→byte before slicing; historical
+  panic fixed.
+- `insert_ctrl_d_bridge` byte/char mixing — outdent only strips ASCII, so byte
+  == char over the stripped span.
+- shell range filter indexing, `range.rs` number/offset parsing (E493 on
+  backward, not swap) — both correct.
+- LSP `read_message` unbounded-line attack — header budget + `take(budget+1)`
+  fail closed.
+- swap.rs hostile input — header/undo/body lengths capped before allocation;
+  v2-shaped files reject without panic.
+- atomic.rs / config write — temp-name retry, no-fallback-after-partial-write,
+  lock-file PID+mtime staleness all correct.
+- fs-watch debounce — sliding-window flush correct; `upsert` last-kind-wins
+  documented and tested.
+- highlighter stale-tree byte ranges — every boundary use goes through
+  `safe_char_range`/`floor_char_boundary`; `end > source.len()` filtered.
+- edit.rs join/split/block inverses — round-trip tests cover empty-prefix/
+  suffix space-eating, ragged padding, non-`\n` separators.
+
+### Coverage
+
+Reviewed in full: hjkl-fuzzy, hjkl-xdg, hjkl-kitty, hjkl-buffer (geom, wrap,
+buffer, edit, search, undo.rs ~1200 lines incl. delta storage), hjkl-engine
+(motions, search, substitute, selection_shift, buffer_impl, tag, editor.rs ~700
+lines of cursor/byte math), hjkl-vim (step, count, curswant, insert_bridges),
+hjkl-ex (parse, range, expand, global, shell, complete ~400 lines), hjkl-lsp
+(codec, server, params, runtime), hjkl-clipboard (base64, osc52, uri), hjkl-fs
+(atomic), hjkl-fs-watch, hjkl-config (write), hjkl-app (swap), hjkl-bonsai
+(highlighter).
+
+Skimmed (grep-level, not full trace): hjkl-ex/builtins.rs (5.5k lines),
+folds.rs, undo.rs remainder, hjkl-engine/editor.rs remainder (7.5k),
+hjkl-vim/vim.rs, hjkl-syntax, hjkl-bonsai (folds/hex_color/comment_markers),
+hjkl-mangler, hjkl-compat-oracle, hjkl-anvil.
+
+GAP (not reviewed): apps/hjkl main loop + TUI host crates (hjkl-\*-tui,
+hjkl-layout, hjkl-tabs), hjkl-hover/which-key/info-popup (timing logic),
+hjkl-picker/menu/prompt internals — where rendering-index bugs would most
+plausibly hide next. Windows/macOS code code-read only, not compiled on this
+Linux host.
+
+## 10. 2026-08-10 security audit — whole workspace
+
+Scope: clean tree, whole workspace. Attack surface walked: CLI args,
+`--embed`/`--nvim-api` RPC, ex command layer, fs policy, swap/undofile
+deserialization, X11/Wayland clipboard, LSP JSON-RPC, modelines, grammar
+downloads, anvil installer, config/XDG, fs-watch. Every finding re-traced
+end-to-end before inclusion.
+
+### Findings — ranked
+
+#### 1. HIGH — arbitrary file read in `--nvim-api` mode, bypassing the RPC filesystem confinement
+
+`apps/hjkl/src/nvim_api.rs:731` → `app.nvim_set_buffer_name(id, &name)` stores
+an RPC-supplied path verbatim, unvalidated, as the slot filename
+(`apps/hjkl/src/app/buffer_ops.rs:512-519`). A bare `:e` then reloads that
+filename with no fs-policy check: `nvim_command` → `dispatch_ex` →
+`ExEffect::EditFile` (`app/ex_dispatch.rs:714`) → `do_edit("")` returns to
+`reload_current` before the `check_fs_path`/`resolve_under` block that only
+guards the non-empty-arg path (`ex_dispatch.rs:2151-2153` skips; the check is at
+`2174-2187`). `reload_current` reads `self.active().filename` via
+`read_to_string_unbounded` (`ex_dispatch.rs:2309`) — no policy call anywhere in
+the function. `:checktime` → `checktime_slot` (`ex_dispatch.rs:2385`, read at
+`2457`) is a second trigger with the same gap. The write side is still blocked
+(`:w` → `save_file_durable`), so the bypass is read-only.
+
+`restrict_fs()` is active in this mode (`main.rs:536-538`); its stated purpose
+is exactly "a remote/automated caller cannot read … arbitrary filesystem
+locations via `:w`/`:e`/`:r`". The read half fails.
+
+```
+Repro (any client that can drive the msgpack-RPC pipe):
+  nvim_buf_set_name(<buf>, "/home/user/.ssh/id_rsa")   # or any readable path
+  nvim_command("e")                                    # :e! also works
+  nvim_buf_get_lines(<buf>, 0, -1, false)              # returns the file contents
+```
+
+`--embed` is NOT affected: its `EditFile` arm resolves the path through
+`check_fs_path` + `resolve_under` (`embed.rs:209-224`, verified).
+
+Fix direction: `reload_current`/`checktime_slot` must run the same
+`check_fs_path` + `resolve_under` gate as `do_edit`'s open path (or
+`nvim_buf_set_name` must validate/reject escapes while `fs_restricted()`).
+
+#### 2. MEDIUM — `:Anvil install/update/uninstall` reachable from `--nvim-api` RPC with no policy gate
+
+`nvim_command` (`nvim_api.rs:1144`) → `app.dispatch_ex` → host registry, where
+`AnvilCmd` is registered (`app/ex_host_cmds.rs:1599`) and its `run`
+(`1352-1379`) calls `app.anvil_install/uninstall/update`
+(`app/ex_dispatch.rs: 3128-3198`) with no `fs_restricted`/`shell_disabled` check
+— unlike `:make`/`:grep`/`:!`. `anvil_install` hands the spec to
+`InstallPool::install`, which spawns worker threads running `install_blocking`
+(`hjkl-anvil/src/job.rs: 65,77,166`) — a live GitHub download + extract +
+chmod + symlink, or a cargo/npm/pip/go install that runs the package's build
+scripts.
+
+Impact: an untrusted RPC client can trigger arbitrary network fetches,
+out-of-cwd disk writes (store lives under XDG data), and native build/script
+execution at will; on the TOFU path a MITM on a first fetch becomes the trusted
+baseline for every later install. Tool name/version is pinned by the embedded
+registry, so this is not arbitrary-code injection by choice of payload — the
+attacker controls that a pinned artifact is fetched/built, and when. `--embed`
+is not affected (dispatches through `hjkl_ex::default_registry`, no host
+commands).
+
+### Cleared (suspected, disproved)
+
+- Embed `:w <abs-path>` / `:saveas` arbitrary write — `save_file_durable`
+  re-checks policy (`save.rs:197,205-217`); nvim-api `:w` hits the same seam.
+- `nvim_buf_set_name` + `:w` write bypass — write path is the checked
+  `save_file_durable`; only the read side (finding 1) leaks.
+- Modeline RCE — only whitelisted options apply; `makeprg`/`errorformat`
+  rejected with a pinned test; same whitelist on RPC-set content.
+- Shell-out from RPC — all four surfaces gate on `shell_disabled()`: `:!`,
+  `:r !cmd`, range filter, `:make`/`:grep`. `:Anvil`'s builders are the only
+  un-gated spawns (finding 2).
+- `%`/`<cword>`/`<cfile>` expansion — pure string substitution; expanded results
+  still pass through the gated dispatch.
+- Undo/swap deserialization — magic + version + capped lengths (header 1 MiB,
+  undo 256 MiB, body 64 MiB); postcard fail-safe; `from_serializable` validates
+  root/current bounds, parent/child indices, seq uniqueness, child partition and
+  reachability before use.
+- X11 clipboard wire — libxcb does the wire parsing; INCR capped (256 MiB +
+  timeouts), TARGETS len%4 checked.
+- Wayland socket — hostile size field handled (`total < 8` → drop).
+- LSP JSON-RPC — 16 MiB message / 64 KiB header caps; parse errors logged not
+  panicked; `workspace/applyEdit` declined; diagnostics ranges bounds-guarded.
+- Grammar auto-install in RPC — disabled when `fs_restricted()`; git clone args
+  validated.
+- `:Anvil uninstall` traversal — `validate_name` rejects `..`/absolute
+  (regression test).
+- TOCTOU on saves — canonicalize + `resolve_under`, `O_NOFOLLOW` probe,
+  rename-replaces-symlink.
+- RPC `:set` config write-back — `persist_set_options` no-ops without
+  `config_path`, only set in the TUI path.
+
+### Hardening (correct today, fragile)
+
+- `reload_current`/`checktime_slot` read paths — shared by TUI (policy off) and
+  RPC (policy on, bypassed — finding 1); after the fix, any future read of
+  `slot.filename` should route through one checked seam.
+- `--embed`/`--nvim-api` `:e` reads are unbounded (`read_to_string_unbounded`,
+  `embed.rs:225`, `ex_dispatch.rs:2309`) — a client that can write a multi-GB
+  file into cwd forces a matching allocation; the crate's own doc reserves
+  capped reads for that case.
+- TOFU first-install in anvil — a MITM on a first download becomes the permanent
+  trusted baseline; documented trade-off, now reachable remotely via finding 2.
+- TUI grammar auto-install — clones a pinned rev and `dlopen`s a freshly
+  compiled `.so`; supply-chain exposure acknowledged in the docs.
+- RPC has no auth at all — by design (pipe ownership = trust); worth restating
+  in `docs/embed-rpc.md` since finding 1 makes the confinement the only read
+  control.
+
+### Coverage
+
+Walked: CLI (`main.rs`), JSON-RPC (`embed.rs`), msgpack-RPC (`nvim_api.rs`), ex
+layer (`builtins.rs` write/read/edit/saveas/cd, `shell.rs`, `range.rs`,
+`parse.rs`, `expand.rs`, `global.rs`), app ex dispatch (`ex_dispatch.rs`,
+`ex_host_cmds.rs`, `quickfix.rs`), fs policy (`policy.rs`,
+`hjkl-fs/src/ {path,read,open,atomic,lock,dirs}.rs`), swap/undofile, clipboard
+backends, LSP, modeline, anvil installer/store/job, bonsai
+loader/source/grammar, hjkl-lang directory gating, config/XDG, fs-watch.
+
+GAPs: Windows/macOS clipboard backends + `identity.rs` Win32 path code-reading
+only (not compiled on this host); ~30 small TUI crates audited for
+unsafe/forbid-unsafe + shell spawns, not line-by-line; hjkl-buffer/engine
+arithmetic hot paths trusted to ropey + the ~185-test/miri harness;
+`builtins.rs` (5.3k lines) walked for shell/fs/panic effects, not every option.
+
+**Summary:** 1 high, 1 medium. Risk low for the interactive TUI (local user,
+vim-parity shell intentionally on), moderate for the RPC modes whose confinement
+is the only thing between a pipe-writing client and the user's files. Fix order:
+(1) gate `reload_current`/`checktime_slot` — closes the arbitrary-file-read; (2)
+gate or remove the `:Anvil` surface while `fs_restricted()`; (3) route the two
+RPC `:e` reads through the capped reader.
+
+## 11. 2026-08-10 tidy pass — whole workspace
+
+Scope: clean tree, whole workspace. Cleanups only, each verified
+behavior-preserving; compiler-caught dead code excluded (clippy `-D warnings`
+green). All `pub` API items cross-checked workspace-wide — zero dead public API
+exists.
+
+### Findings — ranked by value
+
+1. **~70 identical inline rope→lines snapshots → call
+   `hjkl_engine::rope_util::rope_to_lines_vec`** (`rope_util.rs:52`). The block
+   `.rope().lines().map(|s| { let s = s.to_string(); s.strip_suffix('\n').map(str::to_string).unwrap_or(s) }).collect::<Vec<_>>()`
+   is repeated: 17× `app/tests/ex.rs`, 17× `app/tests/marks_registers.rs`, 12×
+   `app/tests/keymap.rs`, 8× `app/tests/visual.rs`, 6× `app/tests/lsp.rs`, 5×
+   `app/tests/formatter.rs`, 2× `app/tests/pickers.rs`, 1×
+   `app/tests/splits_windows.rs`, plus `tests/tag_rename.rs:62`,
+   `tests/smartindent_html.rs:68`. (Paths are under `app/tests/`, not `app/`.)
+   `rope_to_lines_vec` is the exact existing implementation. Action: replace
+   each copy with the call.
+2. **Dead SHA constants + stale `#[allow(dead_code)]`** —
+   `hjkl-anvil/src/installer.rs:1380,1382`,
+   `hjkl-anvil/tests/install_tests.rs: 53,55`. `HELLO_GZ_SHA` and
+   `HELLO_RAW_SHA` are defined but never referenced (grep: definitions only);
+   `HELLO_ZIP_SHA` is live (`installer.rs:2028`). The `#[allow(dead_code)]` at
+   `installer.rs:1379` is stale. Action: delete the dead pair in both files,
+   drop the allow. Secondary: the four fixture hashes are duplicated verbatim
+   between the two files — one shared home would desync-proof them.
+3. **`display_width` duplicates public `char_col_to_visual_col`** —
+   `hjkl-buffer-tui/src/render.rs:479-489` vs `hjkl-buffer/src/geom.rs:150-160`.
+   `display_width(line, tab_width)` implements exactly geom's `cell_width` tab
+   rule; `char_col_to_visual_col(line, usize::MAX, tab_width)` computes the
+   identical value. Both callers pass `effective_tab_width()` (never 0), and the
+   swap also removes a latent `col % 0` panic in `display_width`. Action: delete
+   `display_width`, call `char_col_to_visual_col(&line, usize::MAX, tab_width)`.
+4. **Identical leading-whitespace width loops ×2 → extract to hjkl-buffer** —
+   `hjkl-buffer-tui/src/render.rs:1032-1041` and
+   `apps/hjkl/src/render.rs: 1094-1103`, byte-for-byte same body (' ' +1, '\t'
+   +tab_width - col%tab_width, else break); both crates depend on hjkl-buffer.
+   Action: add `leading_visual_width(line, tab_width)` to
+   `hjkl-buffer/src/geom.rs` and call it from both loops.
+5. **`feed`/`feed_insert` forked 4× in integration tests** —
+   `tests/{tag_rename.rs:28,45, autopair.rs:36,70, comment_continuation.rs:28,56, smartindent_html.rs:34,51}`.
+   Four drifted copies of the chars→`Input` mapping (key sets differ: Esc only
+   vs Enter+Backspace+Esc vs Enter+Esc). Action: one shared helper in e.g.
+   `tests/common/mod.rs` handling the union; each file keeps only its `editor()`
+   options.
+6. **Two ancestor-marker project-root finders** — `app/types.rs:493-516`
+   (`find_project_root`) vs `hjkl-lsp/src/workspace.rs:10-25` (`find_root`).
+   Same walk; a file `start` never matches in the app version either, so both
+   effectively begin at the parent. Action: `find_project_root` delegates to
+   `hjkl_lsp::workspace::find_root(start, MARKERS).unwrap_or_else(|| start.to_owned())`.
+   Single call sites: `app/mod.rs:2106`, `lsp/runtime.rs: 132`.
+7. **Dead payload in a pub enum** — `hjkl-syntax/src/lib.rs:283`
+   `Loading(#[allow(dead_code)] String)`: constructed (`lib.rs:553,593`) but
+   never read; `is_known()` only matches the variant shape. Action: drop the
+   payload (unit variant) and the allow; public-API shape change if an external
+   consumer reads the payload.
+8. **"Mirrors" claim is two drifted SHIFT-normalization copies** —
+   `app/keymap.rs:175-194` (`chord_event_to_input`) vs
+   `hjkl-keymap-tui/src/ lib.rs:33-40` (`from_crossterm`). keymap.rs documents
+   the SHIFT rule as mirroring `from_crossterm`, but they diverged: keymap-tui
+   drops SHIFT for EVERY `Char`; the app copy folds only ASCII letters and keeps
+   SHIFT on other chars (`<S-1>` etc.). Both paths run (event_loop.rs:49
+   `from_crossterm`; event_loop.rs:1040 `crossterm_to_input`), so the same
+   physical key can produce different `Input`s. **This is a real behavior
+   inconsistency, not a mechanical cleanup** — unify on one rule (a decision) or
+   correct the comment. Cross-cutting with correctness.
+9. **`truncate_desc` ≡ `truncate_to_width(s, max−1) + "…"`** —
+   `hjkl-which-key/src/lib.rs:80-97` vs `hjkl-statusline/src/lib.rs:18-30`; same
+   display-width loop, different ellipsis budget, no dep edge between the
+   crates. Only worth sharing if a third consumer appears.
+
+### Coverage
+
+Read in depth: hjkl-engine rope_util, hjkl-buffer geom/buffer/search/folds/
+viewport/listchars/wrap, hjkl-xdg, hjkl-config, hjkl-fs dirs, hjkl-statusline,
+hjkl-which-key(-tui), hjkl-keymap + keymap-tui, hjkl-engine-tui, hjkl-theme-tui,
+hjkl-picker source/rg, hjkl-lsp workspace/runtime, hjkl-mangler, hjkl-anvil
+installer + tests, hjkl-syntax (Loading), hjkl-ex expand/folds/complete, app
+keymap/types/event_loop/render (sampled)/mod (sampled)/tests.
+
+Mechanical scan: every `pub fn`/`const`/`struct`/`enum`/`trait`/`pub use … as`
+in all 59 packages checked for workspace-wide references — zero dead public API.
+All `#[allow(dead_code)]` sites inventoried; only the anvil + syntax ones were
+actionable.
+
+GAPs (skimmed, not read line-by-line): hjkl-bonsai (largest crate), hjkl-css,
+hjkl-markdown(-tui), hjkl-layout, hjkl-form, hjkl-completion(-tui),
+hjkl-hover/holler/prompt/menu/tabs/splash families, hjkl-vim FSM internals,
+hjkl-clipboard platform backends (`#[allow(dead_code)]` there is platform-gated,
+unverifiable on this Linux host), and the bulk of `apps/hjkl/src/render.rs` +
+`hjkl-buffer-tui/src/render.rs` (4452/5338 lines — sampled around every cited
+symbol). Duplicated logic could exist inside those untouched regions.
+
+## 12. 2026-08-10 perf pass — whole workspace
+
+Scope: clean tree, whole workspace. Overall the codebase is aggressively
+performance-engineered (viewport-bounded span caches, incremental tree-sitter
+parse, delta undo with keyframes, per-row search caches, thread-local wrap
+scratch). The four findings below are the verified outliers; the two picker ones
+are the only per-keystroke items of real size.
+
+### Findings — ranked by impact
+
+1. **Picker list rebuilt from scratch on every draw — ~1000 `label()` calls + a
+   String alloc per character** (`apps/hjkl/src/render.rs:2897-2934`,
+   `hjkl-picker/src/picker.rs:471-499`). Per draw, `visible_entries()` and
+   `visible_entry_styles()` each call `source.label(idx)` for ALL ≤500 filtered
+   entries (~1000 label() calls/frame, each a Mutex lock + two allocs for
+   FileSource), then every char of every label becomes an individual `String`
+   (`render.rs:2916` `ch.to_string()`). The event loop sets `needs_draw` before
+   every dispatched key (`app/event_loop.rs:2229`), so this is once per
+   keystroke — ~1500+ heap allocations per keystroke. Fix: build `ListItem`s for
+   only the visible window (~15-20 rows); merge the two passes into one
+   `label()` call per row; use `Span::raw` over borrowed label slices instead of
+   per-char strings.
+2. **Picker re-scores and fully sorts the entire candidate set every keystroke**
+   (`hjkl-picker/src/picker.rs:329-357`). Per keystroke, `score()` runs over all
+   N candidates (FileSource caps at 50,000, `source/file.rs:119`), each
+   allocating a fresh positions `Vec` (`hjkl-fuzzy/src/lib.rs:53,67`), then a
+   full O(N log N) sort of all N before `.truncate(500)` (`picker.rs:357`). For
+   an empty query every score ties, so opening the picker (and every streaming
+   batch growth, which re-triggers refresh at `picker.rs:263`) sorts 50k entries
+   by full lowercased text. Fix: a size-500 `BinaryHeap` keyed
+   `(score, lowercased_text)` (or `select_nth_unstable` + partial sort) → O(N
+   log 500); reuse one scratch positions `Vec` across candidates.
+3. **`:s` materializes the whole buffer for a single-line range**
+   (`hjkl-engine/src/substitute.rs:344,415-417,422` +
+   `hjkl-ex/src/builtins.rs: 1311-1313`). `apply_substitute` calls
+   `rope_to_lines_vec` on the ENTIRE buffer (344), then `new_lines.join("\n")`
+   (415), a full-buffer `replace_all` (416, rope rebuild + cache invalidation),
+   and `rebase_marks_after_row_growth` over all rows (422). A bare `:s/foo/bar/`
+   defaults to the cursor line only (builtins.rs:1311-1313): a 1M-line file pays
+   two full copies + 1M small allocs + a full rope rebuild to edit one line. The
+   sibling `collect_substitute_matches` already walks only `start..=clamp_end`
+   with a borrowed `rope_line_slice` per row (substitute.rs:539-543). Fix:
+   materialize only `start..=clamp_end`, splice back with a range remove+insert,
+   rebase marks only for the changed range → O(range) instead of O(N).
+4. **Systemic O(rows × folds) scans on per-keystroke / per-frame paths**
+   (`app/syntax_glue.rs:536`; `hjkl-buffer/src/buffer.rs:237,249,281,306,454`;
+   `hjkl-buffer/src/folds.rs:542,555`; `hjkl-engine/src/buffer_impl.rs:594`;
+   `apps/hjkl/src/render.rs:1436`). `folds.iter().any(|f| f.hides(row))` — a
+   linear scan of the whole fold list per row — runs on per-keystroke paths
+   (scroll-follow, syntax effective-height, engine `j`/`k` via
+   `SnapshotFoldProvider`) and per-frame paths (cursor screen-row, explorer
+   paint). Folds are kept sorted by `start_row` (`folds.rs:140-145`), so each
+   query can be O(log F); the TUI renderer already built exactly this
+   (`FoldIndex`, `hjkl-buffer-tui/src/render.rs:610-616,721-725`) while these
+   call sites stayed linear. Fix: expose a `hides(row)` using `partition_point`
+   over `start_row`; have `SnapshotFoldProvider` and the syntax pass use it.
+   `SnapshotFoldProvider::from_buffer` (`buffer_impl.rs:581-588`) also
+   deep-clones the fold `Vec` per `j`/`k` and per frame — avoid with a
+   borrow-style provider or a gen-checked snapshot cache.
+
+### Coverage
+
+Traced in depth: per-keystroke insert/edit path, cursor motion (LineCache),
+search + per-row cache, substitute (both paths), render loop + draw gating,
+per-frame widget render, syntax pipeline, git signs/blame workers, LSP glue,
+picker + sources + preview, completion, explorer render cache, RPC server mode.
+All already well-hardened; the four findings above are what remains.
+
+Not read: hjkl-ex dispatch beyond substitute, hjkl-keymap trie, hjkl-vim FSM,
+hjkl-fs-watch, hjkl-clipboard, hjkl-layout, hjkl-markdown, hjkl-kitty,
+hjkl-hover, most ~30 small TUI crates, hjkl-bonsai folds/hex_color internals.
+
+Needs profiling to settle: actual per-keystroke cost of incremental tree-sitter
+reparse + viewport highlight on very large files; the `lsp_render_fingerprint`
+full-diagnostic scan on idle poll (`event_loop.rs:2043-2048`, ~8/s — cheap
+unless tens of thousands of diagnostics); `handle_publish_diagnostics` calling
+`current_dir()` per slot per message and allocating a `String` per diagnostic
+line (message-frequency bounded). Note: buffer-tui render's per-row
+`conceals.iter().filter(|c| c.row == doc_row)` (`render.rs:803-808`) is O(rows ×
+conceals) per frame, but only bites while the explorer pane with a large tree is
+open and is dirty_gen-cached — low priority.
