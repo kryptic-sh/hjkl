@@ -4460,6 +4460,196 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// Scrolling the explorer must not corrupt the sidebar render (#1.12 user
+    /// report): after `e` motions advance the viewport `top_row`, every frame's
+    /// visible rows must still paint the correct buffer row, tree connector
+    /// glyph (`├`/`└`) and cursor block. Draws after EVERY press — the real TUI
+    /// redraws per keystroke, so a scroll-dependent stale offset (cached
+    /// overlay/conceal data read at pre-scroll rows) would garble a frame here.
+    #[test]
+    fn scrolling_keeps_explorer_rows_aligned() {
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::KeyCode;
+        use ratatui::style::Modifier;
+        use ratatui::{Terminal, backend::TestBackend};
+
+        // A tree taller than the 23-row pane so `e` motions force a scroll.
+        let tmp = tempfile::tempdir().unwrap();
+        for d in ["aaa", "bbb", "ccc", "ddd", "eee", "fff"] {
+            std::fs::create_dir_all(tmp.path().join(d)).unwrap();
+            for i in 0..20 {
+                std::fs::write(tmp.path().join(d).join(format!("{d}_{i:02}.rs")), "x").unwrap();
+            }
+        }
+        for i in 0..40 {
+            std::fs::write(tmp.path().join(format!("f_{i:02}.txt")), "x").unwrap();
+        }
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+
+        let mut app = super::super::App::new(Some("f_00.txt".into()), false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
+        let win_id = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
+
+        // Expand every top-level dir through the app's own activate path so the
+        // reconcile baseline stays in sync (mutating the tree directly leaves
+        // the baseline stale and `maybe_reconcile_explorer` snaps the cursor
+        // back after every press).
+        loop {
+            let row = app.window_cursor(win_id).0;
+            let is_dir = app.tabs[app.active_tab]
+                .explorer
+                .as_ref()
+                .unwrap()
+                .tree
+                .nodes
+                .get(row)
+                .is_some_and(|n| n.is_dir);
+            if !is_dir {
+                break;
+            }
+            app.explorer_activate();
+            let next = app.window_cursor(win_id).0;
+            if next == row {
+                break; // activate collapsed instead of expanding — bail out
+            }
+        }
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // Two frames settle window rects/viewports and populate the
+        // `ExplorerRenderCache` for the pre-scroll `dirty_gen`.
+        terminal
+            .draw(|f| crate::render::frame(f, &mut app))
+            .unwrap();
+        terminal
+            .draw(|f| crate::render::frame(f, &mut app))
+            .unwrap();
+
+        let area = app.windows[win_id].as_ref().unwrap().last_rect.unwrap();
+        let (top, height) = (area.y, area.h);
+        assert!(
+            (20..=25).contains(&height),
+            "pane must be tall enough to scroll through; got {height}"
+        );
+
+        // Extract the name as the LAST contiguous run of non-space symbols in
+        // the row (glyphs come first: guide/connector/icon, then the name). A
+        // stale conceal would leave the `<US><id>` tail visible and extend the
+        // run, so this also pins the conceal rows.
+        let rendered_name = |buf: &ratatui::buffer::Buffer, y: u16| -> String {
+            let mut runs: Vec<String> = Vec::new();
+            let mut cur = String::new();
+            for x in 0..area.w {
+                let sym = buf.cell((x, top + y)).map_or(" ", |c| c.symbol());
+                if sym == " " || sym.is_empty() {
+                    if !cur.is_empty() {
+                        runs.push(std::mem::take(&mut cur));
+                    }
+                } else {
+                    cur.push_str(sym);
+                }
+            }
+            if !cur.is_empty() {
+                runs.push(cur);
+            }
+            runs.last().cloned().unwrap_or_default()
+        };
+        let buf_text = app.window_editors[&win_id].buffer().as_string();
+        let expected_name = |doc_row: usize| -> String {
+            let line = buf_text.split('\n').nth(doc_row).unwrap_or("");
+            let line = line.trim_start_matches(' ');
+            let end = line.find('\u{1F}').unwrap_or(line.len());
+            line[..end].to_string()
+        };
+
+        let mut presses = 0;
+        let mut scrolled = false;
+        for press_i in 0..400 {
+            press(&mut app, KeyCode::Char('e'));
+            presses += 1;
+            let editor_top = app.window_editors[&win_id].host().viewport().top_row;
+            if editor_top > 0 {
+                scrolled = true;
+            }
+            terminal
+                .draw(|f| crate::render::frame(f, &mut app))
+                .unwrap();
+            let buf = terminal.backend().buffer().clone();
+            let editor_top = app.window_editors[&win_id].host().viewport().top_row;
+            let buf_lines: Vec<&str> = buf_text.split('\n').collect();
+
+            // Cursor block: the single REVERSED cell must sit on the cursor's
+            // screen row (`cursor_row - top_row`) — not a pre-scroll offset.
+            let cur_row = app.window_editors[&win_id].buffer().cursor().row;
+            if let Some(expected_scr) = cur_row.checked_sub(editor_top)
+                && expected_scr < height as usize
+            {
+                let rev: Vec<(u16, u16)> = {
+                    let mut v = Vec::new();
+                    for x in 0..area.w {
+                        for y in 0..height {
+                            if let Some(c) = buf.cell((x, top + y))
+                                && c.modifier.contains(Modifier::REVERSED)
+                            {
+                                v.push((x, top + y));
+                            }
+                        }
+                    }
+                    v
+                };
+                assert_eq!(
+                    rev.len(),
+                    1,
+                    "exactly one cursor block cell after {press_i} presses \
+                     (top_row={editor_top}, cursor_row={cur_row})"
+                );
+                assert_eq!(
+                    rev[0].1,
+                    top + expected_scr as u16,
+                    "cursor block must sit on the cursor row after {press_i} presses \
+                     (top_row={editor_top}, cursor_row={cur_row})"
+                );
+            }
+
+            for y in 0..height {
+                let doc_row = editor_top + y as usize;
+                let got = rendered_name(&buf, y);
+                let want = expected_name(doc_row);
+                assert_eq!(
+                    got, want,
+                    "row {y} shows the wrong buffer row after {press_i} presses                      (top_row={editor_top}, cursor_row={cur_row})"
+                );
+                // Connector glyph: `└` on the tree's last-child rows, `├` else.
+                // Painted at text_x + branches.len()*2 (text_x = 1 here).
+                if doc_row > 0 && doc_row < buf_lines.len() {
+                    let (is_last, branches) = app.tabs[app.active_tab]
+                        .explorer
+                        .as_ref()
+                        .unwrap()
+                        .tree
+                        .nodes
+                        .get(doc_row)
+                        .map_or((false, 0), |n| (n.is_last, n.branches.len() as u16));
+                    let conn_col = 1 + branches * 2;
+                    let conn = buf.cell((conn_col, top + y)).map_or("", |c| c.symbol());
+                    assert_eq!(
+                        conn,
+                        if is_last { "└" } else { "├" },
+                        "connector glyph on the wrong row after {press_i} presses                          (top_row={editor_top}, doc {doc_row})"
+                    );
+                }
+            }
+            if editor_top >= 20 {
+                break;
+            }
+        }
+        assert!(
+            scrolled && presses < 400,
+            "the test must scroll the explorer and finish (presses={presses})"
+        );
+    }
+
     /// `explorer_activate` on a dir expands it (adds its children to the tree)
     /// and collapses it again on a second activation (removes them).
     #[test]
@@ -4523,6 +4713,202 @@ mod tests {
         assert_eq!(
             nodes_closed, nodes_before,
             "activate again must collapse back to the prior node count"
+        );
+    }
+
+    /// MID-ANIMATION regression (#1.12): the explorer's animated scroll frame
+    /// must render exactly like a static frame at the same viewport top.
+    ///
+    /// The smooth-scroll design (render.rs `target_top_row`/`vp_top`, dbc142c3)
+    /// makes the animated top the single source of truth for text, overlays and
+    /// cursor during a scroll anim. A mid-flight frame at animated top A must
+    /// therefore be byte-identical (symbols AND styles) to a frame drawn with
+    /// the engine top set to A and the animation cleared — otherwise text,
+    /// glyph overlay or cursor block disagree by `|target - A|` rows and the
+    /// sidebar garbles while scrolling, which is the user's report.
+    #[test]
+    fn scrolling_animated_frame_keeps_explorer_rows_aligned() {
+        use crate::app::ScrollAnim;
+        use crate::keymap_actions::AppAction;
+        use crossterm::event::KeyCode;
+        use ratatui::style::Modifier;
+        use ratatui::{Terminal, backend::TestBackend};
+        use std::time::{Duration, Instant};
+
+        let tmp = tempfile::tempdir().unwrap();
+        for d in ["aaa", "bbb", "ccc", "ddd", "eee", "fff"] {
+            std::fs::create_dir_all(tmp.path().join(d)).unwrap();
+            for i in 0..20 {
+                std::fs::write(tmp.path().join(d).join(format!("{d}_{i:02}.rs")), "x").unwrap();
+            }
+        }
+        for i in 0..40 {
+            std::fs::write(tmp.path().join(format!("f_{i:02}.txt")), "x").unwrap();
+        }
+        let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
+
+        let mut app = super::super::App::new(Some("f_00.txt".into()), false, None, None).unwrap();
+        app.dispatch_action(AppAction::ToggleExplorer, 1);
+        let _trash = isolate_trash(&mut app);
+        let win_id = app.tabs[app.active_tab].explorer.as_ref().unwrap().win_id;
+
+        // Expand every top-level dir through the app's own activate path (same
+        // rationale as `scrolling_keeps_explorer_rows_aligned`).
+        loop {
+            let row = app.window_cursor(win_id).0;
+            let is_dir = app.tabs[app.active_tab]
+                .explorer
+                .as_ref()
+                .unwrap()
+                .tree
+                .nodes
+                .get(row)
+                .is_some_and(|n| n.is_dir);
+            if !is_dir {
+                break;
+            }
+            app.explorer_activate();
+            let next = app.window_cursor(win_id).0;
+            if next == row {
+                break; // activate collapsed instead of expanding — bail out
+            }
+        }
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| crate::render::frame(f, &mut app))
+            .unwrap();
+        terminal
+            .draw(|f| crate::render::frame(f, &mut app))
+            .unwrap();
+
+        let area = app.windows[win_id].as_ref().unwrap().last_rect.unwrap();
+        let (top, height) = (area.y, area.h);
+        assert!(
+            (20..=25).contains(&height),
+            "pane must be tall enough to scroll through; got {height}"
+        );
+
+        // Press `e` until the viewport scrolls. On the press that changes the
+        // top, arm a LONG-duration animation from the pre-press top toward the
+        // new top, started ~1.1s into a 10s anim (ease-out ≈ 0.3 < 0.5) so the
+        // animated render top stays at the pre-press value while the engine's
+        // (target) top is one row further — the frame where the old render
+        // paths disagreed by the animated offset.
+        let mut prev_top = 0usize;
+        let mut presses = 0;
+        let mut checked = false;
+        for _ in 0..400 {
+            press(&mut app, KeyCode::Char('e'));
+            presses += 1;
+            let new_top = app.window_editors[&win_id].host().viewport().top_row;
+            if new_top == prev_top || checked {
+                prev_top = new_top;
+                continue;
+            }
+            checked = true;
+            assert_eq!(
+                new_top,
+                prev_top + 1,
+                "each `e` scroll must advance the top by exactly one row                  (prev={prev_top}, new={new_top})"
+            );
+
+            // ── Static frame at the animated top (anim cleared, engine top
+            //    rewound to prev) ──
+            app.scroll_anim = None;
+            if let Some(e) = app.window_editors.get_mut(&win_id) {
+                e.host_mut().viewport_mut().top_row = prev_top;
+            }
+            terminal
+                .draw(|f| crate::render::frame(f, &mut app))
+                .unwrap();
+            let buf_static = terminal.backend().buffer().clone();
+
+            // ── Animated frame: engine top at the target, anim mid-flight with
+            //    animated top == prev (the misaligned case for the old code) ──
+            if let Some(e) = app.window_editors.get_mut(&win_id) {
+                e.host_mut().viewport_mut().top_row = new_top;
+            }
+            app.scroll_anim = Some(ScrollAnim {
+                win_id,
+                start_top: prev_top,
+                target_top: new_top,
+                started_at: Instant::now() - Duration::from_millis(1120),
+                duration: Duration::from_secs(10),
+            });
+            let animated_top = app
+                .scroll_anim_render_top(win_id)
+                .expect("mid-flight anim must yield an animated render top");
+            assert_eq!(
+                animated_top, prev_top,
+                "test setup: the eased frame must still be at the pre-press top                  (got {animated_top}, want {prev_top})"
+            );
+            terminal
+                .draw(|f| crate::render::frame(f, &mut app))
+                .unwrap();
+            let buf_anim = terminal.backend().buffer().clone();
+
+            // ── Assertion 1: the animated frame must be byte-identical to the
+            //    static frame at the same top — text, glyphs, colors, cursor
+            //    line and cursor block all agree. Any row that differs is a
+            //    scroll-dependent misalignment (pre-fix: the cursor block and
+            //    cursorline sat at the TARGET row while the text showed the
+            //    animated rows).
+            let mut diffs: Vec<(u16, u16, String, String)> = Vec::new();
+            for y in 0..height {
+                for x in 0..area.w {
+                    let a = buf_anim.cell((area.x + x, top + y));
+                    let s = buf_static.cell((area.x + x, top + y));
+                    let sa = a.map(|c| c.symbol().to_string()).unwrap_or_default();
+                    let ss = s.map(|c| c.symbol().to_string()).unwrap_or_default();
+                    let differs = sa != ss || a.map(|c| c.style()) != s.map(|c| c.style());
+                    if differs {
+                        diffs.push((area.x + x, top + y, ss, sa));
+                    }
+                }
+            }
+            assert!(
+                diffs.is_empty(),
+                "mid-animation frame must equal the static frame at the same                  animated top ({} cells differ, first: {diffs:?}); target top                  {new_top}, animated top {animated_top}, cursor row {}",
+                diffs.len(),
+                app.window_editors[&win_id].buffer().cursor().row,
+            );
+
+            // ── Assertion 2: exactly one cursor block, on the cursor's screen
+            //    row at the ANIMATED top (not the target top).
+            let cur_row = app.window_editors[&win_id].buffer().cursor().row;
+            let rev: Vec<(u16, u16)> = {
+                let mut v = Vec::new();
+                for x in 0..area.w {
+                    for y in 0..height {
+                        if let Some(c) = buf_anim.cell((area.x + x, top + y))
+                            && c.modifier.contains(Modifier::REVERSED)
+                        {
+                            v.push((area.x + x, top + y));
+                        }
+                    }
+                }
+                v
+            };
+            let expected_scr = cur_row
+                .checked_sub(animated_top)
+                .expect("cursor must be below the animated top on this frame");
+            assert_eq!(
+                rev.len(),
+                1,
+                "exactly one cursor block cell mid-animation (top_row={animated_top},                  cursor_row={cur_row})"
+            );
+            assert_eq!(
+                rev[0].1,
+                top + expected_scr as u16,
+                "cursor block must sit on the cursor's row at the ANIMATED top                  (top_row={animated_top}, cursor_row={cur_row}); it sat on the                  target-top row pre-fix"
+            );
+            break;
+        }
+        assert!(
+            checked && presses < 400,
+            "the test must observe a scroll and finish (presses={presses}, checked={checked})"
         );
     }
 }
