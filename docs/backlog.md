@@ -810,22 +810,20 @@ completion.
    in-memory harness cannot see. Waiting on the user: build/commit they saw it
    on, `:set scroll_duration_ms`, and whether it still reproduces on current
    main.
-2. **MEDIUM — `:Anvil` host commands un-gated in `--nvim-api`** (§10 #2). Gate
-   on `fs_restricted()`/`shell_disabled()` like `:make`/`:grep`/`:!`.
-3. **MEDIUM — `:DiffOrig` reads slot filename unguarded (found fixing §10 #1).**
+2. **MEDIUM — `:DiffOrig` reads slot filename unguarded (found fixing §10 #1).**
    `apps/hjkl/src/app/diff.rs:28` (`diff_orig`) does `std::fs::read(&path)` on
    the slot filename with no policy gate, reachable in RPC mode via `:DiffOrig`
    (`ex_host_cmds.rs:625`) after `nvim_buf_set_name` renames the buffer to an
    outside path — same leak shape as the fixed HIGH. Fix: route through the new
    `resolve_read_path` helper (ex_dispatch.rs) like
    `reload_current`/`checktime_slot`; add an nvim_api regression test.
-4. **RPC `:e` reads unbounded** (§10 hardening) — route the two `--embed`/
+3. **RPC `:e` reads unbounded** (§10 hardening) — route the two `--embed`/
    `--nvim-api` read sites through the capped reader.
-5. **Tidy §11 items 1–9** — dead SHA consts, rope→lines duplication,
+4. **Tidy §11 items 1–9** — dead SHA consts, rope→lines duplication,
    display_width / leading-vcol dedup, `feed` copies, root-finder dedup,
    `Loading(String)` payload, SHIFT divergence (§11 #8 — a decision, not
    mechanical).
-6. **Perf §12 items 1–4** — picker per-keystroke label/sort, `:s` full-buffer
+5. **Perf §12 items 1–4** — picker per-keystroke label/sort, `:s` full-buffer
    materialization, O(rows × folds) scans.
 
 ## 2. Blocked on platform access
