@@ -794,9 +794,21 @@ Full reports in §9 (review), §10 (audit), §11 (tidy), §12 (perf). The two
 user-reported bugs are the top items. Worked as slices: delegate → review →
 commit → push; each slice pruned from this list on completion.
 
-1. **Explorer sidebar render borking (user report 2026-08-10).** With the cursor
-   in the sidebar/explorer, `eee` / `llll` motions that scroll the sidebar
-   content corrupt the sidebar render. Add a regression test, then fix.
+1. **Explorer sidebar render borking (user report 2026-08-10) — NEEDS
+   GUIDANCE.** With the cursor in the sidebar/explorer, `eee` / `llll` motions
+   that scroll the sidebar content were reported to corrupt the sidebar render.
+   Investigated twice (2026-08-10): the non-animated scroll path and the
+   animated-frame path both render correctly under the test harness — two
+   regression tests added (`scrolling_keeps_explorer_rows_aligned`,
+   `scrolling_animated_frame_keeps_explorer_rows_aligned`, commit `8682037d`)
+   fail when the animated top is not written into the render viewport. Ordinary
+   `e`/`l` motions never arm scroll animation (only
+   `scroll_full_page`/`scroll_half_page` set the hint), so the reported scenario
+   cannot animate on current main; the symptom may predate the 2026-07-16
+   smooth-scroll fix (`dbc142c3`) or be a real-terminal redraw artifact the
+   in-memory harness cannot see. Waiting on the user: build/commit they saw it
+   on, `:set scroll_duration_ms`, and whether it still reproduces on current
+   main.
 2. **`e`/`E` line-ending wrap (user report 2026-08-10).** `eeee` wraps around
    line endings wrong; add an oracle test, then fix any e/E end-of-line wrap
    bugs.
