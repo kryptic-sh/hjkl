@@ -2295,11 +2295,49 @@ impl App {
         }
     }
 
+    /// Resolve a slot's on-disk path under the RPC filesystem policy before
+    /// reading it back — the bare-`:e` reload and `:checktime` autoreload share
+    /// this seam. When [`hjkl_engine::policy::fs_restricted()`] is active
+    /// (`--nvim-api` / `--embed`), refuse paths that escape the working-directory
+    /// subtree, mirroring the gate `do_edit` applies to `:e <path>`, so a buffer
+    /// renamed via the RPC API (`nvim_buf_set_name`) to an absolute / outside
+    /// path can't be read back. `check_fs_path` lexically refuses every absolute
+    /// spelling, but a slot filename may legitimately BE a resolved absolute
+    /// path (a file opened via `:e <rel>` stores the canonicalized path), so
+    /// `resolve_under` arbitrates: an absolute path that resolves inside the
+    /// working directory is a legitimately-opened file, not an escape. No-op in
+    /// the TUI (policy off): returns `path` unchanged.
+    fn resolve_read_path(&self, path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+        if !hjkl_engine::policy::fs_restricted() {
+            return Ok(path.to_path_buf());
+        }
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        if let Err(e) = hjkl_engine::policy::check_fs_path(path) {
+            // Refused spelling — but keep legitimately canonicalized absolute
+            // filenames (files opened from inside the cwd) working.
+            match hjkl_fs::resolve_under(&cwd, path) {
+                Ok(resolved) => return Ok(resolved),
+                Err(_) => return Err(format!("{}: {e}", path.display())),
+            }
+        }
+        hjkl_fs::resolve_under(&cwd, path).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
     /// Reload the active slot from disk (`:e` no-arg / `:e %`).
     pub(crate) fn reload_current(&mut self, force: bool) {
         let Some(path) = self.active().filename.clone() else {
             self.bus.error("E32: No file name");
             return;
+        };
+        // RPC FS-policy gate: a buffer renamed via the RPC API to a path outside
+        // the working directory must not be readable back through a bare `:e`
+        // reload (the same gate `:e <path>` applies). No-op in the TUI.
+        let path = match self.resolve_read_path(&path) {
+            Ok(p) => p,
+            Err(msg) => {
+                self.bus.error(msg);
+                return;
+            }
         };
         if !force && self.active().dirty {
             self.bus
@@ -2385,6 +2423,17 @@ impl App {
     pub(crate) fn checktime_slot(&mut self, idx: usize, messages: &mut Vec<String>) -> bool {
         let Some(path) = self.slots[idx].filename.clone() else {
             return false;
+        };
+        // RPC FS-policy gate: `:checktime` / the fs-watch autoreload must not
+        // read back a slot whose filename escapes the working directory
+        // (renamed via the RPC API) — refuse before even stat'ing it. No-op in
+        // the TUI (policy off).
+        let path = match self.resolve_read_path(&path) {
+            Ok(p) => p,
+            Err(msg) => {
+                self.bus.error(msg);
+                return false;
+            }
         };
         match std::fs::metadata(&path) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {

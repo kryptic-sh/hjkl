@@ -233,6 +233,131 @@ async fn nvim_api_edit_is_confined_to_cwd() {
     let _ = child.wait().await;
 }
 
+/// Read-side confinement: a buffer RENAMED via `nvim_buf_set_name` to an
+/// absolute path outside the working directory must not be readable back
+/// through a bare `:e` reload. The renamed filename is stored verbatim and
+/// `do_edit`'s no-arg path (`reload_current`) skips the `:e <path>` gate, so
+/// the read itself must be policy-checked. The refusal is observable in the
+/// buffer (the command returns Ok; the policy error goes to the app's message
+/// bus, which the RPC protocol does not expose). Also pins the no-regression
+/// side: reloading a file opened inside the cwd — whose stored filename is the
+/// RESOLVED absolute path, which the lexical `check_fs_path` alone would
+/// refuse — must still work.
+#[tokio::test(flavor = "multi_thread")]
+async fn nvim_api_bare_e_reload_of_renamed_outside_path_is_refused() {
+    let td = tempfile::tempdir().expect("tempdir");
+    std::fs::write(td.path().join("ok.txt"), "inside line\n").expect("write ok.txt");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let secret_path = outside.path().join("secret.txt");
+    std::fs::write(&secret_path, "TOP SECRET\n").expect("write secret");
+
+    let (nvim, _io, mut child) = spawn_hjkl_nvim_api_in(td.path())
+        .await
+        .expect("spawn hjkl --nvim-api");
+
+    // Positive control: open a file inside the cwd, then bare-`:e` reload it.
+    // `:e ok.txt` stores the resolved absolute path as the slot filename, so a
+    // working reload here proves the gate isn't a blanket absolute-path refusal.
+    nvim.command(":e ok.txt")
+        .await
+        .expect("nvim_command :e ok.txt");
+    let buf = nvim
+        .get_current_buf()
+        .await
+        .expect("get_current_buf after :e ok.txt");
+    nvim.command("e")
+        .await
+        .expect("nvim_command e (legit reload)");
+    let lines = buf
+        .get_lines(0, -1, false)
+        .await
+        .expect("get_lines after legit reload");
+    assert_eq!(
+        lines,
+        vec!["inside line"],
+        "legit bare :e reload of an inside file must still work: {lines:?}"
+    );
+
+    // Attack: rename the buffer to an absolute path outside the cwd.
+    buf.set_name(secret_path.to_str().unwrap())
+        .await
+        .expect("nvim_buf_set_name outside cwd");
+    let before = buf
+        .get_lines(0, -1, false)
+        .await
+        .expect("get_lines before attack :e");
+
+    nvim.command("e").await.expect("nvim_command e");
+    let after = buf
+        .get_lines(0, -1, false)
+        .await
+        .expect("get_lines after attack :e");
+    assert_eq!(
+        before, after,
+        "refused :e reload must leave the buffer untouched, got: {after:?}"
+    );
+    assert!(
+        !after.iter().any(|l| l.contains("TOP SECRET")),
+        "bare :e reload leaked the renamed outside path into the buffer: {after:?}"
+    );
+
+    let _ = nvim.command("qa!").await;
+    let _ = child.wait().await;
+}
+
+/// Same read-side gap via `:checktime`: `checktime_slot`'s autoreload reads the
+/// slot filename with no policy check, so a buffer renamed outside the cwd
+/// would be auto-reloaded from the outside file. Pins the checktime half.
+#[tokio::test(flavor = "multi_thread")]
+async fn nvim_api_checktime_autoreload_of_renamed_outside_path_is_refused() {
+    let td = tempfile::tempdir().expect("tempdir");
+    std::fs::write(td.path().join("ok.txt"), "inside line\n").expect("write ok.txt");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let secret_path = outside.path().join("secret.txt");
+    std::fs::write(&secret_path, "TOP SECRET\n").expect("write secret");
+
+    let (nvim, _io, mut child) = spawn_hjkl_nvim_api_in(td.path())
+        .await
+        .expect("spawn hjkl --nvim-api");
+
+    nvim.command(":e ok.txt")
+        .await
+        .expect("nvim_command :e ok.txt");
+    let buf = nvim
+        .get_current_buf()
+        .await
+        .expect("get_current_buf after :e ok.txt");
+    let before = buf
+        .get_lines(0, -1, false)
+        .await
+        .expect("get_lines before rename");
+    assert_eq!(before, vec!["inside line"], "precondition: {before:?}");
+
+    // Rename to an absolute path outside the cwd, then let `:checktime` try to
+    // autoreload it.
+    buf.set_name(secret_path.to_str().unwrap())
+        .await
+        .expect("nvim_buf_set_name outside cwd");
+    nvim.command("checktime")
+        .await
+        .expect("nvim_command checktime");
+    let after = buf
+        .get_lines(0, -1, false)
+        .await
+        .expect("get_lines after checktime");
+    assert_eq!(
+        before, after,
+        "refused :checktime must leave the buffer untouched, got: {after:?}"
+    );
+    assert!(
+        !after.iter().any(|l| l.contains("TOP SECRET")),
+        ":checktime autoreload leaked the renamed outside path into the buffer: {after:?}"
+    );
+
+    let _ = nvim.command("qa!").await;
+    let _ = child.wait().await;
+}
+
 /// `:e` through a symlink pointing outside the working directory must be
 /// refused — pins the `resolve_under` half of the confinement, which
 /// `check_fs_path` alone cannot provide (`escape/secret.txt` is all `Normal`
