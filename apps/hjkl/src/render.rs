@@ -2885,46 +2885,46 @@ fn render_picker_input_and_list(
         frame.set_cursor_position((cx, cy));
     }
 
-    let entries = picker.visible_entries();
-    let row_styles = picker.visible_entry_styles();
     // Match-position highlight inside picker rows — uses the same orange
     // as search match highlighting.
     let match_style = Style::default()
         .fg(theme.search_bg)
         .add_modifier(Modifier::BOLD);
-    let items: Vec<ListItem> = entries
+    // The ratatui `List` only paints the rows its scroll window shows, so
+    // only those rows need `ListItem`s. Every row here is a single `Line`
+    // (height 1), so the window is exactly the `list_height` rows ending at
+    // `selected` — or the top rows while the selection is still among them —
+    // matching the widget's own `get_items_bounds` for unit-height items.
+    // `visible_rows` fetches each visible label once, instead of
+    // `visible_entries` + `visible_entry_styles` fetching every label twice
+    // for all 500 filtered rows on every draw.
+    let filtered_count = picker.matched();
+    let list_height = list_area.height.saturating_sub(2) as usize; // block borders
+    let selected = picker.selected.min(filtered_count.saturating_sub(1));
+    let (first, last) = if filtered_count == 0 || list_height == 0 {
+        (0, 0)
+    } else if selected >= list_height.min(filtered_count) {
+        (selected + 1 - list_height, selected + 1)
+    } else {
+        (0, list_height.min(filtered_count))
+    };
+    let rows = picker.visible_rows(first..last);
+    let items: Vec<ListItem> = rows
         .iter()
-        .enumerate()
-        .map(|(row_idx, (label, matches))| {
-            let styles = row_styles.get(row_idx).map_or(&[][..], Vec::as_slice);
+        .map(|(label, matches, styles)| {
             if matches.is_empty() && styles.is_empty() {
-                return ListItem::new(label.clone());
+                return ListItem::new(label.as_str());
             }
-            let spans: Vec<Span> = label
-                .chars()
-                .enumerate()
-                .map(|(ci, ch)| {
-                    let s = ch.to_string();
-                    let base_engine = styles
-                        .iter()
-                        .find(|(r, _)| r.contains(&ci))
-                        .map(|(_, st)| *st)
-                        .unwrap_or_default();
-                    let base = hjkl_engine_tui::style_to_ratatui(base_engine);
-                    if matches.contains(&ci) {
-                        Span::styled(s, base.patch(match_style))
-                    } else if base != Style::default() {
-                        Span::styled(s, base)
-                    } else {
-                        Span::raw(s)
-                    }
-                })
-                .collect();
-            ListItem::new(Line::from(spans))
+            ListItem::new(Line::from(picker_row_spans(
+                label,
+                matches,
+                styles,
+                match_style,
+            )))
         })
         .collect();
     // Keep labels for length check below.
-    let label_count = entries.len();
+    let label_count = items.len();
     let list_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme.border));
@@ -2935,9 +2935,61 @@ fn render_picker_input_and_list(
     );
     let mut state = ListState::default();
     if label_count > 0 {
-        state.select(Some(picker.selected.min(label_count.saturating_sub(1))));
+        state.select(Some(selected - first));
     }
     frame.render_stateful_widget(list, list_area, &mut state);
+}
+
+/// Build the styled spans for one picker row. Produces the exact per-char
+/// rendering the picker always had — each char's style is `base.patch(match_style)`
+/// when matched, `base` when the source styles it, default otherwise — but
+/// adjacent chars with an identical applied style are merged into one span
+/// over a borrowed slice of `label`, so no per-char `String` is allocated.
+fn picker_row_spans<'a>(
+    label: &'a str,
+    matches: &[usize],
+    styles: &[(std::ops::Range<usize>, hjkl_engine::types::Style)],
+    match_style: Style,
+) -> Vec<Span<'a>> {
+    let mut spans: Vec<Span<'a>> = Vec::new();
+    let mut run_byte_start = 0usize;
+    let mut run_style: Option<Style> = None;
+    for (ci, (byte_idx, _)) in label.char_indices().enumerate() {
+        let base_engine = styles
+            .iter()
+            .find(|(r, _)| r.contains(&ci))
+            .map(|(_, st)| *st)
+            .unwrap_or_default();
+        let base = hjkl_engine_tui::style_to_ratatui(base_engine);
+        let applied = if matches.contains(&ci) {
+            base.patch(match_style)
+        } else {
+            base
+        };
+        if run_style.is_some_and(|rs| rs == applied) {
+            continue; // extend the current run
+        }
+        if let Some(rs) = run_style.take() {
+            spans.push(picker_row_span(label, run_byte_start, byte_idx, rs));
+        }
+        run_byte_start = byte_idx;
+        run_style = Some(applied);
+    }
+    if let Some(rs) = run_style {
+        spans.push(picker_row_span(label, run_byte_start, label.len(), rs));
+    }
+    spans
+}
+
+/// One span for a run of identically-styled chars, borrowing `label` instead
+/// of allocating a `String` per char.
+fn picker_row_span<'a>(label: &'a str, start: usize, end: usize, style: Style) -> Span<'a> {
+    let text = &label[start..end];
+    if style == Style::default() {
+        Span::raw(text)
+    } else {
+        Span::styled(text, style)
+    }
 }
 
 /// Centered popup for multi-line `:reg` / `:marks` / `:jumps` / `:changes`

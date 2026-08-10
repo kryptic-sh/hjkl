@@ -34,8 +34,20 @@ const PCT_SCALE: i64 = 100_000;
 /// - `+100` when the needle appears as a contiguous substring (so a literal
 ///   run outranks a scattered subsequence at the same coverage).
 pub fn score(haystack: &str, needle: &str) -> Option<(i64, Vec<usize>)> {
+    let mut positions = Vec::new();
+    score_into(haystack, needle, &mut positions).map(|sc| (sc, positions))
+}
+
+/// Same scorer as [`score`], but writes the match positions into `positions`
+/// (cleared first) instead of allocating a fresh `Vec` per call, so a caller
+/// scoring many haystacks against one needle can reuse a single scratch
+/// buffer. The returned score and the written positions are identical to
+/// what [`score`] produces; `None` when the needle is not a subsequence
+/// (the scratch buffer's contents are then unspecified).
+pub fn score_into(haystack: &str, needle: &str, positions: &mut Vec<usize>) -> Option<i64> {
+    positions.clear();
     if needle.is_empty() {
-        return Some((0, Vec::new()));
+        return Some(0);
     }
     let hay_len = haystack.chars().count().max(1) as i64;
     let needle_len = needle.chars().count() as i64;
@@ -50,7 +62,7 @@ pub fn score(haystack: &str, needle: &str) -> Option<(i64, Vec<usize>)> {
     // run with a heavy bonus so it always outranks scattered matches.
     if let Some(byte_idx) = haystack.find(needle) {
         let start_char = haystack[..byte_idx].chars().count();
-        let positions: Vec<usize> = (start_char..start_char + needle_len as usize).collect();
+        positions.extend(start_char..start_char + needle_len as usize);
         let prev_ch = haystack[..byte_idx].chars().last();
         let at_boundary = byte_idx == 0 || matches!(prev_ch, Some('/' | '_' | '-' | '.' | ' '));
         let mut quality: i64 = needle_len;
@@ -59,12 +71,11 @@ pub fn score(haystack: &str, needle: &str) -> Option<(i64, Vec<usize>)> {
         }
         quality += (needle_len - 1).max(0) * 5; // consecutive bonus
         quality += 100; // contiguous beats scattered subsequence
-        return Some((pct * PCT_SCALE + quality, positions));
+        return Some(pct * PCT_SCALE + quality);
     }
     let mut needle_chars = needle.chars().peekable();
     let mut quality: i64 = 0;
     let mut prev_match = false;
-    let mut positions: Vec<usize> = Vec::new();
     let mut prev_ch: Option<char> = None;
     for (ci, ch) in haystack.chars().enumerate() {
         if let Some(&nc) = needle_chars.peek() {
@@ -89,7 +100,7 @@ pub fn score(haystack: &str, needle: &str) -> Option<(i64, Vec<usize>)> {
     if needle_chars.peek().is_some() {
         return None;
     }
-    Some((pct * PCT_SCALE + quality, positions))
+    Some(pct * PCT_SCALE + quality)
 }
 
 #[cfg(test)]

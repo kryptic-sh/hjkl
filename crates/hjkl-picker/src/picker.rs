@@ -19,7 +19,7 @@ use hjkl_engine::{Input, Key};
 use hjkl_form::TextFieldEditor;
 
 use crate::logic::{FilteredEntry, PickerAction, PickerEvent, PickerLogic, RequeryMode};
-use hjkl_fuzzy::score;
+use hjkl_fuzzy::score_into;
 
 /// Debounce delay for `RequeryMode::Spawn` sources (milliseconds).
 const REQUERY_DEBOUNCE_MS: u64 = 150;
@@ -68,6 +68,15 @@ fn flatten_preview(buf: &View) -> Vec<u8> {
     }
     bytes
 }
+
+/// One rendered picker row: the label, the char indices its fuzzy match
+/// highlighted, and any semantic style ranges the source applied. Returned
+/// by [`Picker::visible_rows`].
+type VisibleRow = (
+    String,
+    Vec<usize>,
+    Vec<(std::ops::Range<usize>, hjkl_engine::types::Style)>,
+);
 
 /// Non-generic picker state. Lives in `App::picker` while open.
 pub struct Picker {
@@ -132,8 +141,10 @@ pub struct Picker {
     /// recomputed.
     lower_cache: Vec<(String, Vec<usize>)>,
     /// Reused across keystrokes so the scored-sort buffer doesn't
-    /// re-allocate on every refresh.
-    scored_buf: Vec<(i64, usize, Vec<usize>)>,
+    /// re-allocate on every refresh. Holds `(score, candidate index)` for
+    /// every candidate that passed the query; match positions are only
+    /// materialised for the top `MAX_RESULTS` after selection.
+    scored_buf: Vec<(i64, usize)>,
 }
 
 impl Picker {
@@ -326,41 +337,72 @@ impl Picker {
             self.lower_cache.push(lower_with_map(&m));
         }
 
+        // Score every candidate into one scratch positions buffer (reused
+        // across candidates via `score_into`) — no per-candidate allocation.
+        // Positions are only materialised once the top `MAX_RESULTS` are
+        // known (phase 2 below), so the candidates that lose the cut never
+        // allocate a positions `Vec` at all.
+        let mut folded_pos = Vec::new();
         self.scored_buf.clear();
         self.scored_buf.reserve(count);
         for i in 0..count {
-            let (m_lower, index_map) = &self.lower_cache[i];
-            let (sc, positions) = if q.is_empty() {
-                (0i64, Vec::new())
+            let m_lower = &self.lower_cache[i].0;
+            let sc = if q.is_empty() {
+                0i64
             } else {
-                match score(m_lower, &q_lower) {
-                    Some((sc, folded_pos)) => {
-                        // Translate folded-char positions back to original
-                        // char indices so highlights land on the right chars.
-                        let mut orig: Vec<usize> = folded_pos
-                            .into_iter()
-                            .filter_map(|p| index_map.get(p).copied())
-                            .collect();
-                        orig.dedup();
-                        (sc, orig)
-                    }
+                match score_into(m_lower, &q_lower, &mut folded_pos) {
+                    Some(sc) => sc,
                     None => continue,
                 }
             };
-            self.scored_buf.push((sc, i, positions));
+            self.scored_buf.push((sc, i));
         }
-        // Score desc; ties broken by lowercased match text asc.
-        self.scored_buf.sort_by(|a, b| {
+        // Keep the top `MAX_RESULTS` under the same order the previous full
+        // sort produced: score desc, then lowercased match text asc, then —
+        // for exact ties — candidate index asc, which mirrors the stable
+        // sort's preservation of the buffer's index order. Making the
+        // comparator a total order (index included) means no tie can straddle
+        // the cut, so the bounded selection returns the identical first-500
+        // sequence. A full sort stays cheaper than a partial selection for
+        // small candidate sets.
+        const MAX_RESULTS: usize = 500;
+        const FULL_SORT_THRESHOLD: usize = 2000;
+        let cmp = |a: &(i64, usize), b: &(i64, usize)| {
             b.0.cmp(&a.0)
                 .then_with(|| self.lower_cache[a.1].0.cmp(&self.lower_cache[b.1].0))
-        });
-        self.scored_buf.truncate(500);
+                .then_with(|| a.1.cmp(&b.1))
+        };
+        if self.scored_buf.len() <= FULL_SORT_THRESHOLD {
+            self.scored_buf.sort_by(cmp);
+        } else {
+            self.scored_buf.select_nth_unstable_by(MAX_RESULTS, cmp);
+            self.scored_buf[..MAX_RESULTS].sort_by(cmp);
+        }
+        self.scored_buf.truncate(MAX_RESULTS);
+
+        // Materialise match positions for the survivors only. `score_into`
+        // is deterministic, so re-scoring a survivor reproduces the folded
+        // positions phase 1 saw; an unexpected miss (same inputs, so
+        // impossible) just yields no highlights.
         self.filtered.clear();
-        self.filtered.extend(
-            self.scored_buf
-                .drain(..)
-                .map(|(_, idx, matches)| FilteredEntry { idx, matches }),
-        );
+        self.filtered.reserve(self.scored_buf.len());
+        self.filtered
+            .extend(self.scored_buf.iter().map(|&(_, idx)| {
+                let matches = if q.is_empty() {
+                    Vec::new()
+                } else {
+                    let (m_lower, index_map) = &self.lower_cache[idx];
+                    let mut orig = Vec::new();
+                    if score_into(m_lower, &q_lower, &mut folded_pos).is_some() {
+                        // Translate folded-char positions back to original
+                        // char indices so highlights land on the right chars.
+                        orig.extend(folded_pos.iter().filter_map(|p| index_map.get(*p).copied()));
+                        orig.dedup();
+                    }
+                    orig
+                };
+                FilteredEntry { idx, matches }
+            }));
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
         }
@@ -494,6 +536,31 @@ impl Picker {
             .map(|e| {
                 let label = self.source.label(e.idx);
                 self.source.label_styles(e.idx, &label).unwrap_or_default()
+            })
+            .collect()
+    }
+
+    /// Labels, match-highlight positions and semantic styles for the
+    /// filtered rows in `rows` (indices into `filtered`), with one `label()`
+    /// call per row.
+    ///
+    /// The renderer only paints the rows its `List` widget's scroll window
+    /// shows (~list height), while [`Self::visible_entries`] plus
+    /// [`Self::visible_entry_styles`] would each fetch every label for all
+    /// ≤500 filtered rows on every draw. This merges the two passes so each
+    /// visible row's label is fetched exactly once.
+    pub fn visible_rows(&self, rows: std::ops::Range<usize>) -> Vec<VisibleRow> {
+        let query = &self.last_query;
+        self.filtered[rows]
+            .iter()
+            .map(|e| {
+                let label = self.source.label(e.idx);
+                let positions = self
+                    .source
+                    .label_match_positions(e.idx, query, &label)
+                    .unwrap_or_else(|| e.matches.clone());
+                let styles = self.source.label_styles(e.idx, &label).unwrap_or_default();
+                (label, positions, styles)
             })
             .collect()
     }
