@@ -790,9 +790,10 @@ with its §8 finding number:
 
 ### 1.12 Open from the 2026-08-10 sweep + user reports
 
-Full reports in §9 (review), §10 (audit), §11 (tidy), §12 (perf). The two
-user-reported bugs are the top items. Worked as slices: delegate → review →
-commit → push; each slice pruned from this list on completion.
+Full reports in §9 (review), §10 (audit), §11 (tidy), §12 (perf). The remaining
+user-reported bug and the audit findings are the top items. Worked as slices:
+delegate → review → commit → push; each slice pruned from this list on
+completion.
 
 1. **Explorer sidebar render borking (user report 2026-08-10) — NEEDS
    GUIDANCE.** With the cursor in the sidebar/explorer, `eee` / `llll` motions
@@ -809,21 +810,18 @@ commit → push; each slice pruned from this list on completion.
    in-memory harness cannot see. Waiting on the user: build/commit they saw it
    on, `:set scroll_duration_ms`, and whether it still reproduces on current
    main.
-2. **`e`/`E` line-ending wrap (user report 2026-08-10).** `eeee` wraps around
-   line endings wrong; add an oracle test, then fix any e/E end-of-line wrap
-   bugs.
-3. **HIGH — `--nvim-api` arbitrary file read bypassing `restrict_fs`** (§10 #1).
+2. **HIGH — `--nvim-api` arbitrary file read bypassing `restrict_fs`** (§10 #1).
    Gate `reload_current`/`checktime_slot` with `check_fs_path` + `resolve_under`
    (or validate names in `nvim_set_buffer_name`).
-4. **MEDIUM — `:Anvil` host commands un-gated in `--nvim-api`** (§10 #2). Gate
+3. **MEDIUM — `:Anvil` host commands un-gated in `--nvim-api`** (§10 #2). Gate
    on `fs_restricted()`/`shell_disabled()` like `:make`/`:grep`/`:!`.
-5. **RPC `:e` reads unbounded** (§10 hardening) — route the two `--embed`/
+4. **RPC `:e` reads unbounded** (§10 hardening) — route the two `--embed`/
    `--nvim-api` read sites through the capped reader.
-6. **Tidy §11 items 1–9** — dead SHA consts, rope→lines duplication,
+5. **Tidy §11 items 1–9** — dead SHA consts, rope→lines duplication,
    display_width / leading-vcol dedup, `feed` copies, root-finder dedup,
    `Loading(String)` payload, SHIFT divergence (§11 #8 — a decision, not
    mechanical).
-7. **Perf §12 items 1–4** — picker per-keystroke label/sort, `:s` full-buffer
+6. **Perf §12 items 1–4** — picker per-keystroke label/sort, `:s` full-buffer
    materialization, O(rows × folds) scans.
 
 ## 2. Blocked on platform access
