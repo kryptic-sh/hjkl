@@ -819,9 +819,8 @@ completion.
    rule wins, and any bindings that depend on `<S-x>` for non-letters must be
    checked), not a mechanical fix. Tidy §11 #9 (`truncate_desc` ≡
    `truncate_to_width`) was declined per its own recommendation — only worth
-   sharing if a third consumer appears.
-3. **Perf §12 items 1–4** — picker per-keystroke label/sort, `:s` full-buffer
-   materialization, O(rows × folds) scans.
+   sharing if a third consumer appears. _All other items from the 2026-08-10
+   sweep are closed — see the §7 session entry below._
 
 ## 2. Blocked on platform access
 
@@ -1270,6 +1269,46 @@ section.
   `it` in `<C-v>` no longer collapse the block; nvim keeps the selection as the
   block motion made it. Four corpus cases pinned against neovim 0.12.4. See
   §1.5b.
+
+### Backlog-work session 2026-08-10/11 (the §9–§12 sweep findings + user reports)
+
+The 2026-08-10 sweep (review §9, audit §10, tidy §11, perf §12) plus the two
+user-reported bugs, worked as delegate → review → commit → push slices; every
+slice pruned from §1.12 on completion. What shipped:
+
+- **Explorer scroll render regression tests (`8682037d`)** — the reported
+  sidebar borking could not be reproduced on current main (both scroll paths
+  verified under test; animated and non-animated). Left open as
+  guidance-required: needs the user's build/terminal config.
+- **`e`/`E` line-ending wrap (`8d0b15be`)** — `next_word_end` folded the next
+  line's word into the same-class run and stopped on empty lines; fixed to vim's
+  `end_word` semantics. 7 unit tests + 14 nvim-verified oracle cases.
+- **RPC fs-read bypass (`2de785f0`)** — `reload_current`/`checktime_slot` read
+  the slot filename with no policy gate, so `nvim_buf_set_name` + bare `:e` read
+  arbitrary files in `--nvim-api`. Now gated via `resolve_read_path`.
+- **`:Anvil` gate (`dc527ee9`)** — the whole host-command surface refused when
+  `shell_disabled()`; previously an RPC client could trigger downloads and
+  native builds.
+- **`:DiffOrig` leak (`085b4283`)** — same class as the fs-read bypass (found
+  while fixing it); the diff read now goes through `resolve_read_path`.
+- **RPC read caps (`cac82293`)** — the `--embed`/`--nvim-api` read paths
+  (build_slot, reload, checktime, embed `:e`, `:DiffOrig`) are capped at 256 MiB
+  under `fs_restricted()` (`HJKL_RPC_READ_CAP` overridable); the TUI keeps
+  unbounded reads.
+- **Tidy cleanups 1–7 (`c71c1eb9`)** — dead SHA consts, ~123 rope→lines blocks →
+  `rope_to_lines_vec`, `display_width` deleted, `leading_visual_width`
+  extracted, `feed` unified, `Loading(String)` payload dropped,
+  `find_project_root` delegated.
+- **Picker perf (`1caa062b`)** — only visible rows built (one `label()` per row,
+  borrowed spans), bounded top-500 selection with a reused scratch buffer;
+  rendered output verified byte-identical.
+- **`:s` range splice (`676884d9`)** — materializes and splices only the
+  substituted rows; O(range) instead of O(N) for a cursor-line `:s`.
+- **Fold queries O(log F) (`0a281489`)** — merged-interval `FoldIndex` over the
+  sorted fold list replaces the per-row linear scan on the hot paths.
+
+Still needing the user (§1.12): the explorer render report (build/terminal
+config) and the SHIFT-normalization unification decision (tidy §11 #8).
 
 ## 8. 2026-08-05 code review (audit depth)
 
