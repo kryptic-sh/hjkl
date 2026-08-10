@@ -221,11 +221,17 @@ pub fn parse_flags(raw_flags: &str) -> Result<(SubstFlags, Option<usize>), Subst
 }
 
 /// Rebase marks / global marks / jumplist / folds after a substitute's
-/// whole-content `replace_all`. `replace_all` swaps the rope outright and only
+/// whole-content swap. The swap (a `replace_all` or a range splice) only
 /// clamps the cursor — unlike `mutate_edit` it never reaches
 /// `Editor::shift_marks_after_edit`, so a `\r` (newline) in a replacement that
 /// splits rows leaves `'a`-style marks, folds and jump entries below the change
 /// pointing at stale rows.
+///
+/// `new_lines` holds the rows that were substituted, with their post-
+/// replacement text; row `i` of the slice maps to buffer row `row_offset + i`.
+/// Rows outside the substituted range never change their newline count (an
+/// unsubstituted row contains no `\n` — ropey splits rows at every line break),
+/// so only the changed rows need walking.
 ///
 /// Each pre-substitute row that gained newlines is its own edit band: a row `i`
 /// whose replacement contains `k` newlines shifts every position below it by
@@ -237,23 +243,27 @@ pub fn parse_flags(raw_flags: &str) -> Result<(SubstFlags, Option<usize>), Subst
 fn rebase_marks_after_row_growth<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     new_lines: &[String],
+    row_offset: usize,
 ) {
     for (i, line) in new_lines.iter().enumerate().rev() {
         let delta = line.matches('\n').count() as isize;
         if delta != 0 {
-            ed.shift_marks_after_edit(i, delta);
+            ed.shift_marks_after_edit(row_offset + i, delta);
         }
     }
 }
 
 /// Emit the host-visible records `mutate_edit` produces for an edit, for the
-/// substitute path's whole-buffer `replace_all` swap. `pre_end` is the
-/// position one past the pre-replace content's last char (captured before the
-/// swap); `new_text` is the joined replacement content. The change-log entry
-/// is one coarse whole-buffer Replace (per the `take_changes` contract, hosts
-/// wanting per-cell deltas diff their own snapshot); the content-reset flag
-/// tells syntax hosts to drop the retained tree and reparse, exactly as
-/// `Editor::set_content` does for whole-buffer replaces.
+/// substitute path's whole-buffer swap (a `replace_all` or a range splice).
+/// `pre_end` is the position one past the pre-replace content's last char
+/// (captured before the swap); `new_text` is the joined post-swap content —
+/// used only for the change-log entry, which is one coarse whole-buffer
+/// Replace (per the `take_changes` contract, hosts wanting per-cell deltas
+/// diff their own snapshot). `new_text` may be empty when no host subscribed
+/// to the change log (recording defaults off): `extend_change_log` is then a
+/// no-op, and the caller skips materializing the full content. The
+/// content-reset flag tells syntax hosts to drop the retained tree and
+/// reparse, exactly as `Editor::set_content` does for whole-buffer replaces.
 fn emit_whole_buffer_change<H: crate::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     pre_end: crate::types::Pos,
@@ -341,13 +351,24 @@ pub fn apply_substitute<H: crate::types::Host>(
     let total = rope.len_lines();
 
     let clamp_end = end.min(total.saturating_sub(1));
-    let mut new_lines: Vec<String> = crate::rope_util::rope_to_lines_vec(&rope);
+    // Materialize only the rows being substituted (`start..=clamp_end`), not
+    // the whole buffer: a bare `:s/foo/bar/` defaults to the cursor line, so a
+    // 1M-line file must not pay a full-buffer lines-vec + join + rope rebuild
+    // to edit one line. `rope_line_to_str` yields exactly the row shape
+    // `rope_to_lines_vec` used (content without the line separator).
+    let mut new_lines: Vec<String> = (start..=clamp_end)
+        .map(|row| crate::rope_util::rope_line_to_str(&rope, row))
+        .collect();
+    // Pre-replace char count of row `clamp_end` — the splice's end column is a
+    // coordinate in the ORIGINAL rope, so it must be captured before
+    // `do_replace` mutates `new_lines`.
+    let clamp_row_chars = new_lines.last().map_or(0, |l| l.chars().count());
     let mut replacements = 0usize;
     let mut lines_changed = 0usize;
     let mut last_changed_row = 0usize;
 
     if start <= clamp_end {
-        for (row, line) in new_lines[start..=clamp_end].iter_mut().enumerate() {
+        for (row, line) in new_lines.iter_mut().enumerate() {
             let (replaced, n) = do_replace(
                 &regex,
                 line,
@@ -385,24 +406,31 @@ pub fn apply_substitute<H: crate::types::Host>(
         });
     }
 
-    // `last_changed_row` above is a PRE-split row index into `new_lines`: it
-    // counts one entry per original row, even though a `\r`/newline in the
-    // replacement can turn one entry into several physical rows once joined
-    // and re-split by the buffer. Map it into POST-split row space before
-    // placing the cursor: earlier rows may have grown (shifting this row's
-    // start down), and this row's own replacement may itself have split into
-    // multiple physical lines — vim lands on the LAST of those.
-    let newlines_before: usize = new_lines[..last_changed_row]
+    // `last_changed_row` above is a PRE-split row index into the substituted
+    // range: it counts one entry per original row, even though a `\r`/newline
+    // in the replacement can turn one entry into several physical rows once
+    // joined and re-split by the buffer. Map it into POST-split row space
+    // before placing the cursor: earlier rows may have grown (shifting this
+    // row's start down), and this row's own replacement may itself have split
+    // into multiple physical lines — vim lands on the LAST of those. Rows
+    // outside `start..=clamp_end` are untouched and an unsubstituted row never
+    // contains `\n` (ropey splits rows at every line break), so the
+    // full-buffer prefix sum reduces to the in-range rows before it.
+    let changed_local = last_changed_row - start;
+    let newlines_before: usize = new_lines[..changed_local]
         .iter()
         .map(|l| l.matches('\n').count())
         .sum();
-    let newlines_within = new_lines[last_changed_row].matches('\n').count();
+    let newlines_within = new_lines[changed_local].matches('\n').count();
     let last_changed_row = last_changed_row + newlines_before + newlines_within;
 
-    // Apply the new content in one shot.
-    // `replace_all` bypasses `mutate_edit`'s host records, so capture the
-    // pre-replace end position (the change-log range must describe the OLD
-    // content) and emit the whole-buffer records after the swap.
+    // Apply the new content by splicing the substituted rows back into the
+    // rope (a range remove + insert) instead of a whole-buffer `replace_all` —
+    // same resulting text, but O(range) instead of an O(N) rope rebuild. The
+    // splice goes through the buffer's raw `apply_edit` (not `mutate_edit`),
+    // so — like `replace_all` — it emits no host records and rebases nothing;
+    // capture the pre-replace end position (the change-log range must describe
+    // the OLD content) and emit the whole-buffer records after the swap.
     let pre_rows = crate::types::Query::rope(ed.buffer()).len_lines();
     let last_pre_row = pre_rows.saturating_sub(1);
     let pre_end = crate::types::Pos::new(
@@ -412,14 +440,36 @@ pub fn apply_substitute<H: crate::types::Host>(
             .chars()
             .count() as u32,
     );
-    let new_text = new_lines.join("\n");
-    ed.buffer_mut().replace_all(&new_text);
+    let range_text = new_lines.join("\n");
+    let splice = hjkl_buffer::Edit::Replace {
+        // Char range from row `start` col 0 through the end of row
+        // `clamp_end`'s content — exactly the segment `range_text` reproduces
+        // (row contents joined by `\n`). The end position excludes the
+        // separator after `clamp_end`, so a trailing `\n` / phantom empty row
+        // is preserved rather than re-added.
+        start: hjkl_buffer::Position::new(start, 0),
+        end: hjkl_buffer::Position::new(clamp_end, clamp_row_chars),
+        with: range_text,
+    };
+    let _ = ed.buffer_mut().apply_edit(splice);
+
+    // Whole-buffer change record for hosts. The full post-state text is only
+    // materialized when a host is actually subscribed to the change log
+    // (recording defaults off) — the content-reset / content-edit flags are
+    // set regardless.
+    let new_text = if ed.buffer().change_log_enabled() {
+        crate::types::Query::rope(ed.buffer()).to_string()
+    } else {
+        String::new()
+    };
     emit_whole_buffer_change(ed, pre_end, &new_text);
 
-    // `replace_all` does not rebase marks/jumplist/folds (only `mutate_edit`
-    // does); a `\r` in the replacement that adds rows would leave positions
-    // below the change stale. Rebase per changed pre-substitute row.
-    rebase_marks_after_row_growth(ed, &new_lines);
+    // Neither `replace_all` nor the splice rebases marks/jumplist/folds (only
+    // `mutate_edit` does); a `\r` in the replacement that adds rows would leave
+    // positions below the change stale. Rebase per changed pre-substitute row;
+    // rows outside the substituted range never grew, so only the in-range rows
+    // need walking.
+    rebase_marks_after_row_growth(ed, &new_lines, start);
 
     // Cursor lands on the first non-blank of the last changed line (vim). Clamp
     // the row defensively in case of any off-by-one at buffer edges.
@@ -655,8 +705,10 @@ pub fn apply_collected_matches<H: crate::types::Host>(
         ed.buffer_mut().replace_all(&new_text);
         emit_whole_buffer_change(ed, pre_end, &new_text);
         // Same rebase as `apply_substitute`: a `\r` in an accepted replacement
-        // adds rows, and `replace_all` alone leaves marks/jumplist/folds stale.
-        rebase_marks_after_row_growth(ed, &lines_vec);
+        // adds rows, and the swap alone leaves marks/jumplist/folds stale. The
+        // full lines-vec walks every row here; `row_offset = 0` keeps the
+        // whole-buffer semantics identical.
+        rebase_marks_after_row_growth(ed, &lines_vec, 0);
         if let Some(row) = last_changed_row {
             // `row` is a PRE-split index into `lines_vec`: a `\r`/newline in
             // an accepted replacement can turn one entry into several
@@ -1260,6 +1312,62 @@ mod tests {
             "confirm-path mark must shift by the rows added above it"
         );
         assert_eq!(buf_line(&e, 16), "X");
+    }
+
+    // ── range splice mechanics (perf: apply_substitute materializes only the
+    //    substituted rows and splices them back via a range remove + insert) ──
+
+    /// A range that stops before the last row must splice only its own rows:
+    /// the suffix (and the `\n` separating it from the range) stays untouched.
+    #[test]
+    fn splice_range_not_covering_last_row_keeps_suffix() {
+        let mut e = editor_with("x\ny\nz");
+        let cmd = parse_substitute("/x/X/").unwrap();
+        let out = apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(out.replacements, 1);
+        assert_eq!(e.buffer().rope().to_string(), "X\ny\nz");
+        assert_eq!(buf_line(&e, 0), "X");
+        assert_eq!(buf_line(&e, 2), "z");
+    }
+
+    /// A buffer ending in `\n` has a phantom empty last row; splicing a range
+    /// that stops before it must not re-add or drop the trailing newline.
+    #[test]
+    fn splice_preserves_trailing_newline_and_phantom_row() {
+        let mut e = editor_with("a\nb\nc\n");
+        let cmd = parse_substitute("/a/A/").unwrap();
+        apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(e.buffer().rope().to_string(), "A\nb\nc\n");
+    }
+
+    /// The splice's end column is a char (not byte) coordinate: a multibyte
+    /// row above the range must not shift the removal, and a multibyte last
+    /// range row must be fully consumed.
+    #[test]
+    fn splice_char_columns_handle_multibyte() {
+        // Multibyte row above the substituted row: line_to_char(1) must land
+        // after "héllo", not after 5 bytes.
+        let mut e = editor_with("héllo\nworld");
+        let cmd = parse_substitute("/world/X/").unwrap();
+        apply_substitute(&mut e, &cmd, 1..=1).unwrap();
+        assert_eq!(e.buffer().rope().to_string(), "héllo\nX");
+
+        // Multibyte content inside the last range row: the whole row must be
+        // removed (end col = char count, not byte count).
+        let mut e = editor_with("wörld");
+        let cmd = parse_substitute("/wörld/X/").unwrap();
+        apply_substitute(&mut e, &cmd, 0..=0).unwrap();
+        assert_eq!(e.buffer().rope().to_string(), "X");
+    }
+
+    /// The join reconstruction must round-trip CRLF rows exactly (a CRLF
+    /// row's trailing `\r` is content, not a separator).
+    #[test]
+    fn splice_preserves_crlf_rows() {
+        let mut e = editor_with("a\r\nb\r\nc");
+        let cmd = parse_substitute("/b/X/").unwrap();
+        apply_substitute(&mut e, &cmd, 1..=1).unwrap();
+        assert_eq!(e.buffer().rope().to_string(), "a\r\nX\r\nc");
     }
 
     // ── vim ASCII classes in substitute (`\d`/`\s`/`\w`) ─────────────────────
