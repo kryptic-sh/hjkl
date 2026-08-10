@@ -181,3 +181,124 @@ keys = "5C"
 expected_buffer = "a\n"
 expected_cursor = [0, 1]
 expected_mode = "insert"
+
+# ─── e / E / ge / gE : word-end line-break wrapping ──────────────────────────
+# `e` and `E` map to vim's `end_word`, not `fwd_word`. The virtual NUL cell
+# past a line's last char reads as whitespace, so a same-class run always ends
+# at end-of-line: `e` from mid-word stops on the current word's last char even
+# when that is the line's last char, while `e` from the end of a word crosses
+# the break to the next word's end. `empty = false` means `e` skips empty
+# lines (unlike `w`). `ge`/`gE` walk backward and stop on an empty line.
+# All expected_cursor values below come from live nvim runs (dfcase).
+
+[[cases]]
+name = "e_crosses_line_ending_to_next_word_end"
+initial_buffer = "foo bar\nbaz qux\n"
+initial_cursor = [0, 6]
+keys = "e"
+expected_buffer = "foo bar\nbaz qux\n"
+expected_cursor = [1, 2]
+
+[[cases]]
+name = "e_from_mid_word_stops_at_line_end"
+initial_buffer = "foo bar\nbaz\n"
+initial_cursor = [0, 4]
+keys = "e"
+expected_buffer = "foo bar\nbaz\n"
+expected_cursor = [0, 6]
+
+[[cases]]
+name = "e_crosses_line_ending_after_trailing_spaces"
+initial_buffer = "foo   \nbar\n"
+initial_cursor = [0, 2]
+keys = "e"
+expected_buffer = "foo   \nbar\n"
+expected_cursor = [1, 2]
+
+[[cases]]
+name = "e_crosses_empty_lines_to_next_word_end"
+initial_buffer = "foo\n\nbar\n"
+initial_cursor = [0, 2]
+keys = "e"
+expected_buffer = "foo\n\nbar\n"
+expected_cursor = [2, 2]
+
+[[cases]]
+name = "E_from_mid_word_stops_at_line_end"
+initial_buffer = "foo bar\nbaz\n"
+initial_cursor = [0, 4]
+keys = "E"
+expected_buffer = "foo bar\nbaz\n"
+expected_cursor = [0, 6]
+
+[[cases]]
+name = "count_2e_crosses_line_ending"
+initial_buffer = "foo bar baz\nqux\n"
+initial_cursor = [0, 0]
+keys = "2e"
+expected_buffer = "foo bar baz\nqux\n"
+expected_cursor = [0, 6]
+
+[[cases]]
+name = "count_3e_crosses_line_ending"
+initial_buffer = "foo bar baz\nqux quux\n"
+initial_cursor = [0, 0]
+keys = "3e"
+expected_buffer = "foo bar baz\nqux quux\n"
+expected_cursor = [0, 10]
+
+[[cases]]
+name = "repeated_e_does_not_fold_lines_together"
+initial_buffer = "foo bar baz\nqux quux\n"
+initial_cursor = [0, 1]
+keys = "eeee"
+expected_buffer = "foo bar baz\nqux quux\n"
+expected_cursor = [1, 2]
+
+[[cases]]
+name = "ge_crosses_line_ending_to_prev_word_end"
+initial_buffer = "foo bar\nbaz qux\n"
+initial_cursor = [1, 6]
+keys = "ge"
+expected_buffer = "foo bar\nbaz qux\n"
+expected_cursor = [1, 2]
+
+[[cases]]
+name = "gE_crosses_line_ending_to_prev_word_end"
+initial_buffer = "foo bar\nbaz qux\n"
+initial_cursor = [1, 6]
+keys = "gE"
+expected_buffer = "foo bar\nbaz qux\n"
+expected_cursor = [1, 2]
+
+[[cases]]
+name = "e_at_eof_newline_terminated_stays"
+initial_buffer = "foo\n"
+initial_cursor = [0, 2]
+keys = "e"
+expected_buffer = "foo\n"
+expected_cursor = [0, 2]
+
+[[cases]]
+name = "e_at_eof_not_newline_terminated_stays"
+initial_buffer = "foo"
+initial_cursor = [0, 2]
+keys = "e"
+expected_buffer = "foo"
+expected_cursor = [0, 2]
+
+[[cases]]
+name = "e_to_trailing_empty_line_lands_on_it"
+initial_buffer = "foo\n\n"
+initial_cursor = [0, 2]
+keys = "e"
+expected_buffer = "foo\n\n"
+expected_cursor = [1, 0]
+
+[[cases]]
+name = "e_from_space_before_word_lands_on_its_end"
+initial_buffer = "foo  bar\nbaz\n"
+initial_cursor = [0, 3]
+keys = "e"
+expected_buffer = "foo  bar\nbaz\n"
+expected_cursor = [0, 7]

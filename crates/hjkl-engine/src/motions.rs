@@ -1338,15 +1338,29 @@ fn next_word_end<B: Query + ?Sized>(
     big: bool,
     iskeyword: &KeywordSpec,
 ) -> Option<Position> {
-    // Vim's `e` advances at least one cell, then walks forward
-    // until the *next* char is a different kind (or eof).
+    // Vim's `end_word(count = 1, bigword, stop = false, empty = false)` —
+    // `e` and `E` map to `end_word`, not `fwd_word`. The cursor advances at
+    // least one cell, then walks forward until the *next* char is a different
+    // kind (or eof). Two line-break details follow from vim's cursor never
+    // leaving a real cell: `inc_cursor()` past a line's last char lands on the
+    // virtual NUL cell, which `cls()` reports as whitespace, so a same-class
+    // run always ends at end-of-line; and the NUL cell / empty lines read as
+    // whitespace too, so the skip below crosses them (`empty = false` means
+    // `e` does NOT stop on an empty line, unlike `w`).
     let mut cur = step_forward(buf, cache, from)?;
     while cache
         .char_at(buf, cur)
         .map(|c| char_kind(c, big, iskeyword))
-        == Some(CharKind::Space)
+        .is_none_or(|k| k == CharKind::Space)
     {
-        cur = step_forward(buf, cache, cur)?;
+        match step_forward(buf, cache, cur) {
+            // End of buffer mid-skip: vim's `inc_cursor() == -1` FAIL leaves
+            // the cursor where it stands — possibly on a trailing empty line
+            // (`"foo\n\n"` from the end of `foo` lands on the empty line,
+            // which vim then clamps to column 0).
+            None => return Some(cur),
+            Some(next) => cur = next,
+        }
     }
     let kind = cache
         .char_at(buf, cur)
@@ -1355,6 +1369,15 @@ fn next_word_end<B: Query + ?Sized>(
         let Some(next) = step_forward(buf, cache, cur) else {
             return Some(cur);
         };
+        // `step_forward` jumps straight onto the next row, but vim's
+        // `inc_cursor()` lands on that row's virtual NUL cell first, where
+        // `cls()` answers whitespace — so the run ends at end-of-line even
+        // when the next line starts with the same kind. This is what stops
+        // `e` mid-word at a line's last char instead of folding the next
+        // line's word into the run.
+        if next.row != cur.row {
+            return Some(cur);
+        }
         if cache
             .char_at(buf, next)
             .map(|c| char_kind(c, big, iskeyword))
@@ -1707,6 +1730,113 @@ mod tests {
         assert_eq!(at(&b), Position::new(0, 2));
         move_word_end(&mut b, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 6));
+    }
+
+    /// `e` from mid-word stops at the end of the CURRENT word even when that
+    /// word ends at end-of-line: vim's `inc_cursor()` past the last char lands
+    /// on the virtual NUL cell (class whitespace), ending the same-class run
+    /// there. `step_forward` jumps straight onto the next row, so without the
+    /// boundary check the run folded the next line's word in and `e` from
+    /// `bar` in `"foo bar\nbaz"` landed on `baz`'s end.
+    #[test]
+    fn move_word_end_mid_word_at_line_end_stays_on_line() {
+        let mut b = View::from_str("foo bar\nbaz\n");
+        b.set_cursor(Position::new(0, 4));
+        move_word_end(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(0, 6));
+
+        // `E` (big word) shares `end_word`, so it gets the same boundary.
+        let mut b = View::from_str("foo bar\nbaz\n");
+        b.set_cursor(Position::new(0, 4));
+        move_word_end(&mut b, true, 1, ISK);
+        assert_eq!(at(&b), Position::new(0, 6));
+    }
+
+    /// `e` from the END of a word at end-of-line DOES cross to the next line's
+    /// next word end — the boundary only stops a run the cursor is inside.
+    #[test]
+    fn move_word_end_from_word_end_crosses_line() {
+        let mut b = View::from_str("foo bar\nbaz qux\n");
+        b.set_cursor(Position::new(0, 6));
+        move_word_end(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(1, 2));
+    }
+
+    /// `e` crosses empty lines (vim's `end_word` passes `empty = false`; only
+    /// `w` treats an empty line as a word). The whitespace skip must treat a
+    /// row with no characters — `char_at` reads `None` there — as whitespace
+    /// and keep stepping, instead of giving up and leaving the cursor put.
+    #[test]
+    fn move_word_end_crosses_empty_lines() {
+        let mut b = View::from_str("foo\n\nbar\n");
+        b.set_cursor(Position::new(0, 2));
+        move_word_end(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(2, 2));
+
+        // Consecutive empty lines, counted motion.
+        let mut b = View::from_str("foo\n\n\nbar\n");
+        b.set_cursor(Position::new(0, 2));
+        move_word_end(&mut b, false, 2, ISK);
+        assert_eq!(at(&b), Position::new(3, 2));
+    }
+
+    /// `e` from the end of the last word of a buffer that ends in empty
+    /// lines lands on the FIRST empty line (vim's cursor ends where the
+    /// `inc_cursor()` FAIL fired, then clamps to column 0) — it must not
+    /// bail back to the starting word.
+    #[test]
+    fn move_word_end_crosses_empty_lines_to_eof() {
+        let mut b = View::from_str("foo\n\n");
+        b.set_cursor(Position::new(0, 2));
+        move_word_end(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(1, 0));
+
+        let mut b = View::from_str("foo\n\n\n");
+        b.set_cursor(Position::new(0, 2));
+        move_word_end(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(2, 0));
+    }
+
+    /// `e` skipping trailing spaces at a line end crosses the break to the
+    /// next word's end; from a space before a line-ending word it lands on
+    /// that word's end on the same line.
+    #[test]
+    fn move_word_end_trailing_whitespace_wraps_like_vim() {
+        let mut b = View::from_str("foo   \nbar\n");
+        b.set_cursor(Position::new(0, 2));
+        move_word_end(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(1, 2));
+
+        let mut b = View::from_str("foo  bar\nbaz\n");
+        b.set_cursor(Position::new(0, 3));
+        move_word_end(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(0, 7));
+    }
+
+    /// `e` from a space run that runs off the end of the LAST line lands on
+    /// the line's last space, not back at the starting column.
+    #[test]
+    fn move_word_end_trailing_whitespace_at_eof_lands_on_last_char() {
+        let mut b = View::from_str("foo\nbar   ");
+        b.set_cursor(Position::new(1, 3));
+        move_word_end(&mut b, false, 1, ISK);
+        assert_eq!(at(&b), Position::new(1, 5));
+    }
+
+    /// Counted `e`/`E` across several line endings compound one `end_word`
+    /// per press — `3e` from `foo` over `"foo bar baz\nqux quux\n"` lands on
+    /// `qux`'s end, and `eeee` from mid-`foo` runs end-by-end without folding
+    /// lines together.
+    #[test]
+    fn move_word_end_counts_wrap_line_endings() {
+        let mut b = View::from_str("foo bar baz\nqux quux\n");
+        move_word_end(&mut b, false, 3, ISK);
+        assert_eq!(at(&b), Position::new(0, 10));
+
+        let mut b = View::from_str("foo bar baz\nqux quux\n");
+        b.set_cursor(Position::new(0, 1));
+        move_word_end(&mut b, false, 4, ISK);
+        assert_eq!(at(&b), Position::new(1, 2));
     }
 
     #[test]
