@@ -173,6 +173,25 @@ async fn spawn_hjkl_nvim_api_in(
     Ok((nvim, io_handle, child))
 }
 
+/// Spawn `hjkl --nvim-api` with `XDG_DATA_HOME` / `XDG_CACHE_HOME` pointed at
+/// the given dirs, so the anvil store resolves inside the test's tempdir
+/// instead of the developer's real home.
+async fn spawn_hjkl_nvim_api_with_xdg(
+    data_home: &std::path::Path,
+    cache_home: &std::path::Path,
+) -> anyhow::Result<(
+    Neovim<Compat<ChildStdin>>,
+    tokio::task::JoinHandle<Result<(), Box<nvim_rs::error::LoopError>>>,
+    tokio::process::Child,
+)> {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hjkl"));
+    cmd.arg("--nvim-api");
+    cmd.env("XDG_DATA_HOME", data_home);
+    cmd.env("XDG_CACHE_HOME", cache_home);
+    let (nvim, io_handle, child) = create::new_child_cmd(&mut cmd, NoopHandler).await?;
+    Ok((nvim, io_handle, child))
+}
+
 /// FS policy in `--nvim-api` mode: `:e` of an absolute path outside the
 /// working directory must be refused — the file's content must never reach the
 /// buffer (the command itself returns Ok; the refusal is observable in the
@@ -386,6 +405,88 @@ async fn nvim_api_edit_through_symlink_escape_is_refused() {
     assert!(
         !lines.iter().any(|l| l.contains("TOP SECRET")),
         ":e through a symlink escape leaked content into the buffer: {lines:?}"
+    );
+
+    let _ = nvim.command("qa!").await;
+    let _ = child.wait().await;
+}
+
+/// `:Anvil install` is gated on the shell policy in `--nvim-api` mode: the
+/// install pipeline downloads archives and runs package-manager build scripts
+/// (`cargo`/`npm`/`pip`/`go`), so an untrusted RPC client must not be able to
+/// trigger it without `--allow-shell`. The command returns Ok either way (the
+/// `ExEffect::Error` goes to the app's message bus, which the RPC protocol
+/// does not expose), so the observable is on disk: `install_blocking`'s first
+/// I/O is `create_dir_all` on `<data>/anvil/packages` and
+/// `<data>/anvil/checksums`, then the staging dir under `<cache>/anvil` — all
+/// before any network fetch. None of those may appear. (Startup does create
+/// `<data>/anvil/bin` via the PATH prepend, so the assertion is on the
+/// install-specific dirs, not the whole store; the `bin` dir's presence is
+/// what proves the child honored the injected XDG roots.) Picks
+/// `rust-analyzer` — a real Github-method tool from the embedded registry — so
+/// the install WOULD start if the gate were missing; the poll only waits for
+/// the pre-fix directory creation, never for the download to finish.
+#[tokio::test(flavor = "multi_thread")]
+async fn nvim_api_anvil_install_is_refused_without_allow_shell() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let data_home = td.path().join("data");
+    let cache_home = td.path().join("cache");
+
+    let (nvim, _io, mut child) = spawn_hjkl_nvim_api_with_xdg(&data_home, &cache_home)
+        .await
+        .expect("spawn hjkl --nvim-api");
+
+    // The child's startup PATH-prepend creates `<data>/anvil/bin`; its
+    // presence confirms the child resolved XDG to our tempdir, so an install
+    // that DID happen would land here (and be caught), not in the real store.
+    let bin_dir = data_home.join("anvil").join("bin");
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    while !bin_dir.exists() && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        bin_dir.exists(),
+        "child never resolved XDG_DATA_HOME={} — test setup broken",
+        data_home.display()
+    );
+
+    nvim.command("Anvil install rust-analyzer")
+        .await
+        .expect("nvim_command Anvil install");
+
+    // Poll for the pre-fix markers: an install that started creates these
+    // dirs within milliseconds of the command returning (they are created
+    // before the first network byte). Post-fix they must never appear.
+    let packages_dir = data_home.join("anvil").join("packages");
+    let checksums_dir = data_home.join("anvil").join("checksums");
+    let cache_dir = cache_home.join("anvil");
+    let mut saw_install = false;
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        if packages_dir.exists() || checksums_dir.exists() || cache_dir.exists() {
+            saw_install = true;
+            break;
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    }
+    assert!(
+        !saw_install,
+        "Anvil install started despite the shell policy: packages={} checksums={} cache={}",
+        packages_dir.exists(),
+        checksums_dir.exists(),
+        cache_dir.exists()
+    );
+    assert!(
+        !packages_dir.exists(),
+        "anvil packages dir must not be created after a refused install"
+    );
+    assert!(
+        !checksums_dir.exists(),
+        "anvil checksums dir must not be created after a refused install"
+    );
+    assert!(
+        !cache_dir.exists(),
+        "anvil cache dir must not be created after a refused install"
     );
 
     let _ = nvim.command("qa!").await;

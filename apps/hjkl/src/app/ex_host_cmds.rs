@@ -1324,6 +1324,16 @@ impl HostCmd<App> for LspInfoCmd {
 /// `:Anvil [install|uninstall|update] [name]` — plugin manager.
 ///
 /// `split_name_args` gives name=`"Anvil"`, args=`"install foo"` etc.
+///
+/// # Security: gated on the shell policy, like `:!`
+///
+/// Anvil installs download archives and run package-manager build scripts
+/// (`cargo`/`npm`/`pip`/`go`), so they are shell-out in disguise: the gate in
+/// `run` refuses the whole surface (install/uninstall/update and the no-arg
+/// picker, whose selection triggers installs) in `--embed` / `--nvim-api` /
+/// `--headless` mode unless the host passed `--allow-shell`. Auditors: see
+/// the `:!` gate in `hjkl-ex/src/shell.rs` and the `:make` / `:grep` guards
+/// in `quickfix.rs` — same policy, same message.
 pub struct AnvilCmd;
 
 impl HostCmd<App> for AnvilCmd {
@@ -1350,6 +1360,15 @@ impl HostCmd<App> for AnvilCmd {
     }
 
     fn run(&self, app: &mut App, args: &str) -> Option<ExEffect> {
+        // Anvil installs are shell-out in disguise (archive download + native
+        // build scripts), so gate the whole surface on the shell policy like
+        // `:!` / `:make` / `:grep`. Covers install, uninstall, update, and the
+        // no-arg picker — its selection triggers installs.
+        if hjkl_engine::policy::shell_disabled() {
+            return Some(ExEffect::Error(
+                "shell commands are disabled in this mode (pass --allow-shell to enable)".into(),
+            ));
+        }
         let parts: Vec<&str> = args.split_whitespace().collect();
         match parts.as_slice() {
             [] => {
