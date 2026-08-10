@@ -16,6 +16,30 @@ use hjkl_vim::VimEditorExt;
 use serde_json::{Value, json};
 
 // ---------------------------------------------------------------------------
+// RPC read cap
+// ---------------------------------------------------------------------------
+
+/// Cap for file reads whose path comes from an untrusted RPC client
+/// (`--embed` / `--nvim-api` take file paths off the wire, so the file at that
+/// path is untrusted input: a client that can write a multi-GB file into the
+/// working directory — or rename a buffer to point at one — must not force a
+/// matching allocation in the editor). 256 MiB matches the two largest caps
+/// already enforced elsewhere (`hjkl_fs::caps::UNDO` / `STDIN`), so any file a
+/// legitimate session would already hold in memory is unaffected; anything
+/// larger is refused outright, never silently truncated.
+const RPC_READ_CAP: u64 = 256 * 1024 * 1024;
+
+/// The effective RPC read cap. `HJKL_RPC_READ_CAP` (bytes) overrides the
+/// default so tests can exercise the refusal path with a tiny cap; an
+/// unparsable value falls back to the default.
+pub fn rpc_read_cap() -> u64 {
+    std::env::var("HJKL_RPC_READ_CAP")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(RPC_READ_CAP)
+}
+
+// ---------------------------------------------------------------------------
 // JSON-RPC 2.0 error codes
 // ---------------------------------------------------------------------------
 
@@ -222,7 +246,12 @@ fn dispatch(
                     } else {
                         std::path::PathBuf::from(&path)
                     };
-                    match hjkl_fs::read_to_string_unbounded(&resolved) {
+                    let read = if hjkl_engine::policy::fs_restricted() {
+                        hjkl_fs::read_to_string_capped(&resolved, rpc_read_cap())
+                    } else {
+                        hjkl_fs::read_to_string_unbounded(&resolved)
+                    };
+                    match read {
                         Ok(content) => {
                             *eol = crate::save::EolState::from_loaded(&content);
                             let content = content.strip_suffix('\n').unwrap_or(&content);

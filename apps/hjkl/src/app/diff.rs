@@ -37,7 +37,22 @@ impl App {
         };
 
         // On-disk bytes (the "old" side). A missing file diffs against empty.
-        let disk = std::fs::read(&path).unwrap_or_default();
+        // In RPC mode the read is capped: the slot's path can point at a file
+        // whose size an untrusted client controls, so an over-cap file refuses
+        // the diff (no split) instead of allocating its size.
+        let disk = if hjkl_engine::policy::fs_restricted() {
+            match hjkl_fs::read_capped(&path, crate::embed::rpc_read_cap()) {
+                Ok(bytes) => bytes,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => {
+                    self.bus
+                        .error(format!("E484: Can't open file {}: {e}", path.display()));
+                    return;
+                }
+            }
+        } else {
+            std::fs::read(&path).unwrap_or_default()
+        };
 
         // View bytes (the "new" side), produced exactly as `:w` would write
         // them (trailing newline) so an unmodified buffer yields an empty diff.

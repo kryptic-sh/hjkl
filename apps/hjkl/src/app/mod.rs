@@ -862,10 +862,17 @@ pub fn build_slot(
     // default when the path doesn't exist yet.
     let mut eol = crate::save::EolState::default();
     if let Some(ref p) = path {
-        // Deliberately unbounded: the user named this file, and refusing to open
-        // one the previous version opened is a regression, not a safety win.
-        // Caps belong on input whose size someone else controls.
-        match hjkl_fs::read_to_string_unbounded(p) {
+        // Deliberately unbounded for the local user (TUI/headless): the user
+        // named this file, and refusing to open one the previous version opened
+        // is a regression, not a safety win. In RPC modes (`--embed` /
+        // `--nvim-api`) the path comes from an untrusted client that also
+        // controls the file's size, so the read is capped there.
+        let read = if hjkl_engine::policy::fs_restricted() {
+            hjkl_fs::read_to_string_capped(p, crate::embed::rpc_read_cap())
+        } else {
+            hjkl_fs::read_to_string_unbounded(p)
+        };
+        match read {
             Ok(content) => {
                 // Snapshot disk metadata right after a successful read.
                 if let Ok(meta) = std::fs::metadata(p) {

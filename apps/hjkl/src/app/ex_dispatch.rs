@@ -2347,7 +2347,14 @@ impl App {
                 .error("E37: No write since last change (add ! to override)");
             return;
         }
-        let content = match hjkl_fs::read_to_string_unbounded(&path) {
+        let read = if hjkl_engine::policy::fs_restricted() {
+            // RPC mode: the slot's path can point at a file whose size an
+            // untrusted client controls, so the reload read is capped.
+            hjkl_fs::read_to_string_capped(&path, crate::embed::rpc_read_cap())
+        } else {
+            hjkl_fs::read_to_string_unbounded(&path)
+        };
+        let content = match read {
             Ok(c) => c,
             Err(e) => {
                 self.bus
@@ -2505,8 +2512,15 @@ impl App {
                     }
                     false
                 } else {
-                    // Clean buffer — reload automatically. Capped like every
-                    let Ok(content) = hjkl_fs::read_to_string_unbounded(&path) else {
+                    // Clean buffer — reload automatically. In RPC mode the read
+                    // is capped: the slot's path can point at a file whose size
+                    // an untrusted client controls.
+                    let read = if hjkl_engine::policy::fs_restricted() {
+                        hjkl_fs::read_to_string_capped(&path, crate::embed::rpc_read_cap())
+                    } else {
+                        hjkl_fs::read_to_string_unbounded(&path)
+                    };
+                    let Ok(content) = read else {
                         return false;
                     };
                     // An autoread is a load — re-derive `'endofline'` too.

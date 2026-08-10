@@ -192,6 +192,25 @@ async fn spawn_hjkl_nvim_api_with_xdg(
     Ok((nvim, io_handle, child))
 }
 
+/// Spawn `hjkl --nvim-api` with the given directory as its working directory
+/// and `HJKL_RPC_READ_CAP` set — the RPC read cap becomes `cap` bytes, so the
+/// over-cap refusal path is exercised without multi-GB fixtures.
+async fn spawn_hjkl_nvim_api_capped(
+    dir: &std::path::Path,
+    cap: u64,
+) -> anyhow::Result<(
+    Neovim<Compat<ChildStdin>>,
+    tokio::task::JoinHandle<Result<(), Box<nvim_rs::error::LoopError>>>,
+    tokio::process::Child,
+)> {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_hjkl"));
+    cmd.arg("--nvim-api");
+    cmd.current_dir(dir);
+    cmd.env("HJKL_RPC_READ_CAP", cap.to_string());
+    let (nvim, io_handle, child) = create::new_child_cmd(&mut cmd, NoopHandler).await?;
+    Ok((nvim, io_handle, child))
+}
+
 /// FS policy in `--nvim-api` mode: `:e` of an absolute path outside the
 /// working directory must be refused — the file's content must never reach the
 /// buffer (the command itself returns Ok; the refusal is observable in the
@@ -550,6 +569,146 @@ async fn nvim_api_anvil_install_is_refused_without_allow_shell() {
     assert!(
         !cache_dir.exists(),
         "anvil cache dir must not be created after a refused install"
+    );
+
+    let _ = nvim.command("qa!").await;
+    let _ = child.wait().await;
+}
+
+/// RPC read cap (audit §10): a client that can grow a file in the working
+/// directory past the cap must not force an equal-sized allocation by
+/// reloading it. `:e <file>` on an already-open slot reloads through
+/// `reload_current`, whose read is capped in `--nvim-api` mode — so the reload
+/// is REFUSED (buffer untouched), not silently truncated and not loaded. The
+/// refusal is observable in the buffer (the command returns Ok; the E484 goes
+/// to the app's message bus, which the RPC protocol does not expose). Also
+/// pins the no-regression side: a file under the cap still opens fine.
+#[tokio::test(flavor = "multi_thread")]
+async fn nvim_api_reload_of_over_cap_file_is_refused() {
+    let td = tempfile::tempdir().expect("tempdir");
+    std::fs::write(td.path().join("ok.txt"), "inside line\n").expect("write ok.txt");
+
+    let (nvim, _io, mut child) = spawn_hjkl_nvim_api_capped(td.path(), 1024)
+        .await
+        .expect("spawn hjkl --nvim-api with tiny read cap");
+
+    // Happy path: a file under the cap still opens.
+    nvim.command(":e ok.txt")
+        .await
+        .expect("nvim_command :e ok.txt");
+    let buf = nvim
+        .get_current_buf()
+        .await
+        .expect("get_current_buf after :e ok.txt");
+    let lines = buf.get_lines(0, -1, false).await.expect("get_lines ok.txt");
+    assert_eq!(
+        lines,
+        vec!["inside line"],
+        "under-cap open must still work: {lines:?}"
+    );
+
+    // Attack: grow the file past the cap, then `:e ok.txt` again — the slot is
+    // already open, so do_edit takes the reload path, which reads capped.
+    std::fs::write(td.path().join("ok.txt"), "x".repeat(4096)).expect("grow ok.txt");
+    let before = buf
+        .get_lines(0, -1, false)
+        .await
+        .expect("get_lines before over-cap reload");
+    nvim.command(":e ok.txt")
+        .await
+        .expect("nvim_command :e ok.txt (over-cap reload)");
+    let buf = nvim
+        .get_current_buf()
+        .await
+        .expect("get_current_buf after over-cap reload");
+    let after = buf
+        .get_lines(0, -1, false)
+        .await
+        .expect("get_lines after over-cap reload");
+    assert_eq!(
+        before, after,
+        "over-cap reload must leave the buffer untouched, got: {after:?}"
+    );
+    let after_bytes: usize = after.iter().map(|l| l.len()).sum();
+    assert!(
+        after_bytes < 4096,
+        "over-cap reload must not load the file, nor a truncated prefix of it: {after:?}"
+    );
+
+    let _ = nvim.command("qa!").await;
+    let _ = child.wait().await;
+}
+
+/// The same cap through `:DiffOrig`: the diff split reads the active slot's
+/// on-disk file, so an over-cap file must refuse the diff — no split opens —
+/// instead of allocating its size into the diff computation.
+#[tokio::test(flavor = "multi_thread")]
+async fn nvim_api_difforig_of_over_cap_file_is_refused() {
+    let td = tempfile::tempdir().expect("tempdir");
+    std::fs::write(td.path().join("ok.txt"), "inside line\n").expect("write ok.txt");
+
+    let (nvim, _io, mut child) = spawn_hjkl_nvim_api_capped(td.path(), 1024)
+        .await
+        .expect("spawn hjkl --nvim-api with tiny read cap");
+
+    nvim.command(":e ok.txt")
+        .await
+        .expect("nvim_command :e ok.txt");
+    let _buf = nvim
+        .get_current_buf()
+        .await
+        .expect("get_current_buf after :e ok.txt");
+
+    // Grow the on-disk file past the cap (the buffer keeps the small content).
+    std::fs::write(td.path().join("ok.txt"), "x".repeat(4096)).expect("grow ok.txt");
+    let before = nvim.list_wins().await.expect("list_wins before");
+
+    nvim.command("DiffOrig")
+        .await
+        .expect("nvim_command DiffOrig");
+    let after = nvim.list_wins().await.expect("list_wins after");
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "refused :DiffOrig must not open a split: before={} after={}",
+        before.len(),
+        after.len()
+    );
+
+    let _ = nvim.command("qa!").await;
+    let _ = child.wait().await;
+}
+
+/// The same cap on a FRESH open: `:e big.txt` (never opened before) reads at
+/// `build_slot`, which is capped in `--nvim-api` mode like the reload paths —
+/// so an over-cap file is refused (E484 to the message bus) and the buffer
+/// never receives the content, nor a truncated prefix of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn nvim_api_fresh_open_of_over_cap_file_is_refused() {
+    let td = tempfile::tempdir().expect("tempdir");
+    // Only the over-cap file exists in the cwd — a fresh `:e` must hit
+    // build_slot, not the already-open reload path.
+    std::fs::write(td.path().join("big.txt"), "x".repeat(4096)).expect("write big.txt");
+
+    let (nvim, _io, mut child) = spawn_hjkl_nvim_api_capped(td.path(), 1024)
+        .await
+        .expect("spawn hjkl --nvim-api with tiny read cap");
+
+    nvim.command(":e big.txt")
+        .await
+        .expect("nvim_command :e big.txt");
+    let buf = nvim
+        .get_current_buf()
+        .await
+        .expect("get_current_buf after :e big.txt");
+    let lines = buf
+        .get_lines(0, -1, false)
+        .await
+        .expect("get_lines after over-cap fresh open");
+    let loaded: usize = lines.iter().map(|l| l.len()).sum();
+    assert!(
+        loaded < 4096,
+        "over-cap fresh open must not load the file, nor a truncated prefix: {lines:?}"
     );
 
     let _ = nvim.command("qa!").await;
