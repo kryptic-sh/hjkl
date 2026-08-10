@@ -11,9 +11,11 @@
 //! svelte). Pairing uses a stack-based scan so nested same-name tags
 //! (`<div><div></div></div>`) resolve correctly.
 
+mod common;
+
 use hjkl_buffer::View;
+use hjkl_engine::rope_util::rope_to_lines_vec;
 use hjkl_engine::{DefaultHost, Editor, Options};
-use hjkl_vim::{dispatch_input, insert::step_insert};
 
 fn editor(lang: &str, content: &str) -> Editor<View, DefaultHost> {
     let buf = View::from_str(content);
@@ -25,49 +27,8 @@ fn editor(lang: &str, content: &str) -> Editor<View, DefaultHost> {
     hjkl_vim::vim_editor(buf, host, opts)
 }
 
-fn feed(ed: &mut Editor<View, DefaultHost>, keys: &str) {
-    use hjkl_engine::{Input, Key};
-    for ch in keys.chars() {
-        let input = match ch {
-            '\x1b' => Input {
-                key: Key::Esc,
-                ..Input::default()
-            },
-            _ => Input {
-                key: Key::Char(ch),
-                ..Input::default()
-            },
-        };
-        dispatch_input(ed, input);
-    }
-}
-
-fn feed_insert(ed: &mut Editor<View, DefaultHost>, keys: &str) {
-    use hjkl_engine::{Input, Key};
-    for ch in keys.chars() {
-        let input = match ch {
-            '\x1b' => Input {
-                key: Key::Esc,
-                ..Input::default()
-            },
-            _ => Input {
-                key: Key::Char(ch),
-                ..Input::default()
-            },
-        };
-        step_insert(ed, input);
-    }
-}
-
 fn lines(ed: &Editor<View, DefaultHost>) -> Vec<String> {
-    ed.buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>()
+    rope_to_lines_vec(&ed.buffer().rope())
 }
 
 /// Edit the opener name → closer must auto-rename to match.
@@ -77,8 +38,8 @@ fn edit_opener_renames_closer() {
     // Cursor inside opener name. Esc-from-insert triggers the sync.
     let mut ed = editor("html", "<newtag>some text</test>");
     ed.jump_cursor(0, 4);
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "\x1b");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "\x1b");
     assert_eq!(
         lines(&ed),
         vec!["<newtag>some text</newtag>".to_string()],
@@ -92,8 +53,8 @@ fn edit_closer_renames_opener() {
     let mut ed = editor("html", "<test>x</done>");
     // Cursor inside closer name (`d` of `done`, col 9).
     ed.jump_cursor(0, 9);
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "\x1b");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "\x1b");
     assert_eq!(
         lines(&ed),
         vec!["<done>x</done>".to_string()],
@@ -108,8 +69,8 @@ fn nested_different_name_pairs_correctly() {
     // Mid-edit: outer opener renamed to "new", outer closer still "test".
     let mut ed = editor("html", "<new><div>x</div></test>");
     ed.jump_cursor(0, 2);
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "\x1b");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "\x1b");
     assert_eq!(
         lines(&ed),
         vec!["<new><div>x</div></new>".to_string()],
@@ -123,8 +84,8 @@ fn nested_different_name_pairs_correctly() {
 fn non_html_filetype_does_not_rename() {
     let mut ed = editor("rust", "let v: Vec<T>; let w: Vec<U>;");
     ed.jump_cursor(0, 11);
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "\x1b");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "\x1b");
     assert_eq!(
         lines(&ed),
         vec!["let v: Vec<T>; let w: Vec<U>;".to_string()],
@@ -138,8 +99,8 @@ fn non_html_filetype_does_not_rename() {
 fn void_element_does_not_attempt_rename() {
     let mut ed = editor("html", "<br>");
     ed.jump_cursor(0, 1);
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "\x1b");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "\x1b");
     assert_eq!(
         lines(&ed),
         vec!["<br>".to_string()],
@@ -152,8 +113,8 @@ fn void_element_does_not_attempt_rename() {
 fn self_closing_does_not_attempt_rename() {
     let mut ed = editor("tsx", "<Foo />");
     ed.jump_cursor(0, 1);
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "\x1b");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "\x1b");
     assert_eq!(lines(&ed), vec!["<Foo />".to_string()]);
 }
 
@@ -162,8 +123,8 @@ fn self_closing_does_not_attempt_rename() {
 fn already_matching_pair_is_noop() {
     let mut ed = editor("html", "<div>x</div>");
     ed.jump_cursor(0, 2);
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "\x1b");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "\x1b");
     assert_eq!(lines(&ed), vec!["<div>x</div>".to_string()]);
 }
 
@@ -173,8 +134,8 @@ fn rename_works_across_lines() {
     let mut ed = editor("html", "<new>\n  inner content\n</old>");
     // Cursor inside opener `<new>` (col 2, on `e`).
     ed.jump_cursor(0, 2);
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "\x1b");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "\x1b");
     assert_eq!(
         lines(&ed),
         vec![

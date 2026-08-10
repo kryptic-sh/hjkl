@@ -501,18 +501,7 @@ pub fn find_project_root(start: &std::path::Path) -> PathBuf {
         "composer.json",
         ".hg",
     ];
-    let mut dir = start.to_owned();
-    loop {
-        for marker in MARKERS {
-            if dir.join(marker).exists() {
-                return dir;
-            }
-        }
-        match dir.parent() {
-            Some(p) => dir = p.to_path_buf(),
-            None => return start.to_owned(),
-        }
-    }
+    hjkl_lsp::workspace::find_root(start, MARKERS).unwrap_or_else(|| start.to_owned())
 }
 
 impl BufferSlot {

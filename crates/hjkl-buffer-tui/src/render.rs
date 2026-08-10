@@ -472,22 +472,6 @@ fn fold_column_glyph(folds: &[hjkl_buffer::Fold], doc_row: usize) -> char {
     if inside_open { '│' } else { ' ' }
 }
 
-/// Compute the visual display width of `line` in terminal cells, expanding
-/// tabs to the next multiple of `tab_width` (matching `paint_row`'s logic).
-/// Uses `UnicodeWidthChar` for non-tab characters, identical to how
-/// `paint_row` advances `screen_x`.
-fn display_width(line: &str, tab_width: usize) -> usize {
-    let mut col: usize = 0;
-    for ch in line.chars() {
-        if ch == '\t' {
-            col += tab_width - (col % tab_width);
-        } else {
-            col += ch.width().unwrap_or(1);
-        }
-    }
-    col
-}
-
 /// Per-frame fold lookup index. The render loop used to scan the whole fold
 /// list per visible row (`folds.iter().any(|f| f.hides(row))`, plus a
 /// `.find()` for closed fold markers) — O(rows × F) per frame. This
@@ -897,7 +881,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 // Visual width of the row's text in cells (tab-expanded),
                 // minus horizontal scroll, to find where real text ends.
                 let line = line_at(doc);
-                let text_cols = display_width(&line, tab_width);
+                let text_cols = hjkl_buffer::char_col_to_visual_col(&line, usize::MAX, tab_width);
                 let start_vis = text_cols.saturating_sub(top_col);
                 // 2-col gap after the text. Compare in usize before casting:
                 // `start_vis as u16` truncates on very long lines and would
@@ -1029,16 +1013,7 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
                 let line_owned = line_at(ig_doc_row);
                 let line: &str = &line_owned;
                 // Compute leading visual column count: walk until non-whitespace.
-                let mut leading_vcols: usize = 0;
-                for ch in line.chars() {
-                    match ch {
-                        ' ' => leading_vcols += 1,
-                        '\t' => {
-                            leading_vcols += tab_width - (leading_vcols % tab_width);
-                        }
-                        _ => break,
-                    }
-                }
+                let leading_vcols = hjkl_buffer::leading_visual_width(line, tab_width);
                 // Paint guides at sw, 2*sw, 3*sw, ... while < leading_vcols.
                 let y = text_area.y + ig_screen_row;
                 let mut guide_col = sw;

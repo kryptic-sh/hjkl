@@ -21,16 +21,7 @@ fn equal_equal_in_normal_reindents_current_line() {
     drive_chars(&mut app, "==");
     assert!(app.pending_state.is_none(), "pending must clear after ==");
 
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines,
         vec!["{", "    body", "}"],
@@ -59,16 +50,7 @@ fn equal_equal_on_unmatched_close_bracket_does_not_panic() {
 
     drive_chars(&mut app, "==");
 
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines,
         vec!["}", "}", "}"],
@@ -91,16 +73,7 @@ fn eq_g_on_unmatched_close_brackets_does_not_panic() {
 
     drive_chars(&mut app, "=G");
 
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines,
         vec!["}", "}", "}"],
@@ -124,16 +97,7 @@ fn eq_g_from_top_reindents_entire_buffer() {
     drive_chars(&mut app, "=G");
     assert!(app.pending_state.is_none(), "pending must clear after =G");
 
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines,
         vec!["{", "    body", "}"],
@@ -174,16 +138,7 @@ fn visual_line_eq_reindents_selected_lines() {
     let consumed = app.route_chord_key(CtKeyEvent::new(KeyCode::Char('='), KeyModifiers::NONE));
     assert!(consumed, "= in VisualLine must be consumed");
 
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     // Row 1 is one level deep (depth=1 accumulated from row 0 `{`).
     assert_eq!(
         lines,

@@ -13,9 +13,11 @@
 //! - `:set noautoclose-tag` disables tag autoclose
 //! - Open-pair-newline: Enter between `{|}` expands to indented block
 
+mod common;
+
 use hjkl_buffer::View;
 use hjkl_engine::{DefaultHost, Editor, Options};
-use hjkl_vim::{dispatch_input, insert::step_insert};
+use hjkl_vim::insert::step_insert;
 
 // ---------------------------------------------------------------------------
 // Test harness helpers
@@ -30,74 +32,6 @@ fn editor(lang: &str, content: &str) -> Editor<View, DefaultHost> {
         ..Options::default()
     };
     hjkl_vim::vim_editor(buf, host, opts)
-}
-
-/// Feed keystrokes through the normal/insert dispatcher.
-fn feed(ed: &mut Editor<View, DefaultHost>, keys: &str) {
-    use hjkl_engine::{Input, Key};
-    for ch in keys.chars() {
-        let input = match ch {
-            '\n' => Input {
-                key: Key::Enter,
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-            '\x08' => Input {
-                key: Key::Backspace,
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-            '\x1b' => Input {
-                key: Key::Esc,
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-            _ => Input {
-                key: Key::Char(ch),
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-        };
-        dispatch_input(ed, input);
-    }
-}
-
-/// Feed keystrokes directly to the insert-mode FSM.
-fn feed_insert(ed: &mut Editor<View, DefaultHost>, keys: &str) {
-    use hjkl_engine::{Input, Key};
-    for ch in keys.chars() {
-        let input = match ch {
-            '\n' => Input {
-                key: Key::Enter,
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-            '\x08' => Input {
-                key: Key::Backspace,
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-            '\x1b' => Input {
-                key: Key::Esc,
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-            _ => Input {
-                key: Key::Char(ch),
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-        };
-        step_insert(ed, input);
-    }
 }
 
 /// Feed an arrow key to the insert-mode FSM.
@@ -138,8 +72,8 @@ fn buf_lines(ed: &Editor<View, DefaultHost>) -> Vec<String> {
 #[test]
 fn basic_pair_paren() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i"); // enter insert mode
-    feed_insert(&mut ed, "(");
+    common::feed(&mut ed, "i"); // enter insert mode
+    common::feed_insert(&mut ed, "(");
     let lines = buf_lines(&ed);
     assert_eq!(lines, vec!["()"], "expected '()' got {lines:?}");
     let (row, col) = cursor(&ed);
@@ -154,8 +88,8 @@ fn basic_pair_paren() {
 #[test]
 fn basic_pair_bracket() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "[");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "[");
     assert_eq!(buf_lines(&ed), vec!["[]"]);
     assert_eq!(cursor(&ed), (0, 1));
 }
@@ -164,8 +98,8 @@ fn basic_pair_bracket() {
 #[test]
 fn basic_pair_brace() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "{");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "{");
     assert_eq!(buf_lines(&ed), vec!["{}"]);
     assert_eq!(cursor(&ed), (0, 1));
 }
@@ -174,8 +108,8 @@ fn basic_pair_brace() {
 #[test]
 fn basic_pair_double_quote() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "\"");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "\"");
     assert_eq!(buf_lines(&ed), vec!["\"\""]);
     assert_eq!(cursor(&ed), (0, 1));
 }
@@ -184,8 +118,8 @@ fn basic_pair_double_quote() {
 #[test]
 fn basic_pair_backtick() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "`");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "`");
     assert_eq!(buf_lines(&ed), vec!["``"]);
     assert_eq!(cursor(&ed), (0, 1));
 }
@@ -198,11 +132,11 @@ fn basic_pair_backtick() {
 #[test]
 fn skip_over_paren() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "("); // → "(|)"
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "("); // → "(|)"
     let (_, col_after_open) = cursor(&ed);
     assert_eq!(col_after_open, 1);
-    feed_insert(&mut ed, ")"); // skip-over → "()|"
+    common::feed_insert(&mut ed, ")"); // skip-over → "()|"
     let (row, col) = cursor(&ed);
     assert_eq!(
         (row, col),
@@ -220,11 +154,11 @@ fn skip_over_paren() {
 #[test]
 fn skip_over_double_quote() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "\""); // → "|""
-    feed_insert(&mut ed, "hello"); // type content
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "\""); // → "|""
+    common::feed_insert(&mut ed, "hello"); // type content
     // cursor is now at col 6, auto-close `"` is at col 6
-    feed_insert(&mut ed, "\""); // skip-over
+    common::feed_insert(&mut ed, "\""); // skip-over
     let lines = buf_lines(&ed);
     assert_eq!(lines, vec!["\"hello\""], "no duplicate quote: {lines:?}");
     assert_eq!(cursor(&ed).1, 7, "cursor should be past closing quote");
@@ -238,9 +172,9 @@ fn skip_over_double_quote() {
 #[test]
 fn apostrophe_no_pair_after_letter() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "don");
-    feed_insert(&mut ed, "'");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "don");
+    common::feed_insert(&mut ed, "'");
     let lines = buf_lines(&ed);
     // Should be ["don'"] not ["don''"]
     assert_eq!(
@@ -254,8 +188,8 @@ fn apostrophe_no_pair_after_letter() {
 #[test]
 fn apostrophe_pairs_at_start() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "'");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "'");
     assert_eq!(
         buf_lines(&ed),
         vec!["''"],
@@ -274,10 +208,10 @@ fn apostrophe_pairs_at_start() {
 #[test]
 fn arrow_clears_pending_closes() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "("); // → "(|)"
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "("); // → "(|)"
     feed_arrow_left(&mut ed); // cursor moves to col 0, stack cleared
-    feed_insert(&mut ed, ")"); // literal insert, not skip-over
+    common::feed_insert(&mut ed, ")"); // literal insert, not skip-over
     let lines = buf_lines(&ed);
     // Should be [")()" ] — the `)` was inserted at col 0, then `()` follows
     let text = lines.join("");
@@ -292,13 +226,13 @@ fn arrow_clears_pending_closes() {
 #[test]
 fn mode_change_clears_pending_closes() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "{"); // → "{|}"
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "{"); // → "{|}"
     // Escape to normal mode (clears stack)
-    feed(&mut ed, "\x1b");
+    common::feed(&mut ed, "\x1b");
     // `a` to append (enters insert after cursor)
-    feed(&mut ed, "a");
-    feed_insert(&mut ed, "}"); // literal `}`, not skip-over
+    common::feed(&mut ed, "a");
+    common::feed_insert(&mut ed, "}"); // literal `}`, not skip-over
     let lines = buf_lines(&ed);
     let text = lines.join("");
     // We expect "{}}" — the original `{}` plus a literal `}`
@@ -316,8 +250,8 @@ fn mode_change_clears_pending_closes() {
 #[test]
 fn tag_autoclose_div_html() {
     let mut ed = editor("html", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "<div>");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "<div>");
     let lines = buf_lines(&ed);
     assert_eq!(
         lines,
@@ -332,8 +266,8 @@ fn tag_autoclose_div_html() {
 #[test]
 fn tag_autoclose_span_html() {
     let mut ed = editor("html", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "<span>");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "<span>");
     let lines = buf_lines(&ed);
     assert_eq!(lines, vec!["<span></span>"], "{lines:?}");
 }
@@ -342,8 +276,8 @@ fn tag_autoclose_span_html() {
 #[test]
 fn void_element_no_close() {
     let mut ed = editor("html", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "<br>");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "<br>");
     let lines = buf_lines(&ed);
     assert_eq!(
         lines,
@@ -356,8 +290,8 @@ fn void_element_no_close() {
 #[test]
 fn void_element_img_no_close() {
     let mut ed = editor("html", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "<img>");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "<img>");
     let lines = buf_lines(&ed);
     assert_eq!(
         lines,
@@ -370,9 +304,9 @@ fn void_element_img_no_close() {
 #[test]
 fn self_closing_no_close() {
     let mut ed = editor("jsx", "");
-    feed(&mut ed, "i");
+    common::feed(&mut ed, "i");
     // Type `<Foo />` — the `/` before `>` makes it self-closing
-    feed_insert(&mut ed, "<Foo />");
+    common::feed_insert(&mut ed, "<Foo />");
     let lines = buf_lines(&ed);
     assert_eq!(
         lines,
@@ -385,8 +319,8 @@ fn self_closing_no_close() {
 #[test]
 fn lt_no_pair_in_rust() {
     let mut ed = editor("rust", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "<");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "<");
     let lines = buf_lines(&ed);
     assert_eq!(lines, vec!["<"], "< must not pair in rust: {lines:?}");
 }
@@ -405,8 +339,8 @@ fn set_noautopair_disables() {
         !ed.settings().autopair,
         "autopair should be off after :set noautopair"
     );
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "(");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "(");
     let lines = buf_lines(&ed);
     assert_eq!(
         lines,
@@ -426,8 +360,8 @@ fn set_noautoclose_tag_disables() {
     assert!(!ed.settings().autoclose_tag, "autoclose_tag should be off");
     // Also disable autopair so `<` doesn't pair with `>` in this test.
     ed.settings_mut().autopair = false;
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "<div>");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "<div>");
     let lines = buf_lines(&ed);
     assert_eq!(
         lines,
@@ -444,10 +378,10 @@ fn set_noautoclose_tag_disables() {
 #[test]
 fn open_pair_newline_brace() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "{"); // → "{|}"
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "{"); // → "{|}"
     // Cursor is at col 1, between { and }
-    feed_insert(&mut ed, "\n"); // open-pair-newline
+    common::feed_insert(&mut ed, "\n"); // open-pair-newline
     let lines = buf_lines(&ed);
     // Expected: ["{", "    ", "}"] (3 lines with default 4-space indent)
     assert_eq!(
@@ -475,10 +409,10 @@ fn open_pair_newline_brace() {
 #[test]
 fn triple_backtick_does_not_autopair_third() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "`"); // 1st → autopair → `|`
-    feed_insert(&mut ed, "`"); // 2nd → skip-over → ``|
-    feed_insert(&mut ed, "`"); // 3rd → triple-quote guard → bare insert → ```|
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "`"); // 1st → autopair → `|`
+    common::feed_insert(&mut ed, "`"); // 2nd → skip-over → ``|
+    common::feed_insert(&mut ed, "`"); // 3rd → triple-quote guard → bare insert → ```|
     let lines = buf_lines(&ed);
     assert_eq!(
         lines,
@@ -497,10 +431,10 @@ fn triple_backtick_does_not_autopair_third() {
 #[test]
 fn triple_double_quote_does_not_autopair_third() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "\"");
-    feed_insert(&mut ed, "\"");
-    feed_insert(&mut ed, "\"");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "\"");
+    common::feed_insert(&mut ed, "\"");
+    common::feed_insert(&mut ed, "\"");
     assert_eq!(
         buf_lines(&ed),
         vec!["\"\"\""],
@@ -513,10 +447,10 @@ fn triple_double_quote_does_not_autopair_third() {
 #[test]
 fn triple_single_quote_does_not_autopair_third() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "\u{27}");
-    feed_insert(&mut ed, "\u{27}");
-    feed_insert(&mut ed, "\u{27}");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "\u{27}");
+    common::feed_insert(&mut ed, "\u{27}");
+    common::feed_insert(&mut ed, "\u{27}");
     assert_eq!(
         buf_lines(&ed),
         vec!["\u{27}\u{27}\u{27}"],
@@ -534,15 +468,15 @@ fn triple_single_quote_does_not_autopair_third() {
 #[test]
 fn code_fence_with_lang_expands_on_enter() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "`");
-    feed_insert(&mut ed, "`");
-    feed_insert(&mut ed, "`");
-    feed_insert(&mut ed, "r");
-    feed_insert(&mut ed, "u");
-    feed_insert(&mut ed, "s");
-    feed_insert(&mut ed, "t");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "`");
+    common::feed_insert(&mut ed, "`");
+    common::feed_insert(&mut ed, "`");
+    common::feed_insert(&mut ed, "r");
+    common::feed_insert(&mut ed, "u");
+    common::feed_insert(&mut ed, "s");
+    common::feed_insert(&mut ed, "t");
+    common::feed_insert(&mut ed, "\n");
     let lines = buf_lines(&ed);
     assert_eq!(
         lines,
@@ -562,11 +496,11 @@ fn code_fence_with_lang_expands_on_enter() {
 #[test]
 fn bare_triple_backtick_does_not_expand_on_enter() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "`");
-    feed_insert(&mut ed, "`");
-    feed_insert(&mut ed, "`");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "`");
+    common::feed_insert(&mut ed, "`");
+    common::feed_insert(&mut ed, "`");
+    common::feed_insert(&mut ed, "\n");
     let lines = buf_lines(&ed);
     assert_eq!(
         lines,
@@ -580,8 +514,8 @@ fn bare_triple_backtick_does_not_expand_on_enter() {
 #[test]
 fn indented_code_fence_preserves_indent_on_expand() {
     let mut ed = editor("", "");
-    feed(&mut ed, "i");
-    feed_insert(&mut ed, "    ```rust\n");
+    common::feed(&mut ed, "i");
+    common::feed_insert(&mut ed, "    ```rust\n");
     let lines = buf_lines(&ed);
     assert_eq!(
         lines,

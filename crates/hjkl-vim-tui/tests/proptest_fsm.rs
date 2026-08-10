@@ -11,6 +11,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::VimMode;
+use hjkl_engine::rope_util::rope_to_lines_vec;
 use hjkl_engine::types::{DefaultHost, Options};
 use hjkl_vim::VimEditorExt;
 use proptest::prelude::*;
@@ -154,13 +155,13 @@ proptest! {
         let original = format!("{line0}\n{line1}");
         let mut ed = hjkl_vim::vim_editor(hjkl_buffer::View::new(), DefaultHost::new(), Options::default());
         ed.set_content(&original);
-        let before: Vec<String> = ed.buffer().rope().lines().map(|s| { let s = s.to_string(); s.strip_suffix('\n').map(str::to_string).unwrap_or(s) }).collect::<Vec<_>>();
+        let before: Vec<String> = rope_to_lines_vec(&ed.buffer().rope());
         // `dd` deletes the first line.
         hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         // `u` undoes.
         hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
-        prop_assert_eq!(before, ed.buffer().rope().lines().map(|s| { let s = s.to_string(); s.strip_suffix('\n').map(str::to_string).unwrap_or(s) }).collect::<Vec<_>>());
+        prop_assert_eq!(before, rope_to_lines_vec(&ed.buffer().rope()));
     }
 
     /// take_changes drains: a second call after the first returns

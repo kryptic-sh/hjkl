@@ -7,9 +7,10 @@
 //!
 //! No temp files needed — all state lives in-memory.
 
+mod common;
+
 use hjkl_buffer::View;
 use hjkl_engine::{DefaultHost, Editor, Options};
-use hjkl_vim::{dispatch_input, insert::step_insert};
 
 /// Build an editor pre-loaded with `content` and the given language.
 /// The editor starts in Normal mode (default).
@@ -22,62 +23,6 @@ fn editor(lang: &str, content: &str) -> Editor<View, DefaultHost> {
         ..Options::default()
     };
     hjkl_vim::vim_editor(buf, host, opts)
-}
-
-/// Feed a string of keystrokes through `dispatch_input` (hjkl-vim FSM).
-fn feed(ed: &mut Editor<View, DefaultHost>, keys: &str) {
-    use hjkl_engine::{Input, Key};
-    for ch in keys.chars() {
-        let input = match ch {
-            '\n' => Input {
-                key: Key::Enter,
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-            '\x08' => Input {
-                key: Key::Backspace,
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-            _ => Input {
-                key: Key::Char(ch),
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-        };
-        dispatch_input(ed, input);
-    }
-}
-
-/// Send a key to the insert-mode FSM (step_insert).
-fn feed_insert(ed: &mut Editor<View, DefaultHost>, keys: &str) {
-    use hjkl_engine::{Input, Key};
-    for ch in keys.chars() {
-        let input = match ch {
-            '\n' => Input {
-                key: Key::Enter,
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-            '\x08' => Input {
-                key: Key::Backspace,
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-            _ => Input {
-                key: Key::Char(ch),
-                ctrl: false,
-                alt: false,
-                shift: false,
-            },
-        };
-        step_insert(ed, input);
-    }
 }
 
 /// Return the full buffer text as a String.
@@ -95,8 +40,8 @@ fn enter_continues_rust_line_comment() {
     let mut ed = editor("rust", "// foo\n");
     // Position cursor at end of first line (after "// foo").
     // Enter normal mode, then 'A' to append at end, then Enter.
-    feed(&mut ed, "A"); // enter insert mode at end of line
-    feed_insert(&mut ed, "\n"); // press Enter
+    common::feed(&mut ed, "A"); // enter insert mode at end of line
+    common::feed_insert(&mut ed, "\n"); // press Enter
     // The new line should start with "// ".
     let text = buf_text(&ed);
     let lines: Vec<&str> = text.lines().collect();
@@ -116,8 +61,8 @@ fn enter_continues_rust_line_comment() {
 #[test]
 fn enter_continues_rust_outer_doc_comment() {
     let mut ed = editor("rust", "/// outer doc\n");
-    feed(&mut ed, "A");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A");
+    common::feed_insert(&mut ed, "\n");
     let text = buf_text(&ed);
     let lines: Vec<&str> = text.lines().collect();
     assert!(
@@ -130,8 +75,8 @@ fn enter_continues_rust_outer_doc_comment() {
 #[test]
 fn enter_continues_rust_inner_doc_comment() {
     let mut ed = editor("rust", "//! inner\n");
-    feed(&mut ed, "A");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A");
+    common::feed_insert(&mut ed, "\n");
     let text = buf_text(&ed);
     let lines: Vec<&str> = text.lines().collect();
     assert!(
@@ -144,8 +89,8 @@ fn enter_continues_rust_inner_doc_comment() {
 #[test]
 fn enter_continues_python_comment() {
     let mut ed = editor("python", "# comment\n");
-    feed(&mut ed, "A");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A");
+    common::feed_insert(&mut ed, "\n");
     let text = buf_text(&ed);
     let lines: Vec<&str> = text.lines().collect();
     assert!(
@@ -158,8 +103,8 @@ fn enter_continues_python_comment() {
 #[test]
 fn enter_does_not_continue_non_comment() {
     let mut ed = editor("rust", "let x = 1;\n");
-    feed(&mut ed, "A");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A");
+    common::feed_insert(&mut ed, "\n");
     let text = buf_text(&ed);
     let lines: Vec<&str> = text.lines().collect();
     let line2 = lines.get(1).copied().unwrap_or("");
@@ -174,8 +119,8 @@ fn enter_does_not_continue_non_comment() {
 fn enter_no_continuation_when_r_cleared() {
     let mut ed = editor("rust", "// foo\n");
     ed.settings_mut().formatoptions = "o".to_string(); // r cleared
-    feed(&mut ed, "A");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A");
+    common::feed_insert(&mut ed, "\n");
     let text = buf_text(&ed);
     let lines: Vec<&str> = text.lines().collect();
     let line2 = lines.get(1).copied().unwrap_or("");
@@ -194,7 +139,7 @@ fn enter_no_continuation_when_r_cleared() {
 fn open_below_continues_rust_comment() {
     let mut ed = editor("rust", "// foo\n");
     // Cursor is at row 0. Press 'o' (normal mode).
-    feed(&mut ed, "o");
+    common::feed(&mut ed, "o");
     // Now in insert mode. Check that the new line starts with `// `.
     let (row, _) = ed.cursor();
     assert_eq!(row, 1, "cursor should be on line 2 after 'o'");
@@ -212,7 +157,7 @@ fn open_below_continues_rust_comment() {
 fn open_below_no_continuation_when_o_cleared() {
     let mut ed = editor("rust", "// foo\n");
     ed.settings_mut().formatoptions = "r".to_string(); // o cleared
-    feed(&mut ed, "o");
+    common::feed(&mut ed, "o");
     let text = buf_text(&ed);
     let lines: Vec<&str> = text.lines().collect();
     let line2 = lines.get(1).copied().unwrap_or("");
@@ -230,7 +175,7 @@ fn open_below_no_continuation_when_o_cleared() {
 #[test]
 fn open_above_continues_rust_comment() {
     let mut ed = editor("rust", "// foo\n");
-    feed(&mut ed, "O");
+    common::feed(&mut ed, "O");
     // After O, cursor is on the new line above (row 0), in insert mode.
     let text = buf_text(&ed);
     let lines: Vec<&str> = text.lines().collect();
@@ -251,10 +196,10 @@ fn backspace_strips_comment_prefix_at_end() {
     // View: "// \n" (the continued line with just the prefix).
     let mut ed = editor("rust", "// \n");
     // Go to end of line 0 (col 3, after the trailing space).
-    feed(&mut ed, "A"); // enter insert, move to end
+    common::feed(&mut ed, "A"); // enter insert, move to end
     // The line content is "// " and cursor is at col 3.
     // Pressing Backspace should remove the whole "// " prefix.
-    feed_insert(&mut ed, "\x08");
+    common::feed_insert(&mut ed, "\x08");
     let text = buf_text(&ed);
     let line1 = text.lines().next().unwrap_or("");
     assert!(

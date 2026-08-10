@@ -159,6 +159,23 @@ pub fn char_col_to_visual_col(line: &str, char_col: usize, tab_width: usize) -> 
     visual
 }
 
+/// Visual width of `line`'s leading run of whitespace: `' '` occupies one
+/// cell, `'\t'` advances to the next multiple of `tab_width`, and the walk
+/// stops at the first other char. The indent-guide renderers in both TUI
+/// layers compute exactly this to decide where guides may be painted.
+pub fn leading_visual_width(line: &str, tab_width: usize) -> usize {
+    let tab_w = if tab_width == 0 { 1 } else { tab_width };
+    let mut visual = 0usize;
+    for ch in line.chars() {
+        match ch {
+            ' ' => visual += 1,
+            '\t' => visual += tab_w - (visual % tab_w),
+            _ => break,
+        }
+    }
+    visual
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -943,16 +943,7 @@ fn dap_deletes_paragraph_via_reducer() {
     drive_chars(&mut app, "dap");
     assert!(app.pending_state.is_none());
 
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert!(
         !lines.contains(&"hello world".to_string()),
         "dap must delete first paragraph, got {lines:?}"
@@ -1962,16 +1953,7 @@ fn dd_deletes_line_via_reducer() {
     drive_chars(&mut app, "dd");
     assert!(app.pending_state.is_none());
 
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(lines, vec!["line2", "line3"], "dd must delete line1");
 }
 
@@ -2024,16 +2006,7 @@ fn two_dd_deletes_two_lines_via_reducer() {
     drive_key(&mut app, key(KeyCode::Char('d')));
     assert!(app.pending_state.is_none());
 
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines,
         vec!["line3"],
@@ -2105,16 +2078,7 @@ fn dip_text_object_via_reducer() {
     assert!(!app.active_editor().is_chord_pending());
 
     // First paragraph (lines 0..0) should be deleted; remaining: empty line + "foo bar".
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert!(
         !lines.contains(&"hello world".to_string()),
         "dip must delete first paragraph, got {lines:?}"
@@ -2167,16 +2131,7 @@ fn dgg_deletes_to_top() {
         "pending must clear after ApplyOpG commit"
     );
     // dgg should delete lines 0..=2 (all three lines).
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert!(
         lines.is_empty() || lines == vec![""],
         "dgg from line3 must delete all lines, got {lines:?}"
@@ -2536,16 +2491,7 @@ fn dgg_deletes_to_top_via_reducer() {
     assert!(app.pending_state.is_none(), "pending must clear after dgg");
     assert!(!app.active_editor().is_chord_pending());
 
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert!(
         lines.is_empty() || lines == vec![""],
         "dgg from last line must delete all content, got {lines:?}"
@@ -2588,16 +2534,7 @@ fn dgj_deletes_screen_down_via_reducer() {
     drive_chars(&mut app, "dgj");
     assert!(app.pending_state.is_none(), "pending clears after dgj");
 
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     // dgj deletes current line + screen-line below (same as next line here).
     assert_eq!(
         lines,
@@ -2694,16 +2631,7 @@ fn g_ugg_uppercases_to_top_via_reducer() {
     );
 
     // All three lines should be uppercased.
-    let lines: Vec<_> = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert!(
         lines.iter().all(|l| l.chars().all(|c| !c.is_lowercase())),
         "gUgg must uppercase all lines to top, got {lines:?}"
@@ -4017,16 +3945,7 @@ fn p64_big_j_with_count_10_joins_10_lines() {
     let consumed = app.route_chord_key(ck('J'));
     assert!(consumed, "J must be consumed by keymap");
     // 10 lines joined into index 0; second line is now "line11".
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     // The engine joins `count` lines total (current + count-1 following).
     // With count=10: lines 1-10 merged → 10 lines → 1 merged line.
     // Next remaining line is "line11".
@@ -4549,16 +4468,7 @@ fn p64_count_2dd_still_works_after_64_additions() {
     app.pending_count.try_accumulate('2');
     rck(&mut app, &['d', 'd']);
 
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines.first().map(String::as_str),
         Some("line3"),
@@ -4644,16 +4554,7 @@ fn p65_backspace_at_col0_joins_lines() {
         KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
 
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines.len(),
         1,
@@ -4671,16 +4572,7 @@ fn p65_enter_inserts_newline() {
 
     dik(&mut app, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(lines.len(), 2, "Enter must split line; got {lines:?}");
     assert_eq!(lines[0], "he");
     assert_eq!(lines[1], "llo");

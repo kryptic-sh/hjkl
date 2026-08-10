@@ -10,9 +10,11 @@
 //! Self-closing tags (`<br />`) and void elements (`<br>`, `<img>`)
 //! are explicitly skipped — they don't open a block.
 
+mod common;
+
 use hjkl_buffer::View;
+use hjkl_engine::rope_util::rope_to_lines_vec;
 use hjkl_engine::{DefaultHost, Editor, Options};
-use hjkl_vim::{dispatch_input, insert::step_insert};
 
 fn editor(lang: &str, content: &str) -> Editor<View, DefaultHost> {
     let buf = View::from_str(content);
@@ -31,56 +33,15 @@ fn editor(lang: &str, content: &str) -> Editor<View, DefaultHost> {
     hjkl_vim::vim_editor(buf, host, opts)
 }
 
-fn feed(ed: &mut Editor<View, DefaultHost>, keys: &str) {
-    use hjkl_engine::{Input, Key};
-    for ch in keys.chars() {
-        let input = match ch {
-            '\n' => Input {
-                key: Key::Enter,
-                ..Input::default()
-            },
-            _ => Input {
-                key: Key::Char(ch),
-                ..Input::default()
-            },
-        };
-        dispatch_input(ed, input);
-    }
-}
-
-fn feed_insert(ed: &mut Editor<View, DefaultHost>, keys: &str) {
-    use hjkl_engine::{Input, Key};
-    for ch in keys.chars() {
-        let input = match ch {
-            '\n' => Input {
-                key: Key::Enter,
-                ..Input::default()
-            },
-            _ => Input {
-                key: Key::Char(ch),
-                ..Input::default()
-            },
-        };
-        step_insert(ed, input);
-    }
-}
-
 fn lines(ed: &Editor<View, DefaultHost>) -> Vec<String> {
-    ed.buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>()
+    rope_to_lines_vec(&ed.buffer().rope())
 }
 
 #[test]
 fn html_opening_tag_bumps_indent_on_enter() {
     let mut ed = editor("html", "<head>");
-    feed(&mut ed, "A"); // Insert at end-of-line.
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A"); // Insert at end-of-line.
+    common::feed_insert(&mut ed, "\n");
     let l = lines(&ed);
     assert_eq!(
         l,
@@ -92,8 +53,8 @@ fn html_opening_tag_bumps_indent_on_enter() {
 #[test]
 fn html_opening_tag_with_attributes_bumps_indent() {
     let mut ed = editor("html", "<div class=\"foo\">");
-    feed(&mut ed, "A");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A");
+    common::feed_insert(&mut ed, "\n");
     let l = lines(&ed);
     assert_eq!(
         l,
@@ -105,8 +66,8 @@ fn html_opening_tag_with_attributes_bumps_indent() {
 #[test]
 fn html_self_closing_tag_does_not_bump_indent() {
     let mut ed = editor("html", "<br />");
-    feed(&mut ed, "A");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A");
+    common::feed_insert(&mut ed, "\n");
     let l = lines(&ed);
     assert_eq!(
         l,
@@ -118,8 +79,8 @@ fn html_self_closing_tag_does_not_bump_indent() {
 #[test]
 fn html_void_element_does_not_bump_indent() {
     let mut ed = editor("html", "<br>");
-    feed(&mut ed, "A");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A");
+    common::feed_insert(&mut ed, "\n");
     let l = lines(&ed);
     assert_eq!(
         l,
@@ -131,8 +92,8 @@ fn html_void_element_does_not_bump_indent() {
 #[test]
 fn html_closing_tag_does_not_bump_indent() {
     let mut ed = editor("html", "</head>");
-    feed(&mut ed, "A");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A");
+    common::feed_insert(&mut ed, "\n");
     let l = lines(&ed);
     assert_eq!(
         l,
@@ -144,8 +105,8 @@ fn html_closing_tag_does_not_bump_indent() {
 #[test]
 fn nested_html_bump_preserves_existing_indent() {
     let mut ed = editor("html", "    <head>");
-    feed(&mut ed, "A");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A");
+    common::feed_insert(&mut ed, "\n");
     let l = lines(&ed);
     assert_eq!(
         l,
@@ -158,8 +119,8 @@ fn nested_html_bump_preserves_existing_indent() {
 fn non_html_filetype_does_not_bump_after_generic() {
     // Rust generics like `Vec<T>` must NOT trigger the html-tag bump.
     let mut ed = editor("rust", "let v: Vec<T>");
-    feed(&mut ed, "A");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A");
+    common::feed_insert(&mut ed, "\n");
     let l = lines(&ed);
     assert_eq!(
         l,
@@ -173,8 +134,8 @@ fn html_open_brace_still_bumps_indent() {
     // Regression — language-agnostic `{` bump still fires inside html
     // filetype (e.g. inline `<style>` JS-like CSS rules).
     let mut ed = editor("html", "  body {");
-    feed(&mut ed, "A");
-    feed_insert(&mut ed, "\n");
+    common::feed(&mut ed, "A");
+    common::feed_insert(&mut ed, "\n");
     let l = lines(&ed);
     assert_eq!(
         l,

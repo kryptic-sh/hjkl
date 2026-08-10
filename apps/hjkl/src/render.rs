@@ -1091,16 +1091,7 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             let rope = app.slots()[slot_idx].buffer().rope();
             let cursor_line = hjkl_buffer::rope_line_str(&rope, cursor_row);
             let tab_width = indent_guide_tabstop.max(1);
-            let mut leading_vcols: usize = 0;
-            for ch in cursor_line.chars() {
-                match ch {
-                    ' ' => leading_vcols += 1,
-                    '\t' => {
-                        leading_vcols += tab_width - (leading_vcols % tab_width);
-                    }
-                    _ => break,
-                }
-            }
+            let leading_vcols = hjkl_buffer::leading_visual_width(&cursor_line, tab_width);
             if leading_vcols >= indent_guide_shiftwidth {
                 // paint_row paints guides at sw, 2*sw, ... while
                 // `guide_col < leading_vcols`. Deepest painted is

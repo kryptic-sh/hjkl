@@ -3,6 +3,7 @@
 //! (dropped `hjkl-vim`'s `crossterm` feature gate).
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use hjkl_engine::rope_util::rope_to_lines_vec;
 use hjkl_engine::{Editor, Host, VimMode};
 use hjkl_vim::VimEditorExt;
 
@@ -429,14 +430,7 @@ fn count_dd_puts_cursor_on_first_non_blank_of_remaining() {
     e.jump_cursor(1, 0);
     run_keys(&mut e, "3dd");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["a".to_string(), "e".to_string()]
     );
     assert_eq!(e.cursor(), (1, 0));
@@ -1026,14 +1020,7 @@ fn dip_deletes_inner_paragraph() {
     // Inner paragraph (rows 0..=2) drops; the trailing blank
     // separator + remaining paragraph stay.
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         vec!["".to_string(), "d".into()]
     );
 }
@@ -1675,17 +1662,7 @@ fn d_capital_g_deletes_to_end_of_file() {
     let mut e = editor_with("a\nb\nc\nd");
     e.jump_cursor(1, 0);
     run_keys(&mut e, "dG");
-    assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
-        &["a".to_string()]
-    );
+    assert_eq!(rope_to_lines_vec(&e.buffer().rope()), &["a".to_string()]);
 }
 
 #[test]
@@ -1693,17 +1670,7 @@ fn d_gg_deletes_to_start_of_file() {
     let mut e = editor_with("a\nb\nc\nd");
     e.jump_cursor(2, 0);
     run_keys(&mut e, "dgg");
-    assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
-        &["d".to_string()]
-    );
+    assert_eq!(rope_to_lines_vec(&e.buffer().rope()), &["d".to_string()]);
 }
 
 #[test]
@@ -1738,14 +1705,7 @@ fn j_joins_next_line_with_space() {
     let mut e = editor_with("hello\nworld");
     run_keys(&mut e, "J");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["hello world".to_string()]
     );
 }
@@ -1755,14 +1715,7 @@ fn j_strips_leading_whitespace_on_join() {
     let mut e = editor_with("hello\n    world");
     run_keys(&mut e, "J");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["hello world".to_string()]
     );
 }
@@ -1824,14 +1777,7 @@ fn p_pastes_linewise_below() {
     run_keys(&mut e, "yy");
     run_keys(&mut e, "p");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &[
             "one".to_string(),
             "one".to_string(),
@@ -1848,14 +1794,7 @@ fn capital_p_pastes_linewise_above() {
     run_keys(&mut e, "yy");
     run_keys(&mut e, "P");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["one".to_string(), "two".to_string(), "two".to_string()]
     );
 }
@@ -1878,14 +1817,7 @@ fn visual_line_delete_removes_full_lines() {
     let mut e = editor_with("a\nb\nc\nd");
     run_keys(&mut e, "Vjd");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["c".to_string(), "d".to_string()]
     );
 }
@@ -1900,14 +1832,7 @@ fn visual_line_change_leaves_blank_line() {
     // their place (vim convention). Typing `X` lands on that blank
     // first line.
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["X".to_string(), "c".to_string()]
     );
 }
@@ -1918,14 +1843,7 @@ fn cc_leaves_blank_line() {
     e.jump_cursor(1, 0);
     run_keys(&mut e, "ccX<Esc>");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["a".to_string(), "X".to_string(), "c".to_string()]
     );
 }
@@ -1938,14 +1856,7 @@ fn cc_preserves_indent_with_autoindent() {
     e.jump_cursor(1, 4);
     run_keys(&mut e, "ccbar<Esc>");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &[
             "fn f() {".to_string(),
             "    bar".to_string(),
@@ -1956,14 +1867,7 @@ fn cc_preserves_indent_with_autoindent() {
 
 /// Helper: collect rope lines (strip trailing `\n`) into a `Vec<String>`.
 fn rope_lines(e: &Editor<hjkl_buffer::View, impl hjkl_engine::types::Host>) -> Vec<String> {
-    e.buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect()
+    rope_to_lines_vec(&e.buffer().rope())
 }
 
 #[test]
@@ -2126,14 +2030,7 @@ fn insert_ctrl_w_at_col0_joins_with_prev_word() {
         KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
     );
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         vec!["helloworld".to_string()]
     );
     assert_eq!(e.cursor(), (0, 5));
@@ -2153,14 +2050,7 @@ fn insert_ctrl_w_at_col0_keeps_prefix_words() {
         KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
     );
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         vec!["foo barbaz".to_string()]
     );
     assert_eq!(e.cursor(), (0, 7));
@@ -2424,14 +2314,7 @@ fn visual_block_delete_removes_column_range() {
     run_keys(&mut e, "d");
     // Deletes cols 1-3 on every row — "ell" / "orl" / "app".
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["ho".to_string(), "wd".to_string(), "hy".to_string()]
     );
 }
@@ -2457,14 +2340,7 @@ fn visual_block_replace_fills_block() {
     run_keys(&mut e, "ll");
     run_keys(&mut e, "rx");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &[
             "xxxlo".to_string(),
             "xxxld".to_string(),
@@ -2481,14 +2357,7 @@ fn visual_block_insert_repeats_across_rows() {
     run_keys(&mut e, "I");
     run_keys(&mut e, "# <Esc>");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &[
             "# hello".to_string(),
             "# world".to_string(),
@@ -2530,14 +2399,7 @@ fn visual_block_delete_handles_short_lines() {
     //        gets removed → "h".
     // Row 2: delete cols 1-3 ("orl") → "wd".
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["ho".to_string(), "h".to_string(), "wd".to_string()]
     );
 }
@@ -2569,14 +2431,7 @@ fn visual_block_replace_skips_past_eol() {
     // Every row had only col 0..=1; block covers col 1..=7 → only
     // col 1 is in range on each row, so just that cell changes.
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["aX".to_string(), "cX".to_string(), "eX".to_string()]
     );
 }
@@ -2590,14 +2445,7 @@ fn visual_block_with_empty_line_in_middle() {
     // Row 0 cols 0-2 removed → "d". Row 1 empty → untouched.
     // Row 2 cols 0-2 removed → "h".
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["d".to_string(), "".to_string(), "h".to_string()]
     );
 }
@@ -2616,14 +2464,7 @@ fn block_insert_skips_empty_lines_shorter_than_block_column() {
     run_keys(&mut e, "I");
     run_keys(&mut e, "XX<Esc>");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &[
             "thiXXs is a line".to_string(),
             "".to_string(),
@@ -2645,14 +2486,7 @@ fn block_insert_skips_short_lines_shorter_than_block_column() {
     run_keys(&mut e, "Y<Esc>");
     // Row 1 "bb" is shorter than col 3 — skip it entirely.
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["aaaYaa".to_string(), "bb".to_string(), "aaaYaa".to_string()]
     );
 }
@@ -2669,14 +2503,7 @@ fn block_change_skips_short_lines_shorter_than_block_column() {
     run_keys(&mut e, "c");
     run_keys(&mut e, "Z<Esc>");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["aaZa".to_string(), "x".to_string(), "bbZb".to_string()]
     );
 }
@@ -2691,14 +2518,7 @@ fn visual_block_append_repeats_across_rows() {
     run_keys(&mut e, "A");
     run_keys(&mut e, "!<Esc>");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["f!oo".to_string(), "b!ar".to_string(), "b!az".to_string()]
     );
 }
@@ -2718,14 +2538,7 @@ fn visual_block_append_pads_rows_shorter_than_the_top_row_to_the_block_edge() {
     run_keys(&mut e, "A");
     run_keys(&mut e, "X<Esc>");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["ab    X".to_string(), "abcdefX".to_string()]
     );
 }
@@ -2742,14 +2555,7 @@ fn visual_block_append_pad_and_replication_undo_in_one_step() {
     run_keys(&mut e, "X<Esc>");
     run_keys(&mut e, "u");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["ab".to_string(), "abcdef".to_string()]
     );
 }
@@ -2770,14 +2576,7 @@ fn visual_block_dollar_delete_removes_to_each_rows_own_eol() {
     run_keys(&mut e, "j");
     run_keys(&mut e, "d");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["s".to_string(), "m".to_string()]
     );
 }
@@ -2801,14 +2600,7 @@ fn visual_block_dollar_replace_fills_to_each_rows_own_eol() {
     let mut e = editor_with("short\nmuchlongerline");
     run_keys(&mut e, "l<C-v>$jrX");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["sXXXX".to_string(), "mXXXXXXXXXXXXX".to_string()]
     );
 }
@@ -2824,14 +2616,7 @@ fn visual_block_dollar_flag_survives_vertical_motion_clears_on_horizontal() {
     run_keys(&mut e, "<C-v>$0"); // ragged set by $, then cleared by 0
     run_keys(&mut e, "jd");
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["hort".to_string(), "uchlongerline".to_string()]
     );
 }
@@ -3068,14 +2853,7 @@ fn gj_joins_without_inserting_space() {
     run_keys(&mut e, "gJ");
     // No space inserted, leading whitespace preserved.
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         &["hello    world".to_string()]
     );
 }
@@ -3084,17 +2862,7 @@ fn gj_joins_without_inserting_space() {
 fn gj_noop_on_last_line() {
     let mut e = editor_with("only");
     run_keys(&mut e, "gJ");
-    assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
-        &["only".to_string()]
-    );
+    assert_eq!(rope_to_lines_vec(&e.buffer().rope()), &["only".to_string()]);
 }
 
 #[test]
@@ -5532,15 +5300,7 @@ fn visual_block_change_cursor_on_last_inserted_char() {
     let mut e = editor_with("foo\nbar\nbaz\n");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "<C-v>jlcZZ<Esc>");
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(lines[0], "ZZo", "row 0 should be 'ZZo'");
     assert_eq!(lines[1], "ZZr", "row 1 should be 'ZZr'");
     assert_eq!(
@@ -5565,15 +5325,7 @@ fn register_blackhole_delete_preserves_unnamed_register() {
     let mut e = editor_with("foo bar baz\n");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "yiww\"_dwbp");
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(
         lines[0], "ffoooo baz",
         "black-hole delete must not corrupt unnamed register"
@@ -5696,15 +5448,7 @@ fn apply_op_double_dd_deletes_line() {
     let mut e = editor_with("line1\nline2\nline3");
     // dd on first line.
     e.apply_op_double(hjkl_engine::Operator::Delete, 1);
-    let lines: Vec<_> = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(lines, vec!["line2", "line3"], "dd should delete line1");
 }
 
@@ -5730,15 +5474,7 @@ fn apply_op_double_yy_does_not_modify_buffer() {
 fn apply_op_double_dd_count2_deletes_two_lines() {
     let mut e = editor_with("line1\nline2\nline3");
     e.apply_op_double(hjkl_engine::Operator::Delete, 2);
-    let lines: Vec<_> = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(lines, vec!["line3"], "2dd should delete two lines");
 }
 
@@ -5901,15 +5637,7 @@ fn apply_op_g_dgg_deletes_to_top() {
     // dgg: Delete from current row to FileTop (row 0). Motion is Linewise,
     // so rows 0..=1 are deleted. "line3" remains.
     e.apply_op_g(hjkl_engine::Operator::Delete, 'g', 1);
-    let lines: Vec<_> = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(lines, vec!["line3"], "dgg must delete to file top");
 }
 
@@ -5947,15 +5675,7 @@ fn apply_op_g_dgj_deletes_screen_down() {
     // screen line (which is the same as buffer line in non-wrapped content).
     let mut e = editor_with("line1\nline2\nline3");
     e.apply_op_g(hjkl_engine::Operator::Delete, 'j', 1);
-    let lines: Vec<_> = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines: Vec<_> = rope_to_lines_vec(&e.buffer().rope());
     // dgj deletes current line plus the line below it.
     assert_eq!(lines, vec!["line3"], "dgj must delete current+next line");
 }
@@ -6037,15 +5757,7 @@ fn equal_then_motion_emits_auto_indent_via_fsm() {
     let mut e = indent_editor_vim("{\nbody\n}");
     // Start on row 0; `=j` covers rows 0..=1.
     run_keys(&mut e, "=j");
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     // Row 0 (`{`) — depth 0 at start, no indent.
     assert_eq!(lines[0], "{");
     // Row 1 (`body`) — depth 1 after `{`, should be indented 4 spaces.
@@ -6058,15 +5770,7 @@ fn double_equal_reindents_current_line() {
     let mut e = indent_editor_vim("{\nbody\n}");
     // Move to row 1 then `==`.
     run_keys(&mut e, "j==");
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     // Row 1 is now properly indented under the `{`.
     assert_eq!(lines[1], "    body");
     // Row 0 and 2 should be unchanged.

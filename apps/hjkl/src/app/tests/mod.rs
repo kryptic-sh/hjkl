@@ -1,6 +1,7 @@
 use super::*;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::VimMode;
+use hjkl_engine::rope_util::rope_to_lines_vec;
 use std::time::Duration;
 
 fn key(code: KeyCode) -> KeyEvent {

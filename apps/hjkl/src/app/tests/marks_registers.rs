@@ -27,16 +27,7 @@ fn quote_a_then_dd_deletes_into_register_a() {
         "register 'a' should contain 'hello world', got {text:?}"
     );
     // View should only have the second line.
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(lines, vec!["line two"], "\"add must delete first line");
 }
 
@@ -77,16 +68,7 @@ fn quote_a_then_yy_then_quote_a_then_p_pastes_named_register() {
     drive_key(&mut app, key(KeyCode::Char('p')));
 
     // View should now have "first line" duplicated after line two.
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert!(lines.len() >= 3, "paste must add a line, got {lines:?}");
     assert!(
         lines.iter().any(|l| l.contains("first line")),
@@ -127,16 +109,7 @@ fn quote_underscore_then_dd_blackhole_no_unnamed_change() {
         "\"_dd must not overwrite the unnamed register"
     );
     // Line was deleted from the buffer.
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert!(
         !lines.iter().any(|l| l.contains("delete me")),
         "\"_dd must still delete the line from the buffer, got {lines:?}"
@@ -591,16 +564,7 @@ fn gc_in_visual_line_toggles_selection_via_app_layer() {
 
     // V → visual-line, j → extend down, gc → toggle.
     macro_key_seq(&mut app, &[ck('V'), ck('j'), ck('g'), ck('c')]);
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines[0], "// let x = 1;",
         "visual gc must comment line 0; got {lines:?}"
@@ -624,16 +588,7 @@ fn gc_in_visual_charwise_toggles_selection_via_app_layer() {
     app.sync_viewport_from_editor();
 
     macro_key_seq(&mut app, &[ck('v'), ck('j'), ck('g'), ck('c')]);
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(lines[0], "// let x = 1;");
     assert_eq!(lines[1], "// let y = 2;");
 }
@@ -679,16 +634,7 @@ fn gcc_with_count_3_toggles_3_lines_via_app_layer() {
     app.sync_viewport_from_editor();
 
     macro_key_seq(&mut app, &[ck('3'), ck('g'), ck('c'), ck('c')]);
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(lines[0], "// a");
     assert_eq!(lines[1], "// b");
     assert_eq!(lines[2], "// c");
@@ -706,16 +652,7 @@ fn gc_with_motion_j_toggles_2_lines_via_app_layer() {
     app.sync_viewport_from_editor();
 
     macro_key_seq(&mut app, &[ck('g'), ck('c'), ck('j')]);
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(lines[0], "// a");
     assert_eq!(lines[1], "// b");
     assert_eq!(lines[2], "c");
@@ -1209,16 +1146,7 @@ fn count_before_op_5dd_deletes_5_lines() {
     app.pending_count.try_accumulate('5');
     rck(&mut app, &['d', 'd']);
 
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines.first().map(String::as_str),
         Some("line6"),
@@ -1253,16 +1181,7 @@ fn register_then_count_a5dd_targets_register_a() {
     // `dd` — op.
     rck(&mut app, &['d', 'd']);
 
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines.first().map(String::as_str),
         Some("line6"),
@@ -1312,16 +1231,7 @@ fn count_then_register_5_quote_a_dd_targets_register_a() {
     // `dd` — op must consume count=5 and register='a'.
     rck(&mut app, &['d', 'd']);
 
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines.first().map(String::as_str),
         Some("line6"),
@@ -1374,16 +1284,7 @@ fn outer_count_inner_count_2_quote_a_5dd_total_10() {
     // `dd` — delete count1=25 lines into register 'a'.
     rck(&mut app, &['d', 'd']);
 
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     // 25 lines deleted from a 30-line buffer → line26 is now first.
     assert_eq!(
         lines.first().map(String::as_str),
@@ -1417,16 +1318,7 @@ fn register_prefix_then_x_targets_register() {
     hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('x'));
     app.sync_viewport_from_editor();
 
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines.first().map(String::as_str),
         Some("ello world"),
@@ -1543,16 +1435,7 @@ fn count_then_dot_5_dot_repeats_five_times() {
     hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('x'));
     app.sync_viewport_from_editor();
 
-    let lines_after_x = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines_after_x = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines_after_x.first().map(String::as_str),
         Some("ello world"),
@@ -1566,16 +1449,7 @@ fn count_then_dot_5_dot_repeats_five_times() {
     assert!(consumed, ". must be consumed by keymap");
     app.sync_viewport_from_editor();
 
-    let lines_after_dot = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines_after_dot = rope_to_lines_vec(&app.active_editor().buffer().rope());
     // Started with "ello world" (10 chars). Delete 5 chars one at a time:
     // 'e','l','l','o',' ' → "world". Each dot-repeat fires x (delete-one-char)
     // once (count folded into single repeat of the last-change op).
@@ -1600,16 +1474,7 @@ fn count_p_pastes_register_count_times() {
     // yy5p — linewise yank, then 5p.
     macro_key_seq(&mut app, &[ck('y'), ck('y'), ck('5'), ck('p')]);
 
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines.len(),
         6,
@@ -1633,16 +1498,7 @@ fn count_with_zero_digits_pastes_correctly() {
     // yy10p — linewise yank, then 10p.
     macro_key_seq(&mut app, &[ck('y'), ck('y'), ck('1'), ck('0'), ck('p')]);
 
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines.len(),
         11,
@@ -1684,16 +1540,7 @@ fn count_100p_pastes_100_times() {
         &[ck('y'), ck('y'), ck('1'), ck('0'), ck('0'), ck('p')],
     );
 
-    let lines = app
-        .active_editor()
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(
         lines.len(),
         101,

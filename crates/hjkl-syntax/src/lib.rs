@@ -272,7 +272,7 @@ impl PartialEq for RenderOutput {
 /// ```
 /// use hjkl_syntax::SetLanguageOutcome;
 /// assert!(SetLanguageOutcome::Ready.is_known());
-/// assert!(SetLanguageOutcome::Loading("rust".to_string()).is_known());
+/// assert!(SetLanguageOutcome::Loading.is_known());
 /// assert!(!SetLanguageOutcome::Unknown.is_known());
 /// ```
 #[non_exhaustive]
@@ -280,7 +280,7 @@ pub enum SetLanguageOutcome {
     /// Grammar was already cached — installed immediately.
     Ready,
     /// Grammar is being fetched/compiled on the background pool.
-    Loading(#[allow(dead_code)] String),
+    Loading,
     /// Extension unrecognized. No grammar — plain text only.
     Unknown,
 }
@@ -288,7 +288,7 @@ pub enum SetLanguageOutcome {
 impl SetLanguageOutcome {
     /// `true` when a grammar was found (either already cached or now in flight).
     pub fn is_known(&self) -> bool {
-        matches!(self, Self::Ready | Self::Loading(_))
+        matches!(self, Self::Ready | Self::Loading)
     }
 }
 
@@ -550,7 +550,7 @@ impl SyntaxLayer {
                     name: name.clone(),
                     handle,
                 });
-                SetLanguageOutcome::Loading(name)
+                SetLanguageOutcome::Loading
             }
             GrammarRequest::Unknown | _ => {
                 let c = self.client_mut(id);
@@ -590,7 +590,7 @@ impl SyntaxLayer {
                     name: name.clone(),
                     handle,
                 });
-                SetLanguageOutcome::Loading(name)
+                SetLanguageOutcome::Loading
             }
             GrammarRequest::Unknown | _ => {
                 let c = self.client_mut(id);
@@ -1484,7 +1484,7 @@ mod tests {
     #[test]
     fn set_language_outcome_is_known() {
         assert!(SetLanguageOutcome::Ready.is_known());
-        assert!(SetLanguageOutcome::Loading("rust".to_string()).is_known());
+        assert!(SetLanguageOutcome::Loading.is_known());
         assert!(!SetLanguageOutcome::Unknown.is_known());
     }
 

@@ -126,27 +126,11 @@ fn open_extra_adds_slot_and_leaves_active_zero() {
         "active must stay at 0 after open_extra"
     );
     assert_eq!(
-        app.slots[0]
-            .buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&app.slots[0].buffer().rope()),
         vec!["first".to_string()]
     );
     assert_eq!(
-        app.slots[1]
-            .buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&app.slots[1].buffer().rope()),
         vec!["second".to_string()]
     );
     let _ = std::fs::remove_file(&path_a);

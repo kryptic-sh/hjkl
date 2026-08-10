@@ -1374,12 +1374,7 @@ mod tests {
     // Re-run `sha256sum tests/fixtures/hello.*` to verify.
     const HELLO_TAR_GZ_SHA: &str =
         "9dae51f8d23ea48e988bc08ec10b7e8488a7b4f4634e5197ea165bf4e5361295";
-    #[allow(dead_code)]
     const HELLO_ZIP_SHA: &str = "bcff8654881e86bc7600365fa43f4487ae184ad9487053af0ffbae204f137218";
-    #[allow(dead_code)]
-    const HELLO_GZ_SHA: &str = "64bc750ede7af4dfed2964cf51af3e7447557fda5b2848b817aa41049d8bf7a1";
-    #[allow(dead_code)]
-    const HELLO_RAW_SHA: &str = "bfdeaeb08cffb6a36438bcd12dda25417e3cdd36f1e7e482a2849d539225288b";
 
     fn fixture_path(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

@@ -13,6 +13,7 @@
 // may shadow them with local `use` statements, triggering unused-imports lints.
 #[allow(unused_imports)]
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use hjkl_engine::rope_util::rope_to_lines_vec;
 #[allow(unused_imports)]
 use hjkl_engine::{
     Editor, VimMode,
@@ -1527,15 +1528,7 @@ fn insert_newline_splits_line() {
     e.jump_cursor(0, 3);
     enter_insert(&mut e);
     e.insert_newline();
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(lines[0], "hel");
     assert_eq!(lines[1], "lo");
 }
@@ -3016,15 +3009,7 @@ fn auto_indent_single_line_under_open_brace() {
     let mut e = indent_editor("{\nfoo\n}", 4, true);
     // auto-indent only row 1 ("foo").
     e.auto_indent_range((1, 0), (1, 0));
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(lines[1], "    foo", "foo should be indented by 4 spaces");
 }
 
@@ -3034,15 +3019,7 @@ fn auto_indent_close_brace_outdents() {
     // bracket so effective_depth = 0.
     let mut e = indent_editor("{\n    inner\n}", 4, true);
     e.auto_indent_range((2, 0), (2, 0));
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(lines[2], "}", "`}}` should have zero indent");
 }
 
@@ -3054,15 +3031,7 @@ fn auto_indent_whole_buffer_normalizes_mixed_indent() {
     let mut e = indent_editor(src, 4, true);
     let total = e.buffer().row_count();
     e.auto_indent_range((0, 0), (total - 1, 0));
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     // `{` — depth 0 at start.
     assert_eq!(lines[0], "{");
     // `body` — depth 1 after `{`.
@@ -3078,15 +3047,7 @@ fn auto_indent_respects_expandtab_false_uses_tabs() {
     let mut e = indent_editor(src, 4, false);
     let total = e.buffer().row_count();
     e.auto_indent_range((0, 0), (total - 1, 0));
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(lines[0], "{");
     assert_eq!(lines[1], "\tbody");
     assert_eq!(lines[2], "}");
@@ -3099,15 +3060,7 @@ fn auto_indent_empty_line_stays_empty() {
     let mut e = indent_editor(src, 4, true);
     let total = e.buffer().row_count();
     e.auto_indent_range((0, 0), (total - 1, 0));
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(lines[1], "", "blank line should stay blank");
     assert_eq!(lines[2], "    foo");
 }
@@ -3190,15 +3143,7 @@ fn auto_indent_vs_cargo_fmt_motions_diagnostic() {
     let row_count = e.buffer().row_count();
     e.auto_indent_range((0, 0), (row_count.saturating_sub(1), 0));
 
-    let after_lines: Vec<String> = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let after_lines: Vec<String> = rope_to_lines_vec(&e.buffer().rope());
     let original_lines: Vec<&str> = original.lines().collect();
 
     let leading_ws = |s: &str| s.chars().take_while(|c| c.is_whitespace()).count();
@@ -3259,15 +3204,7 @@ fn filter_range_cat_is_identity() {
     let mut e = make_editor("alpha\nbeta\ngamma");
     let result = e.filter_range(0, 2, "cat", None);
     assert!(result.is_ok(), "cat must succeed: {result:?}");
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(lines, vec!["alpha", "beta", "gamma"]);
 }
 
@@ -3288,15 +3225,7 @@ fn filter_range_sort_reorders_lines() {
     let mut e = make_editor("banana\napple\ncherry");
     let result = e.filter_range(0, 2, "sort", None);
     assert!(result.is_ok(), "sort must succeed: {result:?}");
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(lines, vec!["apple", "banana", "cherry"]);
 }
 
@@ -3307,15 +3236,7 @@ fn filter_range_partial_range() {
     let mut e = make_editor("alpha\nbanana\napple");
     let result = e.filter_range(1, 2, "sort", None);
     assert!(result.is_ok(), "sort must succeed: {result:?}");
-    let lines = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let lines = rope_to_lines_vec(&e.buffer().rope());
     assert_eq!(lines[0], "alpha", "row 0 must be untouched");
     assert_eq!(&lines[1..], &["apple", "banana"]);
 }
@@ -3326,15 +3247,7 @@ fn filter_range_partial_range() {
 #[cfg(not(windows))]
 fn filter_range_timeout_kills_slow_command() {
     let mut e = make_editor("line1\nline2");
-    let before = e
-        .buffer()
-        .rope()
-        .lines()
-        .map(|s| {
-            let s = s.to_string();
-            s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-        })
-        .collect::<Vec<_>>();
+    let before = rope_to_lines_vec(&e.buffer().rope());
     let start = std::time::Instant::now();
     let result = e.filter_range(0, 1, "sleep 30", Some(1));
     let elapsed = start.elapsed();
@@ -3344,14 +3257,7 @@ fn filter_range_timeout_kills_slow_command() {
         "should return within ~1s timeout + slack, got {elapsed:?}"
     );
     assert_eq!(
-        e.buffer()
-            .rope()
-            .lines()
-            .map(|s| {
-                let s = s.to_string();
-                s.strip_suffix('\n').map(str::to_string).unwrap_or(s)
-            })
-            .collect::<Vec<_>>(),
+        rope_to_lines_vec(&e.buffer().rope()),
         before,
         "buffer must be unchanged"
     );
