@@ -557,6 +557,12 @@ impl FoldProvider for BufferFoldProviderMut<'_> {
 /// [`BufferFoldProviderMut`] adapter against the live buffer).
 pub struct SnapshotFoldProvider {
     folds: Vec<hjkl_buffer::Fold>,
+    /// Merged hidden-range index over `folds` — per-row "is this row
+    /// hidden" queries in the walks below are O(log F) instead of a
+    /// linear scan per row (this provider is rebuilt per `j`/`k` and per
+    /// frame). Built once here from the snapshot, whose folds are the
+    /// buffer's sorted-by-`start_row` list.
+    fold_index: hjkl_buffer::FoldIndex,
     row_count: usize,
 }
 
@@ -579,10 +585,11 @@ impl SnapshotFoldProvider {
     /// just to ask whether it is empty (this runs per `j`/`k` and per
     /// `cursor_screen_pos`, i.e. per frame).
     pub fn from_buffer(buffer: &RopeBuffer) -> Self {
+        let folds = buffer.folds();
+        let fold_index = hjkl_buffer::FoldIndex::new(&folds);
         Self {
-            // One clone, not two: `folds()` already hands back an owned
-            // `Vec` — the old `.to_vec()` cloned it a second time.
-            folds: buffer.folds(),
+            folds,
+            fold_index,
             row_count: buffer.last_content_row() + 1,
         }
     }
@@ -591,7 +598,7 @@ impl SnapshotFoldProvider {
     /// Mirrors [`hjkl_buffer::View::is_row_hidden`] over the
     /// snapshotted fold list.
     fn snapshot_is_row_hidden(&self, row: usize) -> bool {
-        self.folds.iter().any(|f| f.hides(row))
+        self.fold_index.hides_row(row)
     }
 }
 

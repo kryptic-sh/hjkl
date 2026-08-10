@@ -6,7 +6,7 @@
 
 use std::borrow::Cow;
 
-use hjkl_buffer::Viewport;
+use hjkl_buffer::{FoldIndex, Viewport};
 use hjkl_buffer_tui::{BufferView, DiagOverlay, Gutter, GutterNumbers};
 use hjkl_engine::{Host, Query};
 use hjkl_statusline::{
@@ -1418,13 +1418,17 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // up to `screen_height` visible rows — mirroring BufferView's render
         // loop (crates/hjkl-buffer-tui/src/render.rs) which skips
         // rows where any fold f.hides(row).
+        // One merged-interval index for the whole walk: each per-row
+        // "is this doc row hidden" query is O(log F) instead of a linear
+        // scan of the fold list per row.
+        let explorer_fold_index = FoldIndex::new(&explorer_folds);
         let total_nodes = overlay_nodes.len();
         let mut doc_row = vp_top_ex;
         let mut screen_row_idx: usize = 0;
 
         while doc_row < total_nodes && screen_row_idx < screen_height {
             // Skip rows hidden by a closed fold.
-            if explorer_folds.iter().any(|f| f.hides(doc_row)) {
+            if explorer_fold_index.hides_row(doc_row) {
                 doc_row += 1;
                 continue;
             }

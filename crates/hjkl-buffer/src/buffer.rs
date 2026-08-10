@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crate::content::Buffer;
+use crate::folds::FoldIndex;
 use crate::{Position, Viewport};
 
 /// Per-window view onto a [`Buffer`].
@@ -233,8 +234,9 @@ impl View {
         };
         while screen >= height {
             let c = self.content.lock().unwrap();
+            let folds = FoldIndex::new(&c.folds);
             let mut next = viewport.top_row + 1;
-            while next <= cursor_row && c.folds.iter().any(|f| f.hides(next)) {
+            while next <= cursor_row && folds.hides_row(next) {
                 next += 1;
             }
             if next > cursor_row {
@@ -246,7 +248,7 @@ impl View {
             // rows contribute 0). After this, `screen` equals
             // `cursor_screen_row_from(next)`.
             for r in viewport.top_row..next {
-                if c.folds.iter().any(|f| f.hides(r)) {
+                if folds.hides_row(r) {
                     continue;
                 }
                 let line = rope_line_str(&c.text, r);
@@ -272,13 +274,14 @@ impl View {
             return 0;
         }
         let c = self.content.lock().unwrap();
+        let folds = FoldIndex::new(&c.folds);
         let n = c.text.len_lines();
         let last = n.saturating_sub(1);
         let end = end.min(last);
         let v = *viewport;
         let mut total = 0usize;
         for r in start..=end {
-            if c.folds.iter().any(|f| f.hides(r)) {
+            if folds.hides_row(r) {
                 continue;
             }
             if matches!(v.wrap, crate::Wrap::None) || v.text_width == 0 {
@@ -298,12 +301,13 @@ impl View {
             return 0;
         }
         let c = self.content.lock().unwrap();
+        let folds = FoldIndex::new(&c.folds);
         let n = c.text.len_lines();
         let last = n.saturating_sub(1);
         let mut total = 0usize;
         let mut row = last;
         loop {
-            if !c.folds.iter().any(|f| f.hides(row)) {
+            if !folds.hides_row(row) {
                 let v = *viewport;
                 total += if matches!(v.wrap, crate::Wrap::None) || v.text_width == 0 {
                     1
@@ -441,6 +445,7 @@ impl View {
             return None;
         }
         let c = self.content.lock().unwrap();
+        let folds = FoldIndex::new(&c.folds);
         // Clamp against the live rope: another view sharing this Buffer may
         // have removed rows since this view's cursor was last clamped, and
         // `rope.line(r)` panics past the last line.
@@ -451,7 +456,7 @@ impl View {
         let v = *viewport;
         let mut screen = 0usize;
         for r in top..=cursor_row {
-            if c.folds.iter().any(|f| f.hides(r)) {
+            if folds.hides_row(r) {
                 continue;
             }
             let line = rope_line_str(&c.text, r);

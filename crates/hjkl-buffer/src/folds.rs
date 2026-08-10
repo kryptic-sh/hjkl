@@ -63,6 +63,79 @@ impl Fold {
     }
 }
 
+/// Sorted-by-`start_row` index over a fold slice for O(log F) "is this
+/// row hidden by a closed fold" queries.
+///
+/// The O(log F) twin of `folds.iter().any(|f| f.hides(row))`. Closed
+/// folds' `(start_row, end_row]` hidden ranges are merged into a disjoint
+/// union, and one `partition_point` over the merged ranges answers the
+/// query. Merging (not just sorting) is what keeps this correct for
+/// nested folds: a fold that starts inside an enclosing one can end
+/// before it while the enclosing fold still covers the query row, so
+/// "the last fold with `start_row <= row`" alone is not enough — that
+/// fold may have already ended while an earlier, longer one still hides
+/// the row.
+///
+/// Mirrors the TUI renderer's `FoldIndex` (`hjkl-buffer-tui`
+/// render.rs) — the same merge, the same query, the same answers. That
+/// copy sorts its input defensively because its fold source is not
+/// guaranteed ordered; this one relies on the buffer's invariant that
+/// the fold list is kept sorted by `start_row` (see [`crate::View::add_fold`]
+/// and [`crate::View::set_auto_folds`]) and skips the sort so the build
+/// stays O(F) — it runs per keystroke / per frame on hot paths. Debug
+/// builds assert the invariant, so feeding unsorted folds fails loudly
+/// in tests rather than silently mis-answering in release.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoldIndex {
+    /// Merged, disjoint half-open intervals `(start, end]` covering rows
+    /// hidden by at least one closed fold, sorted by `start`. A row `r` is
+    /// hidden iff `start < r <= end` for the interval with the greatest
+    /// `start <= r`.
+    hidden_ranges: Vec<(usize, usize)>,
+}
+
+impl FoldIndex {
+    /// Build the merged hidden-range index from a fold slice sorted by
+    /// `start_row` (the buffer's invariant — see the type docs).
+    ///
+    /// O(F): one filter pass over the folds, then a single merge pass.
+    pub fn new(folds: &[Fold]) -> Self {
+        debug_assert!(
+            folds.windows(2).all(|w| w[0].start_row <= w[1].start_row),
+            "FoldIndex::new requires folds sorted by start_row"
+        );
+        // Merge the closed folds' (start, end] intervals into a disjoint
+        // union. `hides` membership is "in the union", so a single binary
+        // search over the merged ranges is correct even with nesting.
+        let mut hidden_ranges: Vec<(usize, usize)> = Vec::with_capacity(folds.len());
+        for f in folds.iter().filter(|f| f.closed) {
+            let (s, e) = (f.start_row, f.end_row);
+            match hidden_ranges.last_mut() {
+                // Overlaps the previous interval (or abuts it exactly —
+                // `s <= last_end` leaves no uncovered row between them) →
+                // extend. A gap needs `s > last_end`, e.g. (0,5] then (7,9]:
+                // row 6 is covered by neither, so they stay separate.
+                Some((_, last_end)) if s <= *last_end => {
+                    *last_end = (*last_end).max(e);
+                }
+                _ => hidden_ranges.push((s, e)),
+            }
+        }
+        Self { hidden_ranges }
+    }
+
+    /// True when `row` is hidden by a closed fold — the O(log F) twin of
+    /// `folds.iter().any(|f| f.hides(row))`.
+    pub fn hides_row(&self, row: usize) -> bool {
+        let idx = self.hidden_ranges.partition_point(|&(s, _)| s <= row);
+        if idx == 0 {
+            return false;
+        }
+        let (s, e) = self.hidden_ranges[idx - 1];
+        row > s && row <= e
+    }
+}
+
 impl crate::View {
     /// Returns a snapshot of all folds as an owned `Vec<Fold>`.
     ///
@@ -539,7 +612,8 @@ impl crate::View {
         }
         let mut r = row.checked_add(1)?;
         self.with_folds(|folds| {
-            while r <= last && folds.iter().any(|f| f.hides(r)) {
+            let index = FoldIndex::new(folds);
+            while r <= last && index.hides_row(r) {
                 r += 1;
             }
             (r <= last).then_some(r)
@@ -552,7 +626,8 @@ impl crate::View {
     pub fn prev_visible_row(&self, row: usize) -> Option<usize> {
         let mut r = row.checked_sub(1)?;
         self.with_folds(|folds| {
-            while folds.iter().any(|f| f.hides(r)) {
+            let index = FoldIndex::new(folds);
+            while index.hides_row(r) {
                 r = r.checked_sub(1)?;
             }
             Some(r)
@@ -821,6 +896,58 @@ mod tests {
         assert!(buf.is_row_hidden(2));
         assert!(buf.is_row_hidden(3));
         assert!(!buf.is_row_hidden(4));
+    }
+
+    #[test]
+    fn fold_index_hides_row_matches_naive_scan() {
+        // The cases a naive "last fold with start_row <= row" binary search
+        // gets wrong, pinned against the linear scan it replaces:
+        // - a fold starting well before the queried row: row 99/100 are
+        //   covered by [0,100], but the last start_row <= 99/100 is [50,60];
+        // - a nested fold ending before the enclosing one: row 7 is covered
+        //   by [1,10], but the last start_row <= 7 is [5,6] which ended at 6;
+        // - row 10: covered by [1,10] and [0,100], while the last start_row
+        //   <= 10 is [8,9], which ends at 9.
+        let f = |s, e, closed| super::Fold {
+            start_row: s,
+            end_row: e,
+            closed,
+            auto_generated: false,
+        };
+        let folds = vec![
+            f(0, 100, true),  // starts well before the queried rows
+            f(1, 10, true),   // encloses the nested folds below
+            f(5, 6, true),    // nested; ends before rows 7..9
+            f(8, 9, true),    // nested; covers rows 8..9
+            f(20, 20, true),  // degenerate: hides nothing itself
+            f(30, 40, false), // open: hides nothing
+            f(50, 60, true),
+        ];
+        let index = super::FoldIndex::new(&folds);
+        for row in 0..200 {
+            let naive = folds.iter().any(|f| f.hides(row));
+            assert_eq!(index.hides_row(row), naive, "row {row}");
+        }
+    }
+
+    #[test]
+    fn fold_index_agrees_with_buffer_folds_across_nested_and_open_mixes() {
+        // Same guarantee through the real buffer API: `add_fold` keeps the
+        // list sorted by start_row regardless of insertion order, and the
+        // index must answer identically to the buffer's linear scan for a
+        // nesting of closed/open/degenerate folds.
+        let mut buf = View::from_str(&"x\n".repeat(60));
+        buf.add_fold(0, 55, true);
+        buf.add_fold(2, 3, true);
+        buf.add_fold(5, 6, false); // open
+        buf.add_fold(7, 7, true); // degenerate — hides nothing itself
+        buf.add_fold(10, 20, true);
+        buf.add_fold(15, 16, true); // nested inside [10,20]
+        for row in 0..buf.row_count() {
+            let naive = buf.folds().iter().any(|f| f.hides(row));
+            let via_index = buf.with_folds(|folds| super::FoldIndex::new(folds).hides_row(row));
+            assert_eq!(via_index, naive, "row {row}");
+        }
     }
 
     #[test]

@@ -8,6 +8,7 @@ use hjkl_picker::PreviewSpans;
 
 use hjkl_app::git::{GitChange, GitChangeKind};
 use hjkl_app::git_worker::{BlameJob, GitJob};
+use hjkl_buffer::FoldIndex;
 use hjkl_buffer_tui::Sign;
 use hjkl_lang::GrammarRequest;
 use ratatui::style::{Color, Style};
@@ -530,10 +531,14 @@ impl App {
         // syntax recompute. `row_count()` locks too, so it is read first.
         let row_count = buf.row_count();
         let effective_height = buf.with_folds(|folds| {
+            // One merged-interval index for the whole walk: each "is this
+            // doc row hidden" query is O(log F) instead of a linear scan
+            // of the fold list per row.
+            let fold_index = FoldIndex::new(folds);
             let mut screen = 0usize;
             let mut doc = top;
             while screen < height && doc < row_count {
-                if folds.iter().any(|f| f.hides(doc)) {
+                if fold_index.hides_row(doc) {
                     // Hidden rows cost no screen rows but advance doc.
                     doc += 1;
                 } else {
