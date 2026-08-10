@@ -377,6 +377,69 @@ async fn nvim_api_checktime_autoreload_of_renamed_outside_path_is_refused() {
     let _ = child.wait().await;
 }
 
+/// Same read-side gap via `:DiffOrig`: `diff_orig` reads the active slot's
+/// on-disk file to build the diff split, so a buffer RENAMED via
+/// `nvim_buf_set_name` to an absolute path outside the working directory must
+/// not have the outside file's bytes surfaced in the split. Pins the
+/// `diff_orig` half — pre-fix the outside content IS observable in the new
+/// diff window's buffer (and the window count grows); post-fix the command is
+/// refused before the read and neither happens.
+#[tokio::test(flavor = "multi_thread")]
+async fn nvim_api_difforig_of_renamed_outside_path_is_refused() {
+    let td = tempfile::tempdir().expect("tempdir");
+    std::fs::write(td.path().join("ok.txt"), "inside line\n").expect("write ok.txt");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let secret_path = outside.path().join("secret.txt");
+    std::fs::write(&secret_path, "TOP SECRET\n").expect("write secret");
+
+    let (nvim, _io, mut child) = spawn_hjkl_nvim_api_in(td.path())
+        .await
+        .expect("spawn hjkl --nvim-api");
+
+    nvim.command(":e ok.txt")
+        .await
+        .expect("nvim_command :e ok.txt");
+    let buf = nvim
+        .get_current_buf()
+        .await
+        .expect("get_current_buf after :e ok.txt");
+
+    // Attack: rename the buffer to an absolute path outside the cwd, then
+    // `:DiffOrig` — pre-fix the split diffs against the outside file's bytes.
+    buf.set_name(secret_path.to_str().unwrap())
+        .await
+        .expect("nvim_buf_set_name outside cwd");
+    let before = nvim.list_wins().await.expect("list_wins before");
+
+    nvim.command("DiffOrig")
+        .await
+        .expect("nvim_command DiffOrig");
+    let after = nvim.list_wins().await.expect("list_wins after");
+    // Strongest property first: the outside file's bytes must never be
+    // observable in any window's buffer.
+    for win in &after {
+        let win_buf = win.get_buf().await.expect("nvim_win_get_buf");
+        let lines = win_buf
+            .get_lines(0, -1, false)
+            .await
+            .expect("get_lines for window");
+        assert!(
+            !lines.iter().any(|l| l.contains("TOP SECRET")),
+            ":DiffOrig leaked the renamed outside path into a window buffer: {lines:?}"
+        );
+    }
+    assert_eq!(
+        before.len(),
+        after.len(),
+        "refused :DiffOrig must not open a split: before={} after={}",
+        before.len(),
+        after.len()
+    );
+
+    let _ = nvim.command("qa!").await;
+    let _ = child.wait().await;
+}
+
 /// `:e` through a symlink pointing outside the working directory must be
 /// refused — pins the `resolve_under` half of the confinement, which
 /// `check_fs_path` alone cannot provide (`escape/secret.txt` is all `Normal`

@@ -2307,7 +2307,10 @@ impl App {
     /// `resolve_under` arbitrates: an absolute path that resolves inside the
     /// working directory is a legitimately-opened file, not an escape. No-op in
     /// the TUI (policy off): returns `path` unchanged.
-    fn resolve_read_path(&self, path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    pub(crate) fn resolve_read_path(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<std::path::PathBuf, String> {
         if !hjkl_engine::policy::fs_restricted() {
             return Ok(path.to_path_buf());
         }

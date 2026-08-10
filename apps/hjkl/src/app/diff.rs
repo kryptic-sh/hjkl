@@ -24,6 +24,18 @@ impl App {
             return;
         };
 
+        // RPC FS-policy gate: `:DiffOrig` must not read a slot whose filename
+        // escapes the working directory (renamed via the RPC API) — the outside
+        // file's bytes would land in the diff split. No-op in the TUI (policy
+        // off).
+        let path = match self.resolve_read_path(&path) {
+            Ok(p) => p,
+            Err(msg) => {
+                self.bus.error(msg);
+                return;
+            }
+        };
+
         // On-disk bytes (the "old" side). A missing file diffs against empty.
         let disk = std::fs::read(&path).unwrap_or_default();
 
