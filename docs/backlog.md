@@ -810,13 +810,11 @@ completion.
    in-memory harness cannot see. Waiting on the user: build/commit they saw it
    on, `:set scroll_duration_ms`, and whether it still reproduces on current
    main.
-2. **RPC `:e` reads unbounded** (§10 hardening) — route the two `--embed`/
-   `--nvim-api` read sites through the capped reader.
-3. **Tidy §11 items 1–9** — dead SHA consts, rope→lines duplication,
+2. **Tidy §11 items 1–9** — dead SHA consts, rope→lines duplication,
    display_width / leading-vcol dedup, `feed` copies, root-finder dedup,
    `Loading(String)` payload, SHIFT divergence (§11 #8 — a decision, not
    mechanical).
-4. **Perf §12 items 1–4** — picker per-keystroke label/sort, `:s` full-buffer
+3. **Perf §12 items 1–4** — picker per-keystroke label/sort, `:s` full-buffer
    materialization, O(rows × folds) scans.
 
 ## 2. Blocked on platform access
