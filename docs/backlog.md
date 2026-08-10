@@ -810,10 +810,16 @@ completion.
    in-memory harness cannot see. Waiting on the user: build/commit they saw it
    on, `:set scroll_duration_ms`, and whether it still reproduces on current
    main.
-2. **Tidy §11 items 1–9** — dead SHA consts, rope→lines duplication,
-   display_width / leading-vcol dedup, `feed` copies, root-finder dedup,
-   `Loading(String)` payload, SHIFT divergence (§11 #8 — a decision, not
-   mechanical).
+2. **SHIFT normalization divergence (tidy §11 #8) — NEEDS GUIDANCE.**
+   `chord_event_to_input` (`app/keymap.rs:186-193`) claims to mirror
+   `from_crossterm` (`hjkl-keymap-tui/src/lib.rs:38-40`) but doesn't: keymap-tui
+   drops SHIFT for every `Char`, the app copy only for ASCII letters — the same
+   physical key (`<S-1>` etc.) can produce different `Input`s on the two live
+   paths (`event_loop.rs:49` vs `:1040`). Unifying is a behavior decision (which
+   rule wins, and any bindings that depend on `<S-x>` for non-letters must be
+   checked), not a mechanical fix. Tidy §11 #9 (`truncate_desc` ≡
+   `truncate_to_width`) was declined per its own recommendation — only worth
+   sharing if a third consumer appears.
 3. **Perf §12 items 1–4** — picker per-keystroke label/sort, `:s` full-buffer
    materialization, O(rows × folds) scans.
 
