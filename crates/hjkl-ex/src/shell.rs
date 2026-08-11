@@ -22,6 +22,15 @@
 //!
 //! Auditors: see also `policy.rs`, the `:make` / `:grep` guards in
 //! `quickfix.rs`, and the `:r !cmd` gate in `builtins.rs`.
+//!
+//! # Limitation: bare `:!cmd` gives the child no terminal
+//!
+//! The bare form runs the command under `Command::output()`, which captures
+//! stdout and hands the child a null stdin with no controlling tty. Interactive
+//! children cannot work: `:!git commit` (opens an editor), `:!less`, `:!vi`
+//! fail or hang. Vim suspends the TUI and passes the terminal through; hjkl
+//! does not (yet), so prefer the range-filter form or a dedicated command for
+//! interactive work.
 
 use crate::{effect::ExEffect, range::LineRange};
 use hjkl_engine::Host;
