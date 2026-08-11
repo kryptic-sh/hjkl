@@ -473,11 +473,6 @@ unknown.
 
 #### Smaller, unclaimed
 
-- **Bare `:!cmd` gives the child no tty.** `hjkl-ex/src/shell.rs` runs it under
-  `Command::output()`, which captures stdout and hands the child a null stdin,
-  so `:!git commit` or `:!less` cannot work. Vim suspends the TUI and passes the
-  terminal through. Either implement the suspend or document the limitation on
-  `:!`.
 - **The trash directory has no reaper — NEEDS A DECISION (assessed
   2026-08-07).** `$XDG_CACHE_HOME/hjkl/trash/` grows without bound and
   `MAX_RETRIES = 1000` means the 1001st deletion of a same-named file fails
@@ -1309,6 +1304,31 @@ slice pruned from §1.12 on completion. What shipped:
 
 Still needing the user (§1.12): the explorer render report (build/terminal
 config) and the SHIFT-normalization unification decision (tidy §11 #8).
+
+### Backlog-work session 2026-08-11 (CI red on main → deps → one slice)
+
+- **CI red on main fixed (`1d36774c`, `be5608d1`, `1cb3b86b`).** The
+  `clippy windows-latest` and `test windows-latest` jobs failed on
+  `HELLO_ZIP_SHA` being dead code under CI's `RUSTFLAGS=-D warnings`: the const
+  is consumed only by `#[cfg(unix)]` zip-pipeline tests. Two copies were gated
+  with `cfg(unix)` — `crates/hjkl-anvil/tests/install_tests.rs` and the
+  `#[cfg(test)]` module in `crates/hjkl-anvil/src/installer.rs` (the second
+  surfaced only in the nextest lib-test build, which compiles the test module on
+  Windows while clippy's all-targets pass did not flag it). The §4 "a green
+  local run is not a green CI run" trap, again.
+- **Deps roll (`dccc255f`)** — `cargo update` moved 17 packages within their
+  ranges (tree-sitter 0.26.12, aws-lc 1.18, wasm-bindgen 0.2.127, thiserror
+  2.0.20, …). Every direct dependency already resolves to its latest stable
+  version; the only newer index entries are prereleases (ec4rs 2.0.0-rc.1,
+  notify 9.0.0-rc.4, ropey 2.0.0-beta.1, zip 9.0.0-pre3, libc 1.0.0-alpha.4),
+  and `generic-array` is held at 0.14.7 by a transitive exact pin.
+- **`:!` tty limitation documented (`90c4d65e`)** — §1.8's "Bare `:!cmd` gives
+  the child no tty" resolved via the backlog's offered "document the limitation"
+  option: the `hjkl-ex/src/shell.rs` module doc now states that the bare form
+  captures stdout / null stdin / no tty and that interactive children (git
+  commit, less, vi) cannot work, whereas vim suspends the TUI and passes the
+  terminal through. The suspend itself remains unimplemented; if it is ever
+  wanted it is its own change.
 
 ## 8. 2026-08-05 code review (audit depth)
 
