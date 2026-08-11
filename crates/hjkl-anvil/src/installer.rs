@@ -1374,6 +1374,9 @@ mod tests {
     // Re-run `sha256sum tests/fixtures/hello.*` to verify.
     const HELLO_TAR_GZ_SHA: &str =
         "9dae51f8d23ea48e988bc08ec10b7e8488a7b4f4634e5197ea165bf4e5361295";
+    // Only the unix-gated zip pipeline test consumes this; without the cfg it
+    // is dead code (a `-D warnings` error) on Windows.
+    #[cfg(unix)]
     const HELLO_ZIP_SHA: &str = "bcff8654881e86bc7600365fa43f4487ae184ad9487053af0ffbae204f137218";
 
     fn fixture_path(name: &str) -> PathBuf {
