@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.41.3] - 2026-08-12
+
 ### Added
 
 - **Filetype detection for files with no known extension.** New
@@ -50,6 +52,22 @@ patch bumps.
   clone and Vec entirely. Measured (`--release`, same probe both sides, fresh
   process): a paste-heavy workload's peak RSS 651 MB → 456 MB, and a 200k-edit
   keystroke burst 45 MB → 18 MB.
+- **`:s` materializes and splices only the substituted rows.** A cursor-line
+  `:s/foo/bar/` on a huge file used to rebuild the whole buffer
+  (`rope_to_lines_vec` + join + `replace_all` + an all-row mark rebase); it now
+  touches only `start..=clamp_end` through a bounded `Edit::Replace`, rebasing
+  marks over just the in-range rows. O(range) instead of O(N).
+- **The picker stopped rebuilding and re-sorting the candidate list every
+  keystroke.** It fetched each label twice and built per-char spans for all
+  filtered rows on every draw (~1000 `label()` calls + ~1500 allocs per
+  keystroke); now only the visible window's rows are built, one `label()` per
+  row with adjacent same-style chars merged into borrowed span slices, and
+  `refresh()` reuses one scratch buffer instead of scoring and fully sorting all
+  N candidates. Rendered output verified byte-identical.
+- **Fold-hidden queries are O(log F) instead of O(F).** "Is this row hidden"
+  scanned the whole fold list per row on per-keystroke and per-frame paths; a
+  merged-interval `FoldIndex` now answers with one `partition_point` across the
+  cursor/snapshot/effective-height/explorer-overlay fold queries.
 
 ### Security
 
@@ -64,6 +82,27 @@ patch bumps.
   upstream tree-sitter source on demand. In `--nvim-api` / `--embed` mode a
   grammar miss now resolves to plain text instead (cache and on-disk installed
   grammars still load); the interactive TUI keeps remote loading.
+- **RPC-mode file reads are capped at 256 MiB.** The `--embed` / `--nvim-api`
+  read paths took file sizes from an untrusted client and read unbounded,
+  letting a client write a multi-GB file into the cwd and force a matching
+  allocation. Fresh-open, bare-`:e` reload, `:checktime`, embed `:e` and
+  `:DiffOrig` reads now cap at 256 MiB while the fs policy is active
+  (`HJKL_RPC_READ_CAP` overridable); the TUI keeps unbounded reads.
+- **`nvim_buf_set_name` + bare `:e` / `:checktime` can no longer read arbitrary
+  files.** An RPC-supplied path was stored verbatim and reloaded with no policy
+  check, bypassing `restrict_fs()`; the stored slot filename now runs
+  `check_fs_path` + `resolve_under` before either read seam (absolute-inside-
+  cwd paths still open).
+- **`:DiffOrig` reads are gated under the RPC fs policy.** A buffer renamed via
+  `nvim_buf_set_name` to an outside path leaked its bytes into the diff split in
+  `--nvim-api` mode; the read now goes through the same `resolve_read_path` gate
+  as bare-`:e` / `:checktime`.
+- **`:Anvil` host commands are refused while the shell policy is off.** Anvil
+  installs download archives and run package-manager build scripts (cargo / npm
+  / pip / go), making the surface shell-out in disguise — but it had no policy
+  check, so an untrusted `--nvim-api` client could trigger network fetches and
+  native builds. The whole surface (install / uninstall / update / picker) now
+  errors when `shell_disabled()`, matching the `:!` / `:make` / `:grep` gates.
 
 ### Fixed
 
@@ -93,6 +132,12 @@ patch bumps.
   as the block motion made it — the object is found but the selection does not
   change (`<C-v>jib~` flips the same cells as `<C-v>j~`). Word objects still
   extend the block. Pinned by four new corpus cases measured against neovim.
+- **`e`/`E` word-end motions wrap line endings like vim.** The same-class walk
+  jumped past a line's last char onto the next row (folding the next line's word
+  into the run), and the whitespace skip treated an empty line / the virtual NUL
+  cell as a hard stop. Both fixed; `ge`/`gE` were already correct. Pinned by 7
+  unit tests and 14 live-nvim-verified oracle cases across `e`/`E`/`ge`/`gE` and
+  line breaks.
 
 - **`:retab` no longer panics (divide-by-zero) after a `# vim: ts=0` modeline.**
   The settings-sourced tabstop is clamped to ≥1 like every other consumer;
@@ -5775,7 +5820,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.3...HEAD
+[0.41.3]: https://github.com/kryptic-sh/hjkl/compare/v0.41.2...v0.41.3
 [0.41.2]: https://github.com/kryptic-sh/hjkl/compare/v0.41.1...v0.41.2
 [0.41.1]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.1
 [0.41.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.0
