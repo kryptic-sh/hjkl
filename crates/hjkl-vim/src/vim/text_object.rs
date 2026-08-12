@@ -1881,6 +1881,68 @@ pub fn paragraph_text_object<H: hjkl_engine::types::Host>(
     Some(((top, 0), (bot, end_col)))
 }
 
+/// Landing row for `ip`/`ap` in a MULTI-LINE visual selection — vim's
+/// `current_par` "extend" path (`textobject.c`): the anchor and visual mode
+/// stay untouched and the cursor walks one same-blankness run past itself,
+/// away from the anchor, landing at the run's end on column 0. `ap`
+/// (`inner == false`) continues with a second run of the opposite
+/// blankness, mirroring `current_par`'s `include` loop. `None` when the
+/// block is a single row (vim takes the normal object path there) or the
+/// first step leaves the buffer (vim's `current_par` FAILs — a no-op, not
+/// a collapse). Measured against neovim 0.12.4: `<C-v>jip` on
+/// `"one\n\ntwo\n"` lands the cursor on row 2 with the block spanning rows
+/// 0-2 at column 0.
+pub fn paragraph_extend_landing<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    cursor_row: usize,
+    anchor_row: usize,
+    inner: bool,
+) -> Option<usize> {
+    if cursor_row == anchor_row {
+        return None;
+    }
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let raw_n_lines = rope.len_lines();
+    // Mirror `paragraph_text_object`'s phantom-row-aware count: the single
+    // trailing empty row ropey synthesizes for a buffer ending in `\n` is
+    // not a real line and must not be walked onto.
+    let n_lines = if raw_n_lines > 1 && rope_line_to_str(&rope, raw_n_lines - 1).is_empty() {
+        raw_n_lines - 1
+    } else {
+        raw_n_lines
+    };
+    let dir: isize = if cursor_row < anchor_row { -1 } else { 1 };
+    let first = cursor_row as isize + dir;
+    if first < 0 || first >= n_lines as isize {
+        return None;
+    }
+    let edge = |r: isize| r < 0 || r >= n_lines as isize;
+    let is_blank = |r: isize| rope_line_to_str(&rope, r as usize).trim().is_empty();
+    // vim's `current_par` treats the first / last line as the walk's edge:
+    // the t=1 run never starts from the boundary line.
+    let boundary = if dir < 0 { 0 } else { n_lines as isize - 1 };
+    let mut land = first;
+    let mut prev_blank: Option<bool> = None;
+    for t in 0..2 {
+        if t == 1 {
+            land += dir;
+            if prev_blank == Some(is_blank(land)) {
+                land -= dir;
+                break;
+            }
+        }
+        let blank0 = is_blank(land);
+        while !edge(land + dir) && is_blank(land + dir) == blank0 {
+            land += dir;
+        }
+        if inner || land == boundary {
+            break;
+        }
+        prev_blank = Some(blank0);
+    }
+    Some(land as usize)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

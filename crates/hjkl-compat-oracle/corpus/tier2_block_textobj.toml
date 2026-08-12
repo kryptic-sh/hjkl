@@ -386,3 +386,104 @@ expandtab = true
 expected_buffer = "aaa bbb ccc\n    ddd eee fff\n    ggg hhh iii\n    jjj kkk lll\n    mmm nnn ooo\n    ppp qqq rrr\n    sss ttt uuu\n    vvv www xxx\n    yyy zzz aaa\n    bbb ccc ddd\n    eee fff ggg\n    hhh iii jjj\n"
 expected_cursor = [1, 0]
 expected_mode = "normal"
+
+# ── blockwise visual + ip / ap / is / as EXTEND the block ────────────────────
+# neovim 0.12.4: in a multi-line `<C-v>` selection, the paragraph and
+# sentence objects keep the block (anchor + mode untouched) and move the
+# cursor to vim's `current_par` / `current_sent` "extend" position — the
+# block then spans anchor..landing at the landing's column. `ip` walks one
+# same-blankness run past the cursor (away from the anchor); `ap` continues
+# with a second run of the opposite blankness; `is`/`as` land at the
+# sentence end (with trailing whitespace for `as`). hjkl used to collapse
+# all four out of blockwise visual (to visual_line / visual). A single-row
+# block or a buffer-edge walk takes vim's normal object path instead
+# (collapse / no-op respectively). Verified against neovim 0.12.4 via
+# dfcase.
+
+[[cases]]
+name = "blockwise_ip_yank_extends_block"
+initial_buffer = "one\n\ntwo\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jipy"
+expected_buffer = "one\n\ntwo\n"
+expected_register = ['"', "o\n\nt"]
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_ip_tilde_flips_block"
+initial_buffer = "one\n\ntwo\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jip~"
+expected_buffer = "One\n\nTwo\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_ip_edge_is_noop"
+initial_buffer = "one\n\ntwo\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jjipy"
+expected_buffer = "one\n\ntwo\n"
+expected_register = ['"', "o\n\nt"]
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_ap_yank_second_run"
+initial_buffer = "aaa\n\nbbb\n\n"
+initial_cursor = [0, 0]
+keys = "<C-v>japy"
+expected_buffer = "aaa\n\nbbb\n\n"
+expected_register = ['"', "a\n\nb\n"]
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_ap_yank_anchor_below"
+initial_buffer = "aaa\n\nbbb\n\n"
+initial_cursor = [2, 0]
+keys = "<C-v>kapy"
+expected_buffer = "aaa\n\nbbb\n\n"
+expected_register = ['"', "a\n\nb"]
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_ip_yank_inside_paragraph"
+initial_buffer = "aaa bbb\nccc ddd\neee fff\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jipy"
+expected_buffer = "aaa bbb\nccc ddd\neee fff\n"
+expected_register = ['"', "a\nc\ne"]
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_is_yank_extends_block"
+initial_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jisy"
+expected_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+expected_register = ['"', "aaa.\nccc."]
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_is_tilde_flips_block"
+initial_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jis~"
+expected_buffer = "AAA. bbb.\nCCC. ddd.\neee.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_as_yank_includes_whitespace"
+initial_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jasy"
+expected_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+expected_register = ['"', "aaa. \nccc. "]
+expected_cursor = [0, 0]
+expected_mode = "normal"

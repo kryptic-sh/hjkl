@@ -15,6 +15,13 @@ patch bumps.
   plain `E`/`e`/`_` forms, so `<C-v>jgE~` flips the whole words instead of a
   one-column strip, and the yank/delete operators cover the full block. Pinned
   against neovim 0.12.4 by 11 new oracle corpus cases.
+- **Blockwise visual `ip`/`ap`/`is`/`as` keep the block instead of collapsing.**
+  In a multi-line `<C-v>` selection the paragraph and sentence objects now
+  extend the block to vim's object-extend position (anchor and blockwise mode
+  stay; the cursor lands on the walked paragraph run or the sentence end,
+  matching neovim 0.12.4), so `<C-v>jip~` flips both paragraphs' first column
+  instead of silently switching to a line/charwise selection. Pinned by 9 new
+  oracle corpus cases.
 
 ## [0.41.3] - 2026-08-12
 

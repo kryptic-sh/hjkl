@@ -1882,8 +1882,9 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         // NOTE: only the WORD objects stay blockwise and EXTEND the block
         // (handled above — the block keeps its rows and the cursor extends
         // its columns to the object end); BRACKET and TAG objects are
-        // selection no-ops, and paragraph / sentence still collapse out of
-        // blockwise visual. Measured on neovim 0.12.4 from a `<C-v>j` block:
+        // selection no-ops, and paragraph / sentence also stay blockwise,
+        // landing the cursor at the object-extend position. Measured on
+        // neovim 0.12.4 from a `<C-v>j` block:
         //
         //   - `iw` / `aw` / `iW` / `aW` / `ip` / `is` stay BLOCKWISE and just
         //     extend the cursor (so the block keeps its rows and takes the
@@ -1896,10 +1897,12 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         //   - `i"` does nothing at all (the object is not found from a block
         //     at the measured position).
         //
-        // So the remaining mismatches — paragraph / sentence (collapse where
-        // nvim stays blockwise) — stay tracked in docs/backlog.md §1.5b.
-        // Quotes already no-op in hjkl too. The word objects additionally
-        // write `block_vcol` so `block_bounds` sees the new column.
+        // The remaining mismatch — the sentence objects with the anchor
+        // BELOW the cursor (`<C-v>` then `k`/`H`, then `is`/`as`), whose
+        // landing follows vim's `findsent` backtrack — stays tracked in
+        // docs/backlog.md §1.5b. Quotes already no-op in hjkl too. The word
+        // objects additionally write `block_vcol` so `block_bounds` sees
+        // the new column.
         if crate::vim_state::vim(self).mode == FsmMode::VisualBlock {
             // Word objects keep the selection blockwise: the block spans
             // anchor-column..object-end-column, matching nvim.
@@ -1916,6 +1919,39 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             // the block keeps the post-motion geometry.
             if let TextObject::Bracket(_) | TextObject::XmlTag = obj {
                 return;
+            }
+            // Paragraph (`ip`) and sentence (`is`) objects EXTEND the block
+            // (nvim-measured): mode and anchor stay, the cursor lands at
+            // the object-extend position, and `block_vcol` syncs to the
+            // landing column so `block_bounds` sees the new geometry. A
+            // single-row block falls through to the collapse below (vim
+            // takes its normal object path there).
+            if let TextObject::Paragraph = obj {
+                let (cur_row, _) = self.cursor();
+                let anchor_row = crate::vim_state::vim(self).block_anchor.0;
+                if cur_row != anchor_row {
+                    if let Some(land_row) =
+                        crate::vim::paragraph_extend_landing(self, cur_row, anchor_row, inner)
+                    {
+                        self.jump_cursor(land_row, 0);
+                        crate::vim_state::vim_mut(self).block_vcol = 0;
+                        crate::vim_state::vim_mut(self).block_to_eol = false;
+                        return;
+                    }
+                    // Buffer edge: vim's `current_par` FAILs (a no-op).
+                    return;
+                }
+            }
+            if let TextObject::Sentence = obj {
+                let (cur_row, _) = self.cursor();
+                let anchor_row = crate::vim_state::vim(self).block_anchor.0;
+                if cur_row != anchor_row {
+                    let (er, ec) = crate::vim::retreat_one(self, end);
+                    self.jump_cursor(er, ec);
+                    crate::vim_state::vim_mut(self).block_vcol = ec;
+                    crate::vim_state::vim_mut(self).block_to_eol = false;
+                    return;
+                }
             }
             match kind {
                 RangeKind::Linewise => {
