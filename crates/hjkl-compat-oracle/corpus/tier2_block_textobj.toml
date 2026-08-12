@@ -258,3 +258,131 @@ keys = "<C-v>jit"
 expected_buffer = "<a>x\ny</a>\n"
 expected_cursor = [1, 3]
 expected_mode = "visual_block"
+
+# ── blockwise visual + g-motions EXTEND the block column ──────────────────────
+# neovim 0.12.4: `gE` / `ge` / `g_` / `gM` / `gm` / `g#` are horizontal
+# motions in blockwise visual — the cursor lands on the target column and the
+# block extends to it. hjkl used to leave `block_vcol` untouched on the
+# `g`-prefixed motions (plain `E`/`e`/`_` went through the block-vcol sync,
+# `apply_after_g`'s arms did not), so `<C-v>jgE~` flipped only the block's
+# first column. Verified against neovim 0.12.4 via dfcase.
+
+[[cases]]
+name = "blockwise_gE_yank_extends_block"
+initial_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+initial_cursor = [11, 0]
+keys = "<C-v>jgEy"
+expected_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+expected_register = ['"', "eee fff ggg\nhhh iii jjj"]
+expected_cursor = [10, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_ge_yank_extends_block"
+initial_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+initial_cursor = [11, 0]
+keys = "<C-v>jgey"
+expected_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+expected_register = ['"', "eee fff ggg\nhhh iii jjj"]
+expected_cursor = [10, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_g_underscore_yank_extends_block"
+initial_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+initial_cursor = [11, 0]
+keys = "<C-v>jg_y"
+expected_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+expected_register = ['"', "hhh iii jjj"]
+expected_cursor = [11, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_gM_yank_extends_block"
+initial_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+initial_cursor = [11, 0]
+keys = "<C-v>jgMy"
+expected_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+expected_register = ['"', "hhh ii"]
+expected_cursor = [11, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_gm_yank_extends_block"
+initial_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+initial_cursor = [11, 0]
+keys = "<C-v>jgmy"
+expected_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+expected_register = ['"', "hhh iii jjj"]
+expected_cursor = [11, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_gE_tilde_flips_block"
+initial_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+initial_cursor = [11, 0]
+keys = "<C-v>jgE~"
+expected_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\nEEE FFF GGG\nHHH III JJJ\n"
+expected_cursor = [10, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_g_hash_yank_extends_block"
+initial_buffer = "x foo y\nfoo z\n"
+initial_cursor = [1, 0]
+keys = "<C-v>g#y"
+expected_buffer = "x foo y\nfoo z\n"
+expected_register = ['"', "x f\nfoo"]
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+# ── blockwise visual + H / L shift the full block (the §1.5b standing repro) ──
+# neovim 0.12.4: `H` / `L` in blockwise visual move the cursor to the
+# viewport top / bottom and the block keeps its column — the shift operator
+# then acts on the whole block (verified 40x stable on this buffer; the
+# earlier "shifts only rows 0-1" report was a headless-nvim startup race, not
+# hjkl). hjkl matches nvim here.
+
+[[cases]]
+name = "blockwise_H_shift_full_block"
+initial_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+initial_cursor = [11, 0]
+keys = "<C-v>H>"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "    aaa bbb ccc\n    ddd eee fff\n    ggg hhh iii\n    jjj kkk lll\n    mmm nnn ooo\n    ppp qqq rrr\n    sss ttt uuu\n    vvv www xxx\n    yyy zzz aaa\n    bbb ccc ddd\n    eee fff ggg\n    hhh iii jjj\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_jH_shift_full_block"
+initial_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+initial_cursor = [11, 0]
+keys = "<C-v>jH>"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "    aaa bbb ccc\n    ddd eee fff\n    ggg hhh iii\n    jjj kkk lll\n    mmm nnn ooo\n    ppp qqq rrr\n    sss ttt uuu\n    vvv www xxx\n    yyy zzz aaa\n    bbb ccc ddd\n    eee fff ggg\n    hhh iii jjj\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_L_shift_bottom_row"
+initial_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+initial_cursor = [11, 0]
+keys = "<C-v>L>"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\n    hhh iii jjj\n"
+expected_cursor = [11, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_L_from_top_shift_full_block"
+initial_buffer = "aaa bbb ccc\nddd eee fff\nggg hhh iii\njjj kkk lll\nmmm nnn ooo\nppp qqq rrr\nsss ttt uuu\nvvv www xxx\nyyy zzz aaa\nbbb ccc ddd\neee fff ggg\nhhh iii jjj\n"
+initial_cursor = [1, 0]
+keys = "<C-v>L>"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "aaa bbb ccc\n    ddd eee fff\n    ggg hhh iii\n    jjj kkk lll\n    mmm nnn ooo\n    ppp qqq rrr\n    sss ttt uuu\n    vvv www xxx\n    yyy zzz aaa\n    bbb ccc ddd\n    eee fff ggg\n    hhh iii jjj\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"

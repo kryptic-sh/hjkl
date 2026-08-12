@@ -8,6 +8,14 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Blockwise visual `g`-motions extend the block column.** `gE` / `ge` / `g_` /
+  `gM` / `gm` / `g#` in `<C-v>` visual now sync the block's column like the
+  plain `E`/`e`/`_` forms, so `<C-v>jgE~` flips the whole words instead of a
+  one-column strip, and the yank/delete operators cover the full block. Pinned
+  against neovim 0.12.4 by 11 new oracle corpus cases.
+
 ## [0.41.3] - 2026-08-12
 
 ### Added

@@ -330,14 +330,14 @@ pub fn apply_after_g<H: hjkl_engine::types::Host>(
                 ed.push_jump(pre);
             }
         }
-        'e' => execute_motion(ed, Motion::WordEndBack, count),
-        'E' => execute_motion(ed, Motion::BigWordEndBack, count),
+        'e' => execute_motion_with_block_vcol(ed, Motion::WordEndBack, count),
+        'E' => execute_motion_with_block_vcol(ed, Motion::BigWordEndBack, count),
         // `g_` — last non-blank on the line.
-        '_' => execute_motion(ed, Motion::LastNonBlank, count),
+        '_' => execute_motion_with_block_vcol(ed, Motion::LastNonBlank, count),
         // `gM` — middle char column of the current line.
-        'M' => execute_motion(ed, Motion::LineMiddle, count),
+        'M' => execute_motion_with_block_vcol(ed, Motion::LineMiddle, count),
         // `gm` — middle of the screen line (viewport_width/2, clamped to EOL).
-        'm' => execute_motion(ed, Motion::ScreenLineMiddle, count),
+        'm' => execute_motion_with_block_vcol(ed, Motion::ScreenLineMiddle, count),
         // `gv` — re-enter the last visual selection. Calls the bridge in this
         // module directly; routing back out through the `Editor` wrapper was
         // pure indirection, and that wrapper now lives on
@@ -346,8 +346,8 @@ pub fn apply_after_g<H: hjkl_engine::types::Host>(
         // `gj` / `gk` — display-line down / up. Walks one screen
         // segment at a time under `:set wrap`; falls back to `j`/`k`
         // when wrap is off (View::move_screen_* handles the branch).
-        'j' => execute_motion(ed, Motion::ScreenDown, count),
-        'k' => execute_motion(ed, Motion::ScreenUp, count),
+        'j' => execute_motion_with_block_vcol(ed, Motion::ScreenDown, count),
+        'k' => execute_motion_with_block_vcol(ed, Motion::ScreenUp, count),
         // Case operators: `gU` / `gu` / `g~`. Enter operator-pending
         // so the next input is treated as the motion / text object /
         // shorthand double (`gUU`, `guu`, `g~~`).
@@ -447,7 +447,7 @@ pub fn apply_after_g<H: hjkl_engine::types::Host>(
         // `g*` / `g#` — like `*` / `#` but match substrings (no `\b`
         // boundary anchors), so the cursor on `foo` finds it inside
         // `foobar` too.
-        '*' => execute_motion(
+        '*' => execute_motion_with_block_vcol(
             ed,
             Motion::WordAtCursor {
                 forward: true,
@@ -455,7 +455,7 @@ pub fn apply_after_g<H: hjkl_engine::types::Host>(
             },
             count,
         ),
-        '#' => execute_motion(
+        '#' => execute_motion_with_block_vcol(
             ed,
             Motion::WordAtCursor {
                 forward: false,

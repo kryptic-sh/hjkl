@@ -368,6 +368,10 @@ pub fn update_block_vcol<H: hjkl_engine::types::Host>(
         | Motion::BigWordEndBack
         | Motion::LineStart
         | Motion::FirstNonBlank
+        | Motion::LastNonBlank
+        | Motion::LineMiddle
+        | Motion::ScreenLineMiddle
+        | Motion::WordAtCursor { .. }
         | Motion::Find { .. }
         | Motion::FindRepeat { .. }
         | Motion::MatchBracket => {
