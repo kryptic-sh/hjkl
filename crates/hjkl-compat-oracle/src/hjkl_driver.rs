@@ -64,12 +64,14 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
 
     // 2a. Publish the viewport height explicitly, mirroring what a real TUI
     // render loop does every frame via `set_viewport_height`. Matches
-    // `nvim --headless --embed`'s default window size (24 rows, no UI
-    // attached) so `H`/`M`/`L` and scrolloff math agree between drivers.
-    // (`DefaultHost::DEFAULT_VIEWPORT` already starts at 24; this call is
-    // belt-and-suspenders so the oracle doesn't silently drift if that
-    // default ever changes.)
-    editor.set_viewport_height(24);
+    // `nvim --headless --embed`'s actual window size (22 rows: the default
+    // `lines=24` minus one statusline row (`laststatus=2`) and one cmdline
+    // row) so `H`/`M`/`L` and scrolloff math agree between drivers.
+    editor.set_viewport_height(22);
+    // `nvim --clean` defaults `scrolloff=0`; hjkl's default is 5 (vim's
+    // non-clean default). Pin it so H/M/L and scroll-follow agree between
+    // drivers on seeded cursors near a viewport edge.
+    editor.settings_mut().scrolloff = 0;
 
     // 2b. Apply per-case indent settings so `>>` / `<<` match nvim's output.
     if let Some(sw) = case.shiftwidth {
@@ -96,6 +98,11 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     // 3. Set initial cursor.
     let (init_row, init_col) = case.initial_cursor;
     editor.jump_cursor(init_row, init_col);
+    // nvim's `set_cursor` scrolls the window so the new cursor is visible
+    // (minimal scroll, `scrolloff=0`); hjkl's `jump_cursor` does not touch
+    // the viewport. Scroll-follow here so `H`/`M`/`L` on a seeded
+    // off-screen cursor agree between drivers.
+    editor.ensure_cursor_in_scrolloff();
 
     // 4. Parse and replay keystrokes.
     let inputs = decode_macro(&case.keys);

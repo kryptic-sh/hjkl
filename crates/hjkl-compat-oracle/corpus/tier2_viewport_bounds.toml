@@ -67,3 +67,48 @@ keys = "M"
 expected_buffer = "a\nb\nc\nd\ne\nf\ng\nh\ni\n"
 expected_cursor = [4, 0]
 expected_mode = "normal"
+# ── tall-buffer viewport motions (seeded cursor off-screen) ───────────────
+# A cursor seeded past the visible window scrolls it on BOTH sides: nvim's
+# `set_cursor` scrolls minimally (`scrolloff=0`), and the hjkl driver now
+# mirrors that (`ensure_cursor_in_scrolloff` after seeding) with the real
+# headless window size (22 rows = `lines=24` minus statusline + cmdline).
+# Without both, hjkl's `top_row` stayed 0 and H/M/L diverged on any buffer
+# taller than the window. Verified against neovim 0.12.4 via dfcase.
+
+[[cases]]
+name = "viewport_H_scrolls_to_seeded_cursor"
+initial_buffer = "aaa bbb\nbbb ccc\nccc ddd\nddd eee\neee fff\nfff ggg\nggg hhh\nhhh iii\niii jjj\njjj kkk\nkkk lll\nlll mmm\nmmm nnn\nnnn ooo\nooo ppp\nppp qqq\nqqq rrr\nrrr sss\nsss ttt\nttt uuu\nuuu vvv\nvvv www\nwww xxx\nxxx yyy\nyyy zzz\nzzz {{{\naaa bbb\nbbb ccc\nccc ddd\nddd eee"
+initial_cursor = [25, 0]
+keys = "H"
+expected_buffer = "aaa bbb\nbbb ccc\nccc ddd\nddd eee\neee fff\nfff ggg\nggg hhh\nhhh iii\niii jjj\njjj kkk\nkkk lll\nlll mmm\nmmm nnn\nnnn ooo\nooo ppp\nppp qqq\nqqq rrr\nrrr sss\nsss ttt\nttt uuu\nuuu vvv\nvvv www\nwww xxx\nxxx yyy\nyyy zzz\nzzz {{{\naaa bbb\nbbb ccc\nccc ddd\nddd eee"
+expected_cursor = [4, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "viewport_L_bottom_of_scrolled_window"
+initial_buffer = "aaa bbb\nbbb ccc\nccc ddd\nddd eee\neee fff\nfff ggg\nggg hhh\nhhh iii\niii jjj\njjj kkk\nkkk lll\nlll mmm\nmmm nnn\nnnn ooo\nooo ppp\nppp qqq\nqqq rrr\nrrr sss\nsss ttt\nttt uuu\nuuu vvv\nvvv www\nwww xxx\nxxx yyy\nyyy zzz\nzzz {{{\naaa bbb\nbbb ccc\nccc ddd\nddd eee"
+initial_cursor = [0, 0]
+keys = "L"
+expected_buffer = "aaa bbb\nbbb ccc\nccc ddd\nddd eee\neee fff\nfff ggg\nggg hhh\nhhh iii\niii jjj\njjj kkk\nkkk lll\nlll mmm\nmmm nnn\nnnn ooo\nooo ppp\nppp qqq\nqqq rrr\nrrr sss\nsss ttt\nttt uuu\nuuu vvv\nvvv www\nwww xxx\nxxx yyy\nyyy zzz\nzzz {{{\naaa bbb\nbbb ccc\nccc ddd\nddd eee"
+expected_cursor = [21, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "viewport_M_middle_of_scrolled_window"
+initial_buffer = "aaa bbb\nbbb ccc\nccc ddd\nddd eee\neee fff\nfff ggg\nggg hhh\nhhh iii\niii jjj\njjj kkk\nkkk lll\nlll mmm\nmmm nnn\nnnn ooo\nooo ppp\nppp qqq\nqqq rrr\nrrr sss\nsss ttt\nttt uuu\nuuu vvv\nvvv www\nwww xxx\nxxx yyy\nyyy zzz\nzzz {{{\naaa bbb\nbbb ccc\nccc ddd\nddd eee"
+initial_cursor = [25, 0]
+keys = "M"
+expected_buffer = "aaa bbb\nbbb ccc\nccc ddd\nddd eee\neee fff\nfff ggg\nggg hhh\nhhh iii\niii jjj\njjj kkk\nkkk lll\nlll mmm\nmmm nnn\nnnn ooo\nooo ppp\nppp qqq\nqqq rrr\nrrr sss\nsss ttt\nttt uuu\nuuu vvv\nvvv www\nwww xxx\nxxx yyy\nyyy zzz\nzzz {{{\naaa bbb\nbbb ccc\nccc ddd\nddd eee"
+expected_cursor = [14, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_H_shift_scrolled_window"
+initial_buffer = "aaa bbb\nbbb ccc\nccc ddd\nddd eee\neee fff\nfff ggg\nggg hhh\nhhh iii\niii jjj\njjj kkk\nkkk lll\nlll mmm\nmmm nnn\nnnn ooo\nooo ppp\nppp qqq\nqqq rrr\nrrr sss\nsss ttt\nttt uuu\nuuu vvv\nvvv www\nwww xxx\nxxx yyy\nyyy zzz\nzzz {{{\naaa bbb\nbbb ccc\nccc ddd\nddd eee"
+initial_cursor = [25, 0]
+keys = "<C-v>H>"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "aaa bbb\nbbb ccc\nccc ddd\nddd eee\n    eee fff\n    fff ggg\n    ggg hhh\n    hhh iii\n    iii jjj\n    jjj kkk\n    kkk lll\n    lll mmm\n    mmm nnn\n    nnn ooo\n    ooo ppp\n    ppp qqq\n    qqq rrr\n    rrr sss\n    sss ttt\n    ttt uuu\n    uuu vvv\n    vvv www\n    www xxx\n    xxx yyy\n    yyy zzz\n    zzz {{{\naaa bbb\nbbb ccc\nccc ddd\nddd eee"
+expected_cursor = [4, 0]
+expected_mode = "normal"
