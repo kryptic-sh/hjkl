@@ -332,22 +332,22 @@ the cursor (`<C-v>` then `k`/`H`, then `is`/`as`) — nvim's landing there follo
 a `findsent` backtrack (`<C-v>kisy` on `"aaa. bbb.\nccc. ddd.\neee.\n"` lands
 (0,5), hjkl (1,3)).
 
-**`H` / `L` / `gE` in blockwise visual — the `gE` half fixed 2026-08-12.** The
-`g`-prefixed horizontal motions (`gE`/`ge`/`g_`/`gM`/`gm`/`g#`) now sync
-`block_vcol` like the plain forms: `apply_after_g` routed them through raw
-`execute_motion`, so the block never extended past its anchor column —
-`<C-v>jgE~` flipped one column instead of the whole words. `update_block_vcol`
-gained the `LastNonBlank`/`LineMiddle`/`ScreenLineMiddle`/`WordAtCursor` arms to
-match. Pinned by 11 corpus cases in `tier2_block_textobj.toml` measured against
-neovim 0.12.4. `H`/`L` now agree on non-scrolling buffers — the standing repro
-`<C-v>H>` matches (40 re-runs stable; the earlier "shifts rows 0-1" reading was
-a headless-nvim startup race, not hjkl). What remains is a harness artifact, not
-a blockwise bug: with the cursor seeded off-screen the driver's hjkl viewport
-never scrolls (`top_row` stays 0 → `H` lands row 0) while nvim scrolls its
-window (`H` lands row 4 on a 30-row buffer), and the driver pins 24 rows where
-headless nvim's window is 22 — plain normal-mode `H`/`M`/`L` diverge
-identically. Untestable until the driver scrolls the viewport after seeding (and
-pins the true 22).
+**`H` / `L` / `gE` in blockwise visual — fixed 2026-08-12.** The `g`-prefixed
+horizontal motions (`gE`/`ge`/`g_`/`gM`/`gm`/`g#`) now sync `block_vcol` like
+the plain forms: `apply_after_g` routed them through raw `execute_motion`, so
+the block never extended past its anchor column — `<C-v>jgE~` flipped one column
+instead of the whole words. `update_block_vcol` gained the
+`LastNonBlank`/`LineMiddle`/`ScreenLineMiddle`/`WordAtCursor` arms to match.
+Pinned by 11 corpus cases in `tier2_block_textobj.toml` measured against neovim
+0.12.4. `H`/`L` agree on non-scrolling buffers — the standing repro `<C-v>H>`
+matches (40 re-runs stable; the earlier "shifts rows 0-1" reading was a
+headless-nvim startup race, not hjkl). The off-screen harness artifact is closed
+too: the driver now pins the real headless window (22 rows — `lines=24` minus
+statusline + cmdline — not 24), pins `scrolloff=0` (hjkl's default 5 vs
+`nvim --clean`'s 0), and scrolls the viewport after seeding the cursor
+(`ensure_cursor_in_scrolloff`), matching nvim's scroll-on-`set_cursor` —
+tall-buffer `H`/`M`/`L` and `<C-v>H>` now agree, pinned by 4 cases in
+`tier2_viewport_bounds.toml`.
 
 **`*`/`#` in visual mode still diverge (2026-08-12).** `*` in blockwise visual
 is a search in nvim (it exits visual; `<C-v>j*` on
@@ -1385,11 +1385,13 @@ config) and the SHIFT-normalization unification decision (tidy §11 #8).
   stays open (nvim's `findsent` backtrack). See §1.5b.
 - **The §1.5b `H`/`L` standing repro `<C-v>H>` no longer reproduces** — the
   blockwise shift covers the full block on both sides (40 stable re-runs; the
-  earlier 2-row reading was a headless-nvim startup race). Remaining H/L/M
-  divergence needs the off-screen-cursor harness gap closed first (driver never
-  scrolls the hjkl viewport after seeding; pins 24 rows where headless nvim's
-  window is 22) — recorded in §1.5b, plus the separate `*`/`#`-in-visual search
-  divergence.
+  earlier 2-row reading was a headless-nvim startup race). The off-screen
+  harness gap behind the remaining H/L/M divergence is closed too: the oracle
+  driver now pins the real headless window size (22 rows, not 24), pins
+  `scrolloff=0` (hjkl's default 5 vs `nvim --clean`'s 0), and scrolls the
+  viewport after seeding the cursor — tall-buffer H/M/L now match, pinned by 4
+  cases in `tier2_viewport_bounds.toml`. See §1.5b. Still open: the separate
+  `*`/`#`-in-visual search divergence.
 
 ## 8. 2026-08-05 code review (audit depth)
 
