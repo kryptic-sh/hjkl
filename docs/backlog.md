@@ -322,8 +322,28 @@ Open per-object routing for paragraph / sentence; each needs its measured corpus
 cases first. The word-object code documents this in the NOTE comment at
 `visual_text_obj_extend`.
 
-**`H` / `L` / `gE` in blockwise visual still diverge on motion and cursor.**
-`<C-v>H>` is the standing repro. Blockwise `~` is correct.
+**`H` / `L` / `gE` in blockwise visual — the `gE` half fixed 2026-08-12.** The
+`g`-prefixed horizontal motions (`gE`/`ge`/`g_`/`gM`/`gm`/`g#`) now sync
+`block_vcol` like the plain forms: `apply_after_g` routed them through raw
+`execute_motion`, so the block never extended past its anchor column —
+`<C-v>jgE~` flipped one column instead of the whole words. `update_block_vcol`
+gained the `LastNonBlank`/`LineMiddle`/`ScreenLineMiddle`/`WordAtCursor` arms to
+match. Pinned by 11 corpus cases in `tier2_block_textobj.toml` measured against
+neovim 0.12.4. `H`/`L` now agree on non-scrolling buffers — the standing repro
+`<C-v>H>` matches (40 re-runs stable; the earlier "shifts rows 0-1" reading was
+a headless-nvim startup race, not hjkl). What remains is a harness artifact, not
+a blockwise bug: with the cursor seeded off-screen the driver's hjkl viewport
+never scrolls (`top_row` stays 0 → `H` lands row 0) while nvim scrolls its
+window (`H` lands row 4 on a 30-row buffer), and the driver pins 24 rows where
+headless nvim's window is 22 — plain normal-mode `H`/`M`/`L` diverge
+identically. Untestable until the driver scrolls the viewport after seeding (and
+pins the true 22).
+
+**`*`/`#` in visual mode still diverge (2026-08-12).** `*` in blockwise visual
+is a search in nvim (it exits visual; `<C-v>j*` on
+`"foo bar\nfoo baz\nqux foo\n"` leaves nvim normal at (1,0)) but a
+block-extending motion in hjkl (visual_block at (2,4)). Separate from the
+text-object work; not pinned.
 
 **Every edit used to clone its payload for the change log — closed 2026-08-07
 (`1f062fe0`), but not the way the note below proposed.** The `Vec<EngineEdit>`
@@ -1329,6 +1349,25 @@ config) and the SHIFT-normalization unification decision (tidy §11 #8).
   commit, less, vi) cannot work, whereas vim suspends the TUI and passes the
   terminal through. The suspend itself remains unimplemented; if it is ever
   wanted it is its own change.
+
+### Backlog-work session 2026-08-12 (blockwise g-motions)
+
+- **Blockwise visual `gE`/`ge`/`g_`/`gM`/`gm`/`g#` extend the block column
+  now.** `apply_after_g` routed every `g`-prefixed motion through raw
+  `execute_motion`, so `block_vcol` was never synced in VisualBlock mode (the
+  plain `E`/`e`/`_` forms went through `execute_motion_with_block_vcol`) —
+  `<C-v>jgE~` flipped the block's first column only, and `<C-v>jgEy` yanked a
+  one-column strip. The motions now ride the block-vcol helper, and
+  `update_block_vcol` gained the `LastNonBlank` / `LineMiddle` /
+  `ScreenLineMiddle` / `WordAtCursor` arms. 11 corpus cases pinned against
+  neovim 0.12.4 in `tier2_block_textobj.toml`. See §1.5b.
+- **The §1.5b `H`/`L` standing repro `<C-v>H>` no longer reproduces** — the
+  blockwise shift covers the full block on both sides (40 stable re-runs; the
+  earlier 2-row reading was a headless-nvim startup race). Remaining H/L/M
+  divergence needs the off-screen-cursor harness gap closed first (driver never
+  scrolls the hjkl viewport after seeding; pins 24 rows where headless nvim's
+  window is 22) — recorded in §1.5b, plus the separate `*`/`#`-in-visual search
+  divergence.
 
 ## 8. 2026-08-05 code review (audit depth)
 
