@@ -312,15 +312,25 @@ work, and two of its rows did not reproduce at the positions probed:
   (`a"hello\nworld"b`, cursor inside the content) — hjkl's `text_object_range`
   returns no object from that row, so hjkl already matches nvim. Pinned by the
   `blockwise_quote_obj_noop` corpus case.
-- **`ip`/`is` stay blockwise in nvim but hjkl collapses** (to visual-line /
-  visual). The cursor lands identically, but the block's column/row EXTENT after
-  the object is not yet measured per position (`<C-v>jip~` on `"one\n\ntwo"`
-  flipped both paragraphs' first word in nvim, which is more than "rows kept,
-  cursor extends") — so the fix shape is not yet determined.
+- **`ip`/`is` stay blockwise in nvim but hjkl collapses — fixed 2026-08-12.**
+  The extent is now measured and pinned. In a multi-line `<C-v>` selection both
+  engines take vim's `current_par` / `current_sent` "extend" path: the anchor
+  and blockwise mode stay, and the cursor lands at the extend position — `ip`
+  walks one same-blankness run past the cursor (away from the anchor), `ap`
+  continues with a second run of the opposite blankness, `is`/`as` land at the
+  sentence end (trailing whitespace included for `as`) — so the block spans
+  anchor..landing at the landing's column (`<C-v>jip~` on `"one\n\ntwo"` flips
+  both paragraphs' first char: the block is rows 0-2, col 0). A single-row block
+  takes the normal object path (collapse to linewise / charwise) and a
+  buffer-edge walk FAILs (no-op) — both match nvim. 9 corpus cases pinned in
+  `tier2_block_textobj.toml`.
 
 Open per-object routing for paragraph / sentence; each needs its measured corpus
 cases first. The word-object code documents this in the NOTE comment at
-`visual_text_obj_extend`.
+`visual_text_obj_extend`. Still open: the sentence objects with the anchor BELOW
+the cursor (`<C-v>` then `k`/`H`, then `is`/`as`) — nvim's landing there follows
+a `findsent` backtrack (`<C-v>kisy` on `"aaa. bbb.\nccc. ddd.\neee.\n"` lands
+(0,5), hjkl (1,3)).
 
 **`H` / `L` / `gE` in blockwise visual — the `gE` half fixed 2026-08-12.** The
 `g`-prefixed horizontal motions (`gE`/`ge`/`g_`/`gM`/`gm`/`g#`) now sync
@@ -1361,6 +1371,18 @@ config) and the SHIFT-normalization unification decision (tidy §11 #8).
   `update_block_vcol` gained the `LastNonBlank` / `LineMiddle` /
   `ScreenLineMiddle` / `WordAtCursor` arms. 11 corpus cases pinned against
   neovim 0.12.4 in `tier2_block_textobj.toml`. See §1.5b.
+- **Blockwise visual `ip`/`ap`/`is`/`as` keep the block and extend it.**
+  `visual_text_obj_extend` collapsed every non-word object out of blockwise
+  visual; the paragraph and sentence objects now take vim's `current_par` /
+  `current_sent` "extend" path — anchor and mode stay, the cursor lands at the
+  extend position (`ip`: one same-blankness run past the cursor, direction away
+  from the anchor; `ap`: a second run of the opposite blankness; `is`/`as`: the
+  sentence end, whitespace included for `as`), and `block_vcol` syncs to the
+  landing column. The extend walk is `paragraph_extend_landing` in
+  `text_object.rs` (transcribed from `current_par`); a single-row block still
+  collapses and a buffer-edge walk is a no-op, both matching nvim. 9 corpus
+  cases pinned against neovim 0.12.4. The anchor-BELOW sentence orientation
+  stays open (nvim's `findsent` backtrack). See §1.5b.
 - **The §1.5b `H`/`L` standing repro `<C-v>H>` no longer reproduces** — the
   blockwise shift covers the full block on both sides (40 stable re-runs; the
   earlier 2-row reading was a headless-nvim startup race). Remaining H/L/M
