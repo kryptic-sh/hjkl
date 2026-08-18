@@ -6,6 +6,24 @@ use hjkl_prompt::{history_next, history_prev, push_history};
 use super::{App, CmdLineKind, CmdLineWindow, SearchDir};
 use crate::completion::{Completion, CompletionItem, CompletionKind};
 
+/// Editor ex-command registry — built once, read-only afterwards. The host
+/// registry is already a `LazyLock` static (`ex_host_cmds::host_registry`);
+/// the editor registry used to be rebuilt from scratch on every `:`-prompt
+/// keystroke.
+static EDITOR_REGISTRY: std::sync::LazyLock<hjkl_ex::Registry<crate::host::TuiHost>> =
+    std::sync::LazyLock::new(hjkl_ex::default_registry::<crate::host::TuiHost>);
+
+/// Merged, sorted, deduped command-name candidate set (host + editor +
+/// extra names) for `:`-prompt completion — computed once instead of on
+/// every keystroke.
+static COMMAND_NAMES: std::sync::LazyLock<Vec<String>> = std::sync::LazyLock::new(|| {
+    hjkl_ex::merged_command_names(
+        &EDITOR_REGISTRY,
+        super::ex_host_cmds::host_registry(),
+        &super::ex_dispatch::extra_ex_command_names(),
+    )
+});
+
 /// Replace the full text of a TextFieldEditor, leaving cursor at the end in
 /// Insert mode.
 pub fn set_field_text(field: &mut TextFieldEditor, text: &str) {
@@ -207,14 +225,15 @@ impl App {
         let caret = field_caret_byte(field);
 
         let host_reg = super::ex_host_cmds::host_registry();
-        let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
-        // Supplemental command names for app-intercepted commands that live in
-        // neither registry (`:map` family, `:debug`, `:b#`) — see issue #307.
-        let extra_names = super::ex_dispatch::extra_ex_command_names();
 
         // Try command-name position first.
-        let (range, metas) =
-            hjkl_ex::complete_command_meta(&line, caret, &editor_reg, host_reg, &extra_names);
+        let (range, metas) = hjkl_ex::complete_command_meta(
+            &line,
+            caret,
+            &COMMAND_NAMES,
+            &EDITOR_REGISTRY,
+            host_reg,
+        );
 
         if !metas.is_empty() {
             // Don't surface the popup on a bare `:` (no command name typed yet):
@@ -266,7 +285,14 @@ impl App {
             // `arg_choices()` for `ArgKind::Enum` args.
             enum_choices: &[],
         };
-        let comp = hjkl_ex::complete(&line, caret, &editor_reg, host_reg, &sources, &extra_names);
+        let comp = hjkl_ex::complete(
+            &line,
+            caret,
+            &COMMAND_NAMES,
+            &EDITOR_REGISTRY,
+            host_reg,
+            &sources,
+        );
         if comp.kind == hjkl_ex::CompletionKind::None || comp.candidates.is_empty() {
             self.completion = None;
             self.command_completion_range = None;
@@ -309,12 +335,11 @@ impl App {
         // Determine if this command takes an argument (add trailing space).
         // We check by trying to resolve the accepted label as a command name.
         let host_reg = super::ex_host_cmds::host_registry();
-        let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
         let takes_arg = host_reg
             .resolve(&item.label)
             .map(|c| c.arg_kind() != hjkl_ex::ArgKind::None)
             .or_else(|| {
-                editor_reg
+                EDITOR_REGISTRY
                     .resolve(&item.label)
                     .map(|c| c.arg_kind != hjkl_ex::ArgKind::None)
             })
@@ -373,8 +398,7 @@ impl App {
             return false;
         }
         let host_reg = super::ex_host_cmds::host_registry();
-        let editor_reg = hjkl_ex::default_registry::<crate::host::TuiHost>();
-        host_reg.resolve(token).is_some() || editor_reg.resolve(token).is_some()
+        host_reg.resolve(token).is_some() || EDITOR_REGISTRY.resolve(token).is_some()
     }
 
     /// Byte range of the leading command word — what

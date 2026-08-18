@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::sync::Mutex;
 
 use crate::{ArgKind, HostRegistry, Registry};
 
@@ -176,6 +177,26 @@ pub fn collect_host_registry_names<Ctx>(reg: &HostRegistry<Ctx>) -> Vec<String> 
     names
 }
 
+/// The merged, sorted, deduped command-name candidate set: host registry
+/// names + aliases, then editor registry names + aliases, then `extra_names`.
+/// The completion entry points filter this set per query; callers that hold
+/// static registries should compute it once and reuse it.
+pub fn merged_command_names<H, Ctx>(
+    editor_reg: &Registry<H>,
+    host_reg: &HostRegistry<Ctx>,
+    extra_names: &[String],
+) -> Vec<String>
+where
+    H: hjkl_engine::Host,
+{
+    let mut names = collect_host_registry_names(host_reg);
+    names.extend(collect_registry_names(editor_reg));
+    names.extend(extra_names.iter().cloned());
+    names.sort();
+    names.dedup();
+    names
+}
+
 // ── Arg-position helpers ──────────────────────────────────────────────────────
 
 /// Byte length of a leading ex RANGE/count prefix (`%`, `5,10`, `.,$`, `2`,
@@ -312,6 +333,24 @@ fn expand_path_prefix(s: &str, home: &str, getenv: impl Fn(&str) -> Option<Strin
     out
 }
 
+/// Last directory listing served by `complete_path_entries`, keyed by the
+/// directory path and its mtime. One entry suffices: while typing one path,
+/// the scan dir only changes when the caret crosses a `/`. A changed mtime
+/// between keystrokes (a file added/removed/renamed in the dir) invalidates
+/// it; the stale window is a dir that changes without its mtime moving.
+struct PathEntriesCache {
+    dir: std::path::PathBuf,
+    mtime: std::time::SystemTime,
+    /// (entry name, is_dir) for EVERY entry, hidden included — the
+    /// hidden/prefix/dirs-only filters vary per keystroke and apply at
+    /// query time.
+    entries: Vec<(String, bool)>,
+    /// Rescan count; tests read this to prove a repeat call on an unchanged
+    /// dir hits the cache instead of re-reading the directory.
+    pub scans: u64,
+}
+static PATH_ENTRIES_CACHE: Mutex<Option<PathEntriesCache>> = Mutex::new(None);
+
 /// Scan `cwd` for entries whose names begin with `file_part` (respecting the
 /// `dir_part` prefix).  Appends `/` to directories.  Hidden entries (starting
 /// with `.`) are skipped unless `file_part` itself starts with `.`.
@@ -340,28 +379,60 @@ fn complete_path_entries(prefix: &str, cwd: &std::path::Path, dirs_only: bool) -
     } else {
         cwd.join(&expanded_dir)
     };
-    let Ok(rd) = std::fs::read_dir(&scan_dir) else {
+    // An unstat-able dir yields nothing, as before (a `read_dir` that fails
+    // right after a successful `metadata` is a race we simply don't cache).
+    let Ok(mtime) = std::fs::metadata(&scan_dir).and_then(|m| m.modified()) else {
         return Vec::new();
     };
+    // Serve the listing from the one-entry cache when the dir is unchanged.
+    let mut cache = PATH_ENTRIES_CACHE
+        .lock()
+        .expect("path entries cache poisoned");
+    if !matches!(&*cache, Some(c) if c.dir == scan_dir && c.mtime == mtime) {
+        let Ok(rd) = std::fs::read_dir(&scan_dir) else {
+            return Vec::new();
+        };
+        // Every entry, hidden included — the query-time filters below apply
+        // per keystroke and must see the whole directory.
+        let mut entries: Vec<(String, bool)> = rd
+            .filter_map(|e| e.ok())
+            .filter_map(|e| {
+                let name = e.file_name();
+                let name_str = name.to_str()?.to_string();
+                let is_dir = e.file_type().ok()?.is_dir();
+                Some((name_str, is_dir))
+            })
+            .collect();
+        entries.sort();
+        let scans = cache.as_ref().map_or(0, |c| c.scans) + 1;
+        *cache = Some(PathEntriesCache {
+            dir: scan_dir,
+            mtime,
+            entries,
+            scans,
+        });
+    }
+    let cached = cache.as_ref().expect("path entries cache filled above");
     let show_hidden = file_part.starts_with('.');
-    let mut results: Vec<String> = rd
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let name = e.file_name();
-            let name_str = name.to_str()?.to_string();
+    let mut results: Vec<String> = cached
+        .entries
+        .iter()
+        .filter(|(name_str, is_dir)| {
             // Skip hidden unless file_part starts with '.'
             if !show_hidden && name_str.starts_with('.') {
-                return None;
+                return false;
             }
             if !name_str.starts_with(file_part) {
-                return None;
+                return false;
             }
-            let is_dir = e.file_type().ok()?.is_dir();
-            if dirs_only && !is_dir {
-                return None;
+            if dirs_only && !*is_dir {
+                return false;
             }
-            let suffix = if is_dir { "/" } else { "" };
-            Some(format!("{dir_part}{name_str}{suffix}"))
+            true
+        })
+        .map(|(name_str, is_dir)| {
+            let suffix = if *is_dir { "/" } else { "" };
+            format!("{dir_part}{name_str}{suffix}")
         })
         .collect();
     results.sort();
@@ -406,17 +477,18 @@ pub struct CommandCandidate {
 /// candidates have no command metadata, so callers use plain `complete()` for
 /// those. Use this for command-name docs; fall back to `complete()` for args.
 ///
-/// `extra_names` supplies supplemental command NAMES the caller wants listed as
-/// candidates even though they live in neither registry — e.g. app-intercepted
-/// commands (`:map` family, `:debug`, `:b#`). They are merged with the
-/// registry-derived names (sorted + deduped) and resolve to [`ArgKind::None`]
-/// (no typed-arg completion), since no registry knows their arg kind.
+/// `names` is the pre-built merged candidate set (see
+/// [`merged_command_names`]) — host + editor registry names/aliases plus any
+/// supplemental names the caller wants listed (e.g. app-intercepted commands
+/// like `:map` family, `:debug`, `:b#`). It is filtered per query; candidates
+/// not present in either registry resolve to [`ArgKind::None`] (no typed-arg
+/// completion), since no registry knows their arg kind.
 pub fn complete_command_meta<H, Ctx>(
     line: &str,
     caret: usize,
+    names: &[String],
     editor_reg: &Registry<H>,
     host_reg: &HostRegistry<Ctx>,
-    extra_names: &[String],
 ) -> (std::ops::Range<usize>, Vec<CommandCandidate>)
 where
     H: hjkl_engine::Host,
@@ -432,20 +504,15 @@ where
         return (caret..caret, vec![]);
     }
     let sub_caret = caret - range_len;
-    // Gather all candidate names, same as the command-name path in complete().
-    let mut names = collect_host_registry_names(host_reg);
-    names.extend(collect_registry_names(editor_reg));
-    names.extend(extra_names.iter().cloned());
-    names.sort();
-    names.dedup();
-    // Filter to those that start with the typed prefix.
+    // Filter to those that start with the typed prefix. `names` is already
+    // sorted + deduped; prefix filtering preserves order and cannot introduce
+    // duplicates, so no re-sort/re-dedup is needed.
     let prefix = &sub[..sub_caret];
-    let mut names: Vec<String> = names
-        .into_iter()
+    let names: Vec<String> = names
+        .iter()
         .filter(|n| n.starts_with(prefix))
+        .cloned()
         .collect();
-    names.sort();
-    names.dedup();
     // Build enriched candidates.
     let candidates: Vec<CommandCandidate> = names
         .into_iter()
@@ -727,15 +794,16 @@ fn complete_inner_command_name(
 /// Falls back to Phase 5a's command completer when caret is in command-name
 /// position.
 ///
-/// `extra_names` — supplemental command NAMES (see [`complete_command_meta`])
-/// merged into the command-name candidate set. Pass `&[]` when not needed.
+/// `names` — the pre-built merged command-name candidate set (see
+/// [`merged_command_names`]) — filtered per query for the command-name
+/// position.
 pub fn complete<H, Ctx>(
     line: &str,
     caret: usize,
+    names: &[String],
     editor_reg: &Registry<H>,
     host_reg: &HostRegistry<Ctx>,
     sources: &ArgSources<'_>,
-    extra_names: &[String],
 ) -> Completions
 where
     H: hjkl_engine::Host,
@@ -748,12 +816,7 @@ where
     let (sub_cmd_end, _) = first_word_end(sub);
     if caret >= range_len && caret - range_len <= sub_cmd_end {
         // Command-name completion path (on the sub-line past the range).
-        let mut names = collect_host_registry_names(host_reg);
-        names.extend(collect_registry_names(editor_reg));
-        names.extend(extra_names.iter().cloned());
-        names.sort();
-        names.dedup();
-        let mut result = complete_command_from_names(sub, caret - range_len, &names);
+        let mut result = complete_command_from_names(sub, caret - range_len, names);
         // Shift the replace range back over the stripped range prefix so the
         // accepted text replaces only the command-name token, not the range.
         result.replace_range.start += range_len;
@@ -778,7 +841,7 @@ where
     //     filtered to the set `:g` actually dispatches ([`GLOBAL_SUBCOMMANDS`]).
     //   - `:cdo`/`:cfdo`/`:ldo`/`:lfdo` — the whole argument is the inner
     //     command; it starts at the first non-blank after the command word, and
-    //     any ex command name is a candidate (registries + `extra_names`).
+    //     any ex command name is a candidate (the merged `names` set).
     if arg_kind == ArgKind::ExCommand {
         let canonical = editor_reg
             .resolve(cmd_name)
@@ -804,10 +867,7 @@ where
             let inner_start = line[cmd_token_end..]
                 .find(|c: char| !c.is_whitespace())
                 .map_or(line.len(), |i| cmd_token_end + i);
-            let mut names = collect_host_registry_names(host_reg);
-            names.extend(collect_registry_names(editor_reg));
-            names.extend(extra_names.iter().cloned());
-            (inner_start, names)
+            (inner_start, names.to_vec())
         };
         // Caret parked in the blank gap before the inner token → nothing yet.
         if caret < inner_start {
@@ -1492,10 +1552,11 @@ mod tests {
             run: noop,
         });
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
         let sources = ArgSources::default();
 
         // caret=1, line="e" → command position
-        let result = complete("e", 1, &reg, &host_reg, &sources, &[]);
+        let result = complete("e", 1, &names, &reg, &host_reg, &sources);
         assert_eq!(result.kind, CompletionKind::Command);
     }
 
@@ -1506,10 +1567,11 @@ mod tests {
 
         let reg = Registry::<DefaultHost>::new();
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
         let sources = ArgSources::default();
 
         // "xxx " with unknown command → kind=None
-        let result = complete("xxx ", 4, &reg, &host_reg, &sources, &[]);
+        let result = complete("xxx ", 4, &names, &reg, &host_reg, &sources);
         assert_eq!(result.kind, CompletionKind::None);
         assert!(result.candidates.is_empty());
     }
@@ -1578,9 +1640,10 @@ mod tests {
             run: noop,
         });
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
 
         // "e" at caret=1 → command position; matches both "e" (alias) and "edit"
-        let (range, candidates) = complete_command_meta("e", 1, &reg, &host_reg, &[]);
+        let (range, candidates) = complete_command_meta("e", 1, &names, &reg, &host_reg);
         assert_eq!(range, 0..1);
 
         let edit_cand = candidates.iter().find(|c| c.name == "edit");
@@ -1594,7 +1657,7 @@ mod tests {
         assert_eq!(edit_cand.usage, "<path>");
 
         // "quit" doesn't start with "e", but verify a None-arg command via full match
-        let (_, all_candidates) = complete_command_meta("quit", 4, &reg, &host_reg, &[]);
+        let (_, all_candidates) = complete_command_meta("quit", 4, &names, &reg, &host_reg);
         let quit_cand = all_candidates.iter().find(|c| c.name == "quit");
         assert!(
             quit_cand.is_some(),
@@ -1628,9 +1691,10 @@ mod tests {
             run: noop,
         });
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
 
         // "edit " with caret=5 → arg position (past the command name + space)
-        let (_, candidates) = complete_command_meta("edit ", 5, &reg, &host_reg, &[]);
+        let (_, candidates) = complete_command_meta("edit ", 5, &names, &reg, &host_reg);
         assert!(
             candidates.is_empty(),
             "expected empty candidates for arg position, got: {candidates:?}"
@@ -1783,23 +1847,24 @@ mod tests {
     fn complete_strips_leading_range_for_command_name() {
         let reg = range_test_registry();
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
         let sources = ArgSources::default();
 
         // `%sor` → completes `sort`, replace range starts AFTER the `%`.
-        let r = complete("%sor", 4, &reg, &host_reg, &sources, &[]);
+        let r = complete("%sor", 4, &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::Command);
         assert_eq!(r.replace_range, 1..4);
         assert!(r.candidates.contains(&"sort".to_string()));
 
         // `2d` → completes delete/d, replace range starts AFTER the `2`.
-        let r = complete("2d", 2, &reg, &host_reg, &sources, &[]);
+        let r = complete("2d", 2, &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::Command);
         assert_eq!(r.replace_range, 1..2);
         assert!(r.candidates.contains(&"delete".to_string()));
         assert!(r.candidates.contains(&"d".to_string()));
 
         // `'a,'bmov` → completes `move`, replace range starts after the range.
-        let r = complete("'a,'bmov", 8, &reg, &host_reg, &sources, &[]);
+        let r = complete("'a,'bmov", 8, &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::Command);
         assert_eq!(r.replace_range, 5..8);
         assert!(r.candidates.contains(&"move".to_string()));
@@ -1809,8 +1874,9 @@ mod tests {
     fn complete_command_meta_strips_leading_range() {
         let reg = range_test_registry();
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
 
-        let (range, cands) = complete_command_meta("%sor", 4, &reg, &host_reg, &[]);
+        let (range, cands) = complete_command_meta("%sor", 4, &names, &reg, &host_reg);
         assert_eq!(range, 1..4);
         assert!(cands.iter().any(|c| c.name == "sort"));
     }
@@ -1826,9 +1892,10 @@ mod tests {
         let reg = Registry::<DefaultHost>::new();
         let host_reg = HostRegistry::<()>::new();
         let extra = str_vec(&["map", "noremap", "nmap", "unmap", "debug", "b#"]);
+        let names = merged_command_names(&reg, &host_reg, &extra);
 
         // `:map` → the `map`-family verb is offered as a candidate.
-        let (range, cands) = complete_command_meta("map", 3, &reg, &host_reg, &extra);
+        let (range, cands) = complete_command_meta("map", 3, &names, &reg, &host_reg);
         assert_eq!(range, 0..3);
         let map_cand = cands.iter().find(|c| c.name == "map");
         assert!(map_cand.is_some(), "expected 'map' in {cands:?}");
@@ -1839,12 +1906,12 @@ mod tests {
         assert_eq!(map_cand.usage, "");
 
         // `:nore` → the `noremap` family verb.
-        let (_, cands) = complete_command_meta("nore", 4, &reg, &host_reg, &extra);
+        let (_, cands) = complete_command_meta("nore", 4, &names, &reg, &host_reg);
         assert!(cands.iter().any(|c| c.name == "noremap"));
         assert!(cands.iter().all(|c| c.name.starts_with("nore")));
 
         // `:debug` → the app-intercepted `debug` command.
-        let (_, cands) = complete_command_meta("debug", 5, &reg, &host_reg, &extra);
+        let (_, cands) = complete_command_meta("debug", 5, &names, &reg, &host_reg);
         assert!(cands.iter().any(|c| c.name == "debug"));
     }
 
@@ -1854,17 +1921,18 @@ mod tests {
         // empty or contains names that don't match the typed prefix.
         let reg = range_test_registry(); // sort / delete / move
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
 
         // `:map` matches no registry command, and with `&[]` no extra name is
         // injected → no candidates at all.
-        let (_, cands) = complete_command_meta("map", 3, &reg, &host_reg, &[]);
+        let (_, cands) = complete_command_meta("map", 3, &names, &reg, &host_reg);
         assert!(
             cands.iter().all(|c| c.name != "map"),
             "extra names must not leak in with empty extra_names: {cands:?}"
         );
 
         // `:m` completion is the same as before this change (move / m).
-        let (_, cands) = complete_command_meta("m", 1, &reg, &host_reg, &[]);
+        let (_, cands) = complete_command_meta("m", 1, &names, &reg, &host_reg);
         assert!(cands.iter().any(|c| c.name == "move"));
         assert!(cands.iter().any(|c| c.name == "m"));
     }
@@ -1898,18 +1966,19 @@ mod tests {
         let reg = Registry::<DefaultHost>::new();
         let mut host_reg = HostRegistry::<()>::new();
         host_reg.add(Box::new(SyntaxCmd));
+        let names = merged_command_names(&reg, &host_reg, &[]);
         // No enum_choices supplied by the caller — complete() must inject them
         // from the resolved command's arg_choices().
         let sources = ArgSources::default();
 
         // `:syntax ` → all choices.
-        let r = complete("syntax ", 7, &reg, &host_reg, &sources, &[]);
+        let r = complete("syntax ", 7, &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::Choice);
         assert!(r.candidates.contains(&"on".to_string()));
         assert!(r.candidates.contains(&"disable".to_string()));
 
         // `:syntax of` → filters to `off`.
-        let r2 = complete("syntax of", 9, &reg, &host_reg, &sources, &[]);
+        let r2 = complete("syntax of", 9, &names, &reg, &host_reg, &sources);
         assert_eq!(r2.candidates, vec!["off".to_string()]);
     }
 
@@ -1937,6 +2006,7 @@ mod tests {
             run: noop,
         });
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
         let regs = str_vec(&["\"\"", "\"0", "\"a", "\"b"]);
         let sources = ArgSources {
             registers: &regs,
@@ -1944,13 +2014,13 @@ mod tests {
         };
 
         // `:put ` → all register selectors.
-        let r = complete("put ", 4, &reg, &host_reg, &sources, &[]);
+        let r = complete("put ", 4, &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::Register);
         assert!(r.candidates.contains(&"\"a".to_string()));
         assert!(r.candidates.contains(&"\"b".to_string()));
 
         // `:put "a` → filters to `"a`.
-        let r2 = complete("put \"a", 6, &reg, &host_reg, &sources, &[]);
+        let r2 = complete("put \"a", 6, &names, &reg, &host_reg, &sources);
         assert_eq!(r2.kind, CompletionKind::Register);
         assert!(r2.candidates.contains(&"\"a".to_string()));
         assert!(!r2.candidates.contains(&"\"b".to_string()));
@@ -1997,11 +2067,12 @@ mod tests {
     fn complete_global_offers_subcommands_after_pattern() {
         let reg = ex_command_registry();
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
         let sources = ArgSources::default();
 
         // `:g/foo/` → the dispatchable `:g` sub-commands (d/s/j/y/normal…).
         let line = "g/foo/";
-        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        let r = complete(line, line.len(), &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::Command);
         for want in ["d", "j", "normal", "s", "y"] {
             assert!(
@@ -2021,12 +2092,13 @@ mod tests {
     fn complete_global_filters_and_scopes_replace_range_past_slash() {
         let reg = ex_command_registry();
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
         let sources = ArgSources::default();
 
         // `:g/foo/d` → filters to `d`; replace range covers ONLY the inner `d`,
         // starting AFTER the closing `/` (byte 6), so accepting keeps `g/foo/`.
         let line = "g/foo/d";
-        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        let r = complete(line, line.len(), &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::Command);
         assert_eq!(r.candidates, vec!["d".to_string()]);
         assert_eq!(r.replace_range, 6..7);
@@ -2037,17 +2109,18 @@ mod tests {
     fn complete_global_no_completion_while_in_pattern() {
         let reg = ex_command_registry();
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
         let sources = ArgSources::default();
 
         // Caret still inside the pattern (closing `/` not typed) → no candidates.
         let line = "g/foo";
-        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        let r = complete(line, line.len(), &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::None);
         assert!(r.candidates.is_empty());
 
         // Only the opening separator typed → still inside the pattern.
         let line = "g/";
-        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        let r = complete(line, line.len(), &names, &reg, &host_reg, &sources);
         assert!(r.candidates.is_empty());
     }
 
@@ -2055,11 +2128,12 @@ mod tests {
     fn complete_vglobal_offers_subcommands() {
         let reg = ex_command_registry();
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
         let sources = ArgSources::default();
 
         // `:v/foo/n` → the `normal`/`norm` family, filtered to the `:g` set.
         let line = "v/foo/n";
-        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        let r = complete(line, line.len(), &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::Command);
         assert!(r.candidates.contains(&"normal".to_string()));
         assert!(r.candidates.contains(&"norm".to_string()));
@@ -2071,18 +2145,19 @@ mod tests {
     fn complete_global_alt_separator_and_escaped_sep() {
         let reg = ex_command_registry();
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
         let sources = ArgSources::default();
 
         // A non-`/` separator works the same: `:g#foo#d`.
         let line = "g#foo#d";
-        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        let r = complete(line, line.len(), &names, &reg, &host_reg, &sources);
         assert_eq!(r.candidates, vec!["d".to_string()]);
         assert_eq!(&line[r.replace_range.clone()], "d");
 
         // An escaped separator inside the pattern does NOT close it: the real
         // closing `/` is the second one, so the inner command begins after it.
         let line = r"g/fo\/o/d";
-        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        let r = complete(line, line.len(), &names, &reg, &host_reg, &sources);
         assert_eq!(r.candidates, vec!["d".to_string()]);
         assert_eq!(&line[r.replace_range.clone()], "d");
     }
@@ -2091,11 +2166,12 @@ mod tests {
     fn complete_cdo_offers_ex_command_names() {
         let reg = ex_command_registry();
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
         let sources = ArgSources::default();
 
         // `:cdo ` → any ex command name (registries + extra_names).
         let line = "cdo ";
-        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        let r = complete(line, line.len(), &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::Command);
         assert!(r.candidates.contains(&"edit".to_string()));
         assert!(r.candidates.contains(&"substitute".to_string()));
@@ -2103,7 +2179,7 @@ mod tests {
 
         // `:cdo e` → the `e`-prefixed names; replace range covers only `e`.
         let line = "cdo e";
-        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        let r = complete(line, line.len(), &names, &reg, &host_reg, &sources);
         assert!(r.candidates.contains(&"edit".to_string()));
         assert!(r.candidates.contains(&"enew".to_string()));
         assert!(r.candidates.iter().all(|c| c.starts_with('e')));
@@ -2117,16 +2193,17 @@ mod tests {
         let host_reg = HostRegistry::<()>::new();
         let sources = ArgSources::default();
         let extra = str_vec(&["Anvil", "debug"]);
+        let names = merged_command_names(&reg, &host_reg, &extra);
 
         // extra_names are candidates for the inner command too.
         let line = "cdo de";
-        let r = complete(line, line.len(), &reg, &host_reg, &sources, &extra);
+        let r = complete(line, line.len(), &names, &reg, &host_reg, &sources);
         assert!(r.candidates.contains(&"debug".to_string()));
 
         // No recursion into the inner command's OWN args: once past the inner
         // command name (`:cdo e <path>`), nothing is offered.
         let line = "cdo edit foo";
-        let r = complete(line, line.len(), &reg, &host_reg, &sources, &extra);
+        let r = complete(line, line.len(), &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::None);
         assert!(r.candidates.is_empty());
     }
@@ -2135,12 +2212,13 @@ mod tests {
     fn complete_cdo_inner_range_does_not_block_name() {
         let reg = ex_command_registry();
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
         let sources = ArgSources::default();
 
         // `:cdo %s` — the inner `%` range must not block inner-NAME completion;
         // the replace range covers only the `s` name after the range.
         let line = "cdo %s";
-        let r = complete(line, line.len(), &reg, &host_reg, &sources, &[]);
+        let r = complete(line, line.len(), &names, &reg, &host_reg, &sources);
         assert!(r.candidates.contains(&"substitute".to_string()));
         assert_eq!(&line[r.replace_range.clone()], "s");
     }
@@ -2151,16 +2229,172 @@ mod tests {
         // command-NAME completion for `:g`/`:cdo` is unchanged (still offered).
         let reg = ex_command_registry();
         let host_reg = HostRegistry::<()>::new();
+        let names = merged_command_names(&reg, &host_reg, &[]);
         let sources = ArgSources::default();
 
         // `:g` (caret in command name) still resolves as a command-name candidate.
-        let r = complete("g", 1, &reg, &host_reg, &sources, &[]);
+        let r = complete("g", 1, &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::Command);
         assert!(r.candidates.contains(&"global".to_string()));
 
         // `:cd` still completes to `cdo` at the command-name position.
-        let r = complete("cd", 2, &reg, &host_reg, &sources, &[]);
+        let r = complete("cd", 2, &names, &reg, &host_reg, &sources);
         assert_eq!(r.kind, CompletionKind::Command);
         assert!(r.candidates.contains(&"cdo".to_string()));
+    }
+
+    // ── path-listing cache (perf finding §16 #2) ──────────────────────────────
+
+    #[test]
+    fn complete_path_entries_caches_listing_until_dir_mtime_changes() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("hjkl_path_cache_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::write(temp_dir.join("alpha.txt"), b"x").unwrap();
+        std::fs::write(temp_dir.join("beta.txt"), b"x").unwrap();
+        let sources = ArgSources {
+            cwd: Some(&temp_dir),
+            ..Default::default()
+        };
+        let scans = || {
+            PATH_ENTRIES_CACHE
+                .lock()
+                .unwrap()
+                .as_ref()
+                .map_or(0, |c| c.scans)
+        };
+        let has = |cands: &[String], name: &str| cands.iter().any(|c| c.contains(name));
+
+        // First call scans the dir (+1 to the rescan counter); the repeat call
+        // on the UNCHANGED dir must hit the cache (+0). The cache is a single
+        // process-wide entry and the counter is shared with every other path
+        // test, so a concurrent rescan can land in the measurement window and
+        // inflate the delta — retry until the delta is observed clean. Before
+        // each attempt, scan a throwaway dir so the cached entry is guaranteed
+        // NOT to be ours: r1 is then a real miss and r2 a real hit (never a
+        // delta-0 hit/hit pair).
+        let mut hit_proven = false;
+        for _ in 0..64 {
+            let evict = tempfile::tempdir().unwrap();
+            let evict_sources = ArgSources {
+                cwd: Some(evict.path()),
+                ..Default::default()
+            };
+            let _ = complete_arg("e ", 2, ArgKind::Path, &evict_sources);
+            let before = scans();
+            let r1 = complete_arg("e ", 2, ArgKind::Path, &sources);
+            let r2 = complete_arg("e ", 2, ArgKind::Path, &sources);
+            if scans() == before + 1
+                && has(&r1.candidates, "alpha.txt")
+                && has(&r2.candidates, "beta.txt")
+            {
+                hit_proven = true;
+                break;
+            }
+        }
+        assert!(
+            hit_proven,
+            "repeat call on an unchanged dir must hit the cache instead of re-reading"
+        );
+
+        // A new file bumps the dir's mtime → the next call must rescan (+1)
+        // and see it. (Coarse-mtime filesystems: force the mtime forward;
+        // Linux bumps at ns resolution, so the fallback is a no-op there.)
+        let mtime_before = std::fs::metadata(&temp_dir)
+            .and_then(|m| m.modified())
+            .unwrap();
+        std::fs::write(temp_dir.join("gamma.txt"), b"x").unwrap();
+        let mtime_after = std::fs::metadata(&temp_dir)
+            .and_then(|m| m.modified())
+            .unwrap();
+        if mtime_after == mtime_before {
+            let bumped = mtime_after + std::time::Duration::from_millis(1);
+            let times = std::fs::FileTimes::new()
+                .set_accessed(bumped)
+                .set_modified(bumped);
+            std::fs::File::open(&temp_dir)
+                .unwrap()
+                .set_times(times)
+                .unwrap();
+        }
+        let mut invalidated = false;
+        for _ in 0..64 {
+            let before = scans();
+            let r3 = complete_arg("e ", 2, ArgKind::Path, &sources);
+            if scans() == before + 1 && has(&r3.candidates, "gamma.txt") {
+                invalidated = true;
+                break;
+            }
+        }
+        assert!(invalidated, "a dir mtime change must invalidate the cache");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn merged_command_names_merges_sorts_and_dedups() {
+        use crate::{ExCommand, ExEffect, HostCmd, Registry};
+        use hjkl_engine::DefaultHost;
+
+        fn noop(
+            _: &mut hjkl_engine::Editor<hjkl_buffer::View, DefaultHost>,
+            _: &str,
+            _: Option<crate::range::LineRange>,
+        ) -> Option<crate::effect::ExEffect> {
+            None
+        }
+
+        struct SplitCmd;
+        impl HostCmd<()> for SplitCmd {
+            fn name(&self) -> &'static str {
+                "split"
+            }
+            fn aliases(&self) -> &'static [&'static str] {
+                &["sp"]
+            }
+            fn run(&self, _ctx: &mut (), _args: &str) -> Option<crate::effect::ExEffect> {
+                Some(ExEffect::Ok)
+            }
+        }
+
+        let mut reg = Registry::<DefaultHost>::new();
+        reg.add(ExCommand {
+            name: "quit",
+            aliases: &["q"],
+            arg_kind: ArgKind::None,
+            min_prefix: 1,
+            run: noop,
+        });
+        reg.add(ExCommand {
+            name: "write",
+            aliases: &["w"],
+            arg_kind: ArgKind::None,
+            min_prefix: 1,
+            run: noop,
+        });
+        let mut host_reg = HostRegistry::<()>::new();
+        host_reg.add(Box::new(SplitCmd));
+        // `write` and `w` also appear as extra names — the merged list must
+        // dedup them against the editor registry's own name/alias.
+        let extra = str_vec(&["debug", "write", "w"]);
+        let merged = merged_command_names(&reg, &host_reg, &extra);
+
+        // Every canonical name, alias and extra name is present.
+        for want in ["debug", "q", "quit", "sp", "split", "w", "write"] {
+            assert!(
+                merged.contains(&want.to_string()),
+                "missing {want:?} in {merged:?}"
+            );
+        }
+        // Sorted.
+        let mut sorted = merged.clone();
+        sorted.sort();
+        assert_eq!(merged, sorted, "merged names must be sorted");
+        // No duplicates (merged is sorted, so dedup removes any).
+        let mut uniq = merged.clone();
+        uniq.dedup();
+        assert_eq!(merged.len(), uniq.len(), "merged names must be deduped");
+        assert_eq!(merged.len(), 7);
     }
 }
