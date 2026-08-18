@@ -561,6 +561,10 @@ pub struct App {
     /// Shown after the mouse rests on a Code zone for [`HOVER_DELAY`].
     /// Dismissed by mouse move, any key press, or 8-second auto-fade.
     pub(crate) hover_popup: Option<hjkl_hover::HoverState>,
+    /// Render caches for the hover / info popups — parsed markdown + wrapped
+    /// lines are content- and width-keyed, so steady repaints skip both.
+    pub(crate) hover_render_cache: hjkl_hover_tui::HoverRenderCache,
+    pub(crate) info_render_cache: hjkl_info_popup_tui::InfoRenderCache,
     /// "Mouse has been resting at this cell since `started_at`" tracker.
     /// Reset on any cell change; fires the LSP hover RPC after [`HOVER_DELAY`].
     pub(crate) hover_timer: Option<HoverTimer>,
@@ -2505,6 +2509,8 @@ impl App {
             mouse_click_tracker: mouse::MouseClickTracker::new(),
             context_menu: None,
             hover_popup: None,
+            hover_render_cache: hjkl_hover_tui::HoverRenderCache::new(),
+            info_render_cache: hjkl_info_popup_tui::InfoRenderCache::new(),
             hover_timer: None,
             border_drag: None,
             indent_flash: None,

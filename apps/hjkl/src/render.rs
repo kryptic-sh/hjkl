@@ -2180,7 +2180,13 @@ pub fn frame(frame: &mut Frame, app: &mut App) {
             app.theme.ui.panel_bg,
             hjkl_markdown_tui::MdTheme::default(),
         );
-        hjkl_hover_tui::render(frame, popup, &hover_theme, frame.area());
+        hjkl_hover_tui::render(
+            frame,
+            popup,
+            &hover_theme,
+            frame.area(),
+            &mut app.hover_render_cache,
+        );
     }
 
     // Toast notifications — float top-right, newest on top. They clear their
@@ -2999,12 +3005,12 @@ fn picker_row_span<'a>(label: &'a str, start: usize, end: usize, style: Style) -
 /// Centered popup for multi-line `:reg` / `:marks` / `:jumps` / `:changes`
 /// output and the K-key LSP hover info path. Delegates to
 /// `hjkl_info_popup_tui::render` (thin shim, ≤10 LOC).
-fn info_popup_overlay(frame: &mut Frame, app: &App, buf_area: Rect) {
+fn info_popup_overlay(frame: &mut Frame, app: &mut App, buf_area: Rect) {
     let Some(popup) = app.info_popup.as_ref() else {
         return;
     };
     let theme = hjkl_info_popup_tui::InfoPopupTheme::new(app.theme.ui.border_active);
-    hjkl_info_popup_tui::render(frame, popup, &theme, buf_area);
+    hjkl_info_popup_tui::render(frame, popup, &theme, buf_area, &mut app.info_render_cache);
 }
 
 /// Render the which-key popup anchored at the bottom of `buf_area`.

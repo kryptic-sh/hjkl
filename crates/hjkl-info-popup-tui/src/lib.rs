@@ -63,6 +63,43 @@ impl Default for InfoPopupTheme {
     }
 }
 
+// ── InfoRenderCache ────────────────────────────────────────────────────────────
+
+/// Per-popup render cache: parsed markdown (content-keyed — the parse is
+/// width-independent) and width-wrapped lines (keyed on content + width, so
+/// only a terminal resize re-wraps). Held by the caller (the app) and
+/// threaded through [`render`]; self-invalidates across popup replacements
+/// because both entries are keyed on the content string.
+pub struct InfoRenderCache {
+    /// (content, parsed events) — re-parse only when content changes.
+    parsed: Option<(String, Vec<hjkl_markdown::Event>)>,
+    /// (content, width, wrapped lines) — re-wrap only when content or width
+    /// changes. The lines embed the theme colours; the app builds a constant
+    /// `InfoPopupTheme::new` per frame, so the theme is not part of the key.
+    wrapped: Option<(String, u16, Vec<ratatui::text::Line<'static>>)>,
+    /// Parse count; tests read this to prove a repeat draw hits the cache.
+    pub parses: u64,
+    /// Re-wrap count; tests read this to prove a width change re-wraps.
+    pub wraps: u64,
+}
+
+impl InfoRenderCache {
+    /// New empty cache.
+    pub fn new() -> Self {
+        Self {
+            parsed: None,
+            wrapped: None,
+            parses: 0,
+            wraps: 0,
+        }
+    }
+}
+impl Default for InfoRenderCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── render ────────────────────────────────────────────────────────────────────
 
 /// Render an [`InfoPopup`] into `frame` positioned over `buf_area`.
@@ -74,7 +111,18 @@ impl Default for InfoPopupTheme {
 /// - `ContentKind::Plain` — content rendered as a plain `Paragraph`.
 /// - `ContentKind::Markdown` — content parsed with `hjkl-markdown` and
 ///   converted to styled lines via `hjkl-markdown-tui`.
-pub fn render(frame: &mut Frame, popup: &InfoPopup, theme: &InfoPopupTheme, buf_area: Rect) {
+///
+/// `cache` holds the parsed events and wrapped lines between frames, so a
+/// steady repaint while the popup is visible skips the markdown parse (only
+/// re-run when `popup.content` changes) and the width wrap (only re-run when
+/// content or `inner.width` changes).
+pub fn render(
+    frame: &mut Frame,
+    popup: &InfoPopup,
+    theme: &InfoPopupTheme,
+    buf_area: Rect,
+    cache: &mut InfoRenderCache,
+) {
     let vp = InfoViewport::new(buf_area.width, buf_area.height);
     let ir = geometry(popup, vp);
     let area = Rect {
@@ -99,8 +147,34 @@ pub fn render(frame: &mut Frame, popup: &InfoPopup, theme: &InfoPopupTheme, buf_
             frame.render_widget(para, inner);
         }
         ContentKind::Markdown => {
-            let events = parse(&popup.content);
-            let lines = to_lines(&events, &theme.md, inner.width);
+            // Cached: re-parse only when the content changes (the parse is
+            // width-independent), re-wrap only when content or width changes.
+            // Disjoint-field borrows let `events` (borrowed from
+            // `cache.parsed`) coexist with mutating `cache.wrapped`.
+            if cache
+                .parsed
+                .as_ref()
+                .is_none_or(|(c, _)| c != &popup.content)
+            {
+                cache.parsed = Some((popup.content.clone(), parse(&popup.content)));
+                cache.parses += 1;
+            }
+            let events: &[hjkl_markdown::Event] = &cache.parsed.as_ref().unwrap().1;
+
+            if cache
+                .wrapped
+                .as_ref()
+                .is_none_or(|(c, w, _)| c != &popup.content || *w != inner.width)
+            {
+                cache.wrapped = Some((
+                    popup.content.clone(),
+                    inner.width,
+                    to_lines(events, &theme.md, inner.width),
+                ));
+                cache.wraps += 1;
+            }
+            let lines: Vec<ratatui::text::Line<'static>> =
+                cache.wrapped.as_ref().unwrap().2.clone();
             let para = Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false });
             frame.render_widget(para, inner);
         }
@@ -184,6 +258,70 @@ mod tests {
         assert!(
             all_text.contains("Title"),
             "heading not found in: {all_text:?}"
+        );
+    }
+
+    #[test]
+    fn render_cache_counts_parse_and_wrap() {
+        use ratatui::{Terminal, backend::TestBackend};
+
+        let mut p = InfoPopup::markdown(
+            "info",
+            format!("# Title\n\nhello `code` {}", "longword ".repeat(12)),
+        );
+        let theme = InfoPopupTheme::default();
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let mut cache = InfoRenderCache::new();
+        let draw = |terminal: &mut Terminal<TestBackend>,
+                    cache: &mut InfoRenderCache,
+                    p: &InfoPopup,
+                    buf_area: Rect| {
+            terminal
+                .draw(|frame| render(frame, p, &theme, buf_area, cache))
+                .unwrap();
+        };
+
+        // 1. First draw parses and wraps exactly once.
+        draw(&mut terminal, &mut cache, &p, Rect::new(0, 0, 80, 24));
+        assert_eq!(
+            (cache.parses, cache.wraps),
+            (1, 1),
+            "first draw must parse and wrap once"
+        );
+
+        // 2. Repeat draw, unchanged popup + buf_area → both cache hits.
+        draw(&mut terminal, &mut cache, &p, Rect::new(0, 0, 80, 24));
+        assert_eq!(
+            (cache.parses, cache.wraps),
+            (1, 1),
+            "repeat draw must hit both caches"
+        );
+
+        // 3. Narrower buf_area → re-wrap only (the parse is width-independent).
+        draw(&mut terminal, &mut cache, &p, Rect::new(0, 0, 60, 24));
+        assert_eq!(cache.parses, 1, "width change must not re-parse");
+        assert_eq!(cache.wraps, 2, "width change must re-wrap");
+
+        // 4. New content → re-parse + re-wrap, and the buffer shows it.
+        p = InfoPopup::markdown(
+            "info",
+            format!("# New\n\nbye `code` {}", "different ".repeat(12)),
+        );
+        draw(&mut terminal, &mut cache, &p, Rect::new(0, 0, 80, 24));
+        assert_eq!(cache.parses, 2, "content change must re-parse");
+        assert_eq!(cache.wraps, 3, "content change must re-wrap");
+
+        let buf = terminal.backend().buffer().clone();
+        let all: String = buf.content().iter().map(|c| c.symbol()).collect();
+        assert!(
+            all.contains("New"),
+            "popup must show the new content: {all:?}"
+        );
+        assert!(
+            !all.contains("Title"),
+            "stale content must be gone from the buffer: {all:?}"
         );
     }
 }
