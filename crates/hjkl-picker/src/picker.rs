@@ -97,7 +97,7 @@ pub struct Picker {
     cancel: Arc<AtomicBool>,
     /// Background scan thread (when the source spawned one). Held for
     /// liveness only.
-    _scan: Option<JoinHandle<()>>,
+    scan: Option<JoinHandle<()>>,
     /// Debounce timestamp: fire requery when `Instant::now() >= requery_at`.
     requery_at: Option<Instant>,
     /// Index into the source whose preview is currently cached.
@@ -166,7 +166,7 @@ impl Picker {
             last_query: String::new(),
             last_seen_count: 0,
             cancel,
-            _scan: handle,
+            scan: handle,
             requery_at: None,
             preview_idx: None,
             preview_buffer: View::new(),
@@ -224,7 +224,7 @@ impl Picker {
 
     /// True once the background thread has finished (or none was started).
     pub fn scan_done(&self) -> bool {
-        self._scan.as_ref().is_none_or(|h| h.is_finished())
+        self.scan.as_ref().is_none_or(|h| h.is_finished())
     }
 
     /// Total candidate count (regardless of filter).
@@ -254,7 +254,7 @@ impl Picker {
         self.cancel = Arc::clone(&new_cancel);
         let q = self.query.text();
         let handle = self.source.enumerate(Some(&q), new_cancel);
-        self._scan = handle;
+        self.scan = handle;
         // `refresh()` already set `last_query = q` when it scheduled this
         // requery, so don't clear it here — clearing would make the next
         // refresh see q as "changed" again and re-schedule another spawn,
