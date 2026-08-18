@@ -477,19 +477,18 @@ fn fold_column_glyph(folds: &[hjkl_buffer::Fold], doc_row: usize) -> char {
 /// `.find()` for closed fold markers) — O(rows × F) per frame. This
 /// precomputes both queries once per frame:
 ///
-/// * `hidden_at` — the closed-fold interval union, merged into disjoint
-///   half-open `(start, end]` ranges, so "is this row hidden" is a single
-///   binary search. Merging (not just sorting) matters: nested folds would
-///   otherwise hide a row that a later, shorter interval no longer covers.
+/// * `hidden` — the closed-fold interval union from the shared
+///   `hjkl_buffer::FoldIndex`, merged into disjoint half-open `(start, end]`
+///   ranges, so "is this row hidden" is a single binary search. Merging (not
+///   just sorting) matters: nested folds would otherwise hide a row that a
+///   later, shorter interval no longer covers.
 /// * `marker_at` — closed folds sorted by `start_row` (stable, so equal
 ///   starts keep buffer order, matching the original `.find()`), giving the
 ///   first closed fold whose `start_row == row`.
 struct FoldIndex {
     /// Merged, disjoint half-open intervals `(start, end]` covering rows
-    /// hidden by at least one closed fold, sorted by `start`. A row `r` is
-    /// hidden iff `start < r <= end` for the interval with the greatest
-    /// `start <= r`.
-    hidden_ranges: Vec<(usize, usize)>,
+    /// hidden by at least one closed fold, sorted by `start`.
+    hidden: hjkl_buffer::FoldIndex,
     /// Closed folds sorted by `start_row`; stable sort keeps the buffer
     /// order among equal starts so `marker_at` matches
     /// `folds.iter().find(|f| f.closed && f.start_row == row)`.
@@ -498,33 +497,15 @@ struct FoldIndex {
 
 impl FoldIndex {
     fn new(folds: &[hjkl_buffer::Fold]) -> Self {
-        // Merge the closed folds' (start, end] intervals into a disjoint
-        // union. `hides` membership is "in the union", so a single binary
-        // search over the merged ranges is correct even with nesting.
-        let mut closed: Vec<(usize, usize)> = folds
-            .iter()
-            .filter(|f| f.closed)
-            .map(|f| (f.start_row, f.end_row))
-            .collect();
-        closed.sort_unstable_by_key(|&(s, _)| s);
-        let mut hidden_ranges: Vec<(usize, usize)> = Vec::with_capacity(closed.len());
-        for (s, e) in closed {
-            match hidden_ranges.last_mut() {
-                // Overlaps the previous interval (or abuts it exactly —
-                // `s == last_end` leaves no uncovered row between them) →
-                // extend. A gap needs `s > last_end`, e.g. (0,5] then (7,9]:
-                // row 6 is covered by neither, so they stay separate.
-                Some((_, last_end)) if s <= *last_end => {
-                    *last_end = (*last_end).max(e);
-                }
-                _ => hidden_ranges.push((s, e)),
-            }
-        }
-        let mut closed_by_start: Vec<hjkl_buffer::Fold> =
-            folds.iter().copied().filter(|f| f.closed).collect();
-        closed_by_start.sort_by_key(|f| f.start_row); // stable
+        // Pre-sort (stable) before handing off to the shared FoldIndex, which
+        // debug-asserts sorted input — the pre-sort preserves this crate's
+        // tolerance for unsorted host-supplied `folds_override`.
+        let mut sorted = folds.to_vec();
+        sorted.sort_by_key(|f| f.start_row);
+        let closed_by_start: Vec<hjkl_buffer::Fold> =
+            sorted.iter().copied().filter(|f| f.closed).collect();
         Self {
-            hidden_ranges,
+            hidden: hjkl_buffer::FoldIndex::new(&sorted),
             closed_by_start,
         }
     }
@@ -532,12 +513,7 @@ impl FoldIndex {
     /// True when `row` is hidden by a closed fold — the O(log F) twin of
     /// `folds.iter().any(|f| f.hides(row))`.
     fn hidden_at(&self, row: usize) -> bool {
-        let idx = self.hidden_ranges.partition_point(|&(s, _)| s <= row);
-        if idx == 0 {
-            return false;
-        }
-        let (s, e) = self.hidden_ranges[idx - 1];
-        row > s && row <= e
+        self.hidden.hides_row(row)
     }
     /// The first closed fold whose `start_row == row`, in buffer order —
     /// the O(log F) twin of
