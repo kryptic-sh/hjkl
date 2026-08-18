@@ -126,6 +126,9 @@ pub struct Completion {
     /// `all_items.len()` the cache was built for; a mismatch triggers a
     /// rebuild.
     lower_cache_len: usize,
+    /// Scratch buffer for the per-keystroke scoring pass — reused across
+    /// `set_prefix` calls instead of allocating a fresh Vec each keystroke.
+    scored_buf: Vec<(usize, i32)>,
 }
 
 impl Completion {
@@ -154,6 +157,7 @@ impl Completion {
             flipped: std::cell::Cell::new(false),
             lower_cache: Vec::new(),
             lower_cache_len: 0,
+            scored_buf: Vec::new(),
         }
     }
 
@@ -166,6 +170,15 @@ impl Completion {
     /// best match is auto-selected.
     pub fn set_prefix(&mut self, prefix: &str) {
         self.prefix = prefix.to_string();
+        // An empty needle matches everything with a neutral score (see
+        // `match_score_chars`), leaving the original index order — skip the
+        // match pass and sort entirely. This is the state a popup opens in.
+        if prefix.is_empty() {
+            self.visible.clear();
+            self.visible.extend(0..self.all_items.len());
+            self.selected = 0;
+            return;
+        }
         // Rebuild the per-item fold cache only when the item list changed;
         // the folds don't depend on the prefix, so every keystroke after the
         // first reuses them (see `lower_cache` docs).
@@ -187,16 +200,22 @@ impl Completion {
         }
         let needle = prefix.to_lowercase();
         let needle_chars: Vec<char> = needle.chars().collect();
-        let mut scored: Vec<(usize, i32)> = (0..self.all_items.len())
-            .filter_map(|idx| {
+        self.scored_buf.clear();
+        self.scored_buf
+            .extend((0..self.all_items.len()).filter_map(|idx| {
                 let (haystack, chars) = &self.lower_cache[idx];
                 match_score_chars(haystack, chars, &needle, &needle_chars).map(|score| (idx, score))
-            })
-            .collect();
+            }));
         // Higher score first; on a tie fall back to the original index so the
         // sort is stable and the server's preferred ordering is preserved.
-        scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        self.visible = scored.into_iter().map(|(idx, _)| idx).collect();
+        // The index tiebreak makes the comparator total (no two entries
+        // compare equal), so `sort_unstable_by` yields the identical
+        // permutation for less work than the stable sort.
+        self.scored_buf
+            .sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        self.visible.clear();
+        self.visible
+            .extend(self.scored_buf.iter().map(|(idx, _)| *idx));
         self.selected = 0;
     }
 
@@ -585,5 +604,25 @@ mod tests {
         assert_eq!(CompletionKind::Function.icon(), '\u{0192}');
         assert_eq!(CompletionKind::Snippet.icon(), '\u{25C6}');
         assert_eq!(CompletionKind::Other.icon(), '\u{00B7}');
+    }
+
+    /// The full per-prefix `visible` ORDER is pinned, not just the length —
+    /// a regression guard for the `sort_unstable_by` + scratch-buffer rewrite
+    /// of `set_prefix` (the score-desc / index-asc order must be identical).
+    #[test]
+    fn set_prefix_visible_order_is_pinned() {
+        let mut c = popup(&["apple", "banana", "cherry", "apricot", "avocado", "grape"]);
+        c.set_prefix("a");
+        assert_eq!(c.visible, vec![0, 3, 4, 1, 5]);
+        c.set_prefix("ap");
+        assert_eq!(c.visible, vec![0, 3, 5]);
+        c.set_prefix("APP");
+        assert_eq!(c.visible, vec![0]);
+        // After narrowing, an empty prefix restores the FULL original order
+        // (an empty needle matches everything with a neutral score) — this
+        // exercises the empty-prefix fast path.
+        c.set_prefix("");
+        assert_eq!(c.visible, vec![0, 1, 2, 3, 4, 5]);
+        assert_eq!(c.selected, 0);
     }
 }
