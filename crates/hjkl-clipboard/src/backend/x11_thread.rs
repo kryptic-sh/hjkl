@@ -447,8 +447,14 @@ fn run_loop(state: &mut X11State, rx: mpsc::Receiver<X11Request>) {
 enum DrainGoal {
     /// Just drain all pending events (normal run_loop pass).
     AnyEvent,
-    /// Looking for SELECTION_NOTIFY on our private get-property.
-    SelectionNotify { our_property: u32 },
+    /// Looking for SELECTION_NOTIFY on our private get-property. `expected_target`
+    /// is the atom the pending `xcb_convert_selection` asked for: every op reuses
+    /// the same `hjkl_clipboard_get` property, so without it a stale notify from
+    /// a timed-out `SAVE_TARGETS` is consumed by the next `do_get`.
+    SelectionNotify {
+        our_property: u32,
+        expected_target: u32,
+    },
     /// Looking for PROPERTY_NOTIFY (new value) on our private get-property.
     PropertyNotify { our_property: u32, our_window: u32 },
     /// INCR start (self-loop): wait for the PROPERTY_DELETE on our get-property
@@ -508,8 +514,12 @@ fn drain_events(state: &mut X11State, goal: DrainGoal) -> DrainResult {
                 // SAFETY: ev is a valid SelectionNotify event (32 bytes).
                 let notify = unsafe { *(ev as *const SelectionNotifyEvent) };
                 match &goal {
-                    DrainGoal::SelectionNotify { our_property }
-                        if notify.requestor == state.window && notify.property == *our_property =>
+                    DrainGoal::SelectionNotify {
+                        our_property,
+                        expected_target,
+                    } if notify.requestor == state.window
+                        && notify.target == *expected_target
+                        && notify.property == *our_property =>
                     {
                         // SAFETY: ev was heap-allocated by xcb (via malloc); free it.
                         unsafe { libc::free(ev.cast()) };
@@ -517,7 +527,9 @@ fn drain_events(state: &mut X11State, goal: DrainGoal) -> DrainResult {
                             property: notify.property,
                         };
                     }
-                    DrainGoal::SelectionNotify { .. } if notify.requestor == state.window => {
+                    DrainGoal::SelectionNotify {
+                        expected_target, ..
+                    } if notify.requestor == state.window && notify.target == *expected_target => {
                         // Refusal: owner set property = XCB_NONE.
                         // SAFETY: ev was heap-allocated by xcb.
                         unsafe { libc::free(ev.cast()) };
@@ -1087,6 +1099,7 @@ fn do_save_targets(state: &mut X11State) {
         .unwrap_or_default();
 
     let our_property = atoms.hjkl_clipboard_get;
+    let save_targets = atoms.save_targets;
 
     // SAFETY: owned_atoms is valid for owned_atoms.len() u32 values;
     // format=32 (atom list).
@@ -1123,9 +1136,13 @@ fn do_save_targets(state: &mut X11State) {
     // does the actual data copy in the background after that.
     let deadline = Instant::now() + Duration::from_secs(SAVE_TARGETS_TIMEOUT_SECS);
     loop {
-        if let DrainResult::SelectionNotifySeen { .. } =
-            drain_events(state, DrainGoal::SelectionNotify { our_property })
-        {
+        if let DrainResult::SelectionNotifySeen { .. } = drain_events(
+            state,
+            DrainGoal::SelectionNotify {
+                our_property,
+                expected_target: save_targets,
+            },
+        ) {
             // Manager accepted (or refused with NONE) — either way we are done.
             break;
         }
@@ -1288,9 +1305,13 @@ fn do_get(state: &mut X11State, sel_atom: u32, mime_atom: u32) -> Result<Vec<u8>
     // arrive while we wait (needed for self-reads where we own the selection).
     let deadline = Instant::now() + Duration::from_secs(SELECTION_NOTIFY_TIMEOUT_SECS);
     let replied_property = loop {
-        if let DrainResult::SelectionNotifySeen { property } =
-            drain_events(state, DrainGoal::SelectionNotify { our_property })
-        {
+        if let DrainResult::SelectionNotifySeen { property } = drain_events(
+            state,
+            DrainGoal::SelectionNotify {
+                our_property,
+                expected_target: mime_atom,
+            },
+        ) {
             break property;
         }
         if Instant::now() >= deadline {
