@@ -2534,3 +2534,146 @@ destroy documentation).
 `hjkl-engine/src/editor.rs` beyond sampled regions, clipboard x11/wayland/
 windows backends, the small TUI crates beyond sampled render paths. Duplicated
 logic could exist inside those unread regions.
+
+## 16. 2026-08-18 perf pass — whole workspace
+
+Scope: clean tree, whole workspace. All seven findings re-verified against the
+code (the top three and the two new ones traced end-to-end by the orchestrator).
+The 2026-08-10 pass's four findings are all verifiably fixed in-tree (picker
+`visible_rows`/`select_nth_unstable` at `hjkl-picker/src/picker.rs:378,552`;
+`:s` O(range) splice at `hjkl-engine/src/substitute.rs:359,427`; FoldIndex at
+`hjkl-buffer/src/folds.rs:129` + `hjkl-engine/src/buffer_impl.rs:589`) — not
+re-reported.
+
+### Findings — ranked by impact
+
+1. **Buffer-word completion harvest re-scans every open buffer per identifier
+   trigger and per LSP response** (`apps/hjkl/src/app/lsp_glue.rs:1662-1708`).
+   `buffer_word_items` iterates `rope.chars()` over up to `MAX_SCAN_BYTES`
+   (1_000_000) bytes of EVERY open buffer, tokenizing identifiers, inserting a
+   `String` clone into a `HashSet` per unique word, and building up to 2000
+   `CompletionItem::new(word.clone())` — ~4k allocs worst case per call.
+   Callers, both hot: `open_buffer_word_completion` (`:1610-1627`) runs
+   synchronously on every identifier keystroke when no popup is open (reached
+   per insert-mode char via `maybe_auto_trigger_completion` `:1596-1597`), and
+   `handle_completion_response` re-runs it on every LSP response (`:2552-2558`)
+   — and auto-completion fires a new request per identifier keystroke while none
+   is pending. Fix: cache harvested items keyed by the buffers' `dirty_gen`s
+   (rebuild only when an open buffer changed). Trade: memory for the word set
+   per buffer; bounded at 2000 items.
+
+2. **Ex-prompt: per-keystroke registry rebuild + per-keystroke `read_dir`**
+   (`apps/hjkl/src/app/prompt.rs:209-210, 257-287`;
+   `crates/hjkl-ex/src/lib.rs:251-255`;
+   `crates/hjkl-ex/src/complete.rs: 325-369`). `refresh_command_completion` runs
+   after every text-changing key of the `:` prompt (`prompt.rs:709`). Per
+   keystroke: `default_registry:: <TuiHost>()` (`prompt.rs:210`) rebuilds the
+   editor registry from scratch — 122 `reg.add` pushes — plus
+   `collect_registry_names` clones every name + alias (~160 String allocs,
+   `complete.rs:160-177`) and `complete_command_meta` sorts/dedups twice
+   (`complete.rs:439-448`). `host_registry()` is already a `LazyLock` static
+   (`ex_host_cmds.rs: 1626-1630`); the editor registry should be the same. Once
+   the caret passes the command token of a Path/Directory command (`:e `, `:w `,
+   `:split `…), `complete_arg` → `complete_path_entries` issues
+   `std::fs::read_dir` of the directory plus a `String` alloc per entry and a
+   full sort — a per-keystroke syscall+alloc storm while typing a path. Fixes: a
+   cached `EDITOR_REGISTRY` LazyLock + cached sorted name list; cache the
+   directory listing keyed by `(dir, mtime)` or debounce. Trade for the listing:
+   stale window, needs the mtime check.
+
+3. **Hover popup re-parses its markdown on every repaint**
+   (`crates/hjkl-hover-tui/src/lib.rs:96-97`, drawn from
+   `apps/hjkl/src/render.rs:2183` whenever `app.hover_popup` is `Some`). Each
+   draw runs `parse(&state.content)` (full tokenizer) and `to_lines(...)`
+   (allocates an owned `Line`/`Span` per line per frame);
+   `hjkl_hover:: position` also re-walks every content line for width every
+   frame (`crates/hjkl-hover/src/lib.rs:175-179`). Content is static between
+   hover responses; only repaints while the mouse is idle, but every keystroke
+   before dismissal and every time-animated repaint (LSP spinner/toast/blame
+   ghost windows, `event_loop.rs:483-496`) while it's up pays a full parse of a
+   multi-KB doc. Fix: cache the parsed `Vec<Event>` in `HoverState` keyed on
+   content (parse is width-independent); re-wrap in `to_lines` only when
+   `inner.width` changed. Same pattern in the info popup
+   (`hjkl-info-popup-tui/src/lib.rs:102`).
+
+4. **Completion `set_prefix` full re-sort per keystroke**
+   (`crates/hjkl-completion/src/lib.rs:190-199`). Per keystroke while the popup
+   is open (`event_loop.rs:1252`; `prompt.rs:246` for `:`): builds a fresh
+   `scored: Vec<(usize, i32)>` over all M candidates, a full `sort_by` (O(M log
+   M), `:198`), and a second M-sized `visible` collect (`:199`). The O(M × h)
+   subsequence match (`:308-326`) is inherent; the sort is not. M ≤ 2000
+   (buffer-words cap). Fix: the picker already solved this — bounded
+   `select_nth_unstable`/partial sort for the ~10 visible rows
+   (`hjkl-picker/src/picker.rs:368-381`) — and reuse one scratch Vec. Real but
+   modest (~tens of μs at M=2000).
+
+5. **Sneak/sentence motions allocate 2× per scanned row**
+   (`crates/hjkl-vim/src/vim/sneak.rs:48-76, 79-116`;
+   `crates/hjkl-vim/src/vim/text_object.rs:133-180, 189-235`).
+   `sneak_scan_forward/backward` scan from the cursor to end/start of buffer per
+   invocation (`;`/`,` repeats re-scan per keystroke via `motion.rs:87-94`), and
+   per row allocate a `String` via `buf_line` (`sneak.rs:59, 92`) AND a
+   `Vec<char>` via `chars().collect()` (`:60, 93`) — 2 allocs × every row
+   scanned. Sentence motions stop at the next boundary (typically a row or two;
+   worst case whole buffer) but allocate a `Vec<char>` per row visited. Fix:
+   iterate the rope once via borrowed `viewport_math::rope_line_slice` + a
+   `chars()` iterator (the exact pattern `buf_line_chars` documents at
+   `hjkl-engine/src/buf_helpers.rs:85-92`), eliminating the per-row String and
+   Vec. Scan length is inherent; the allocation pattern is not.
+
+6. **NEW — Explorer git-status map rebuilt over the whole tree every frame**
+   (`apps/hjkl/src/render.rs:1410-1415`). While the explorer pane is visible,
+   every frame rebuilds `HashMap<&Path, ExplorerGit>` by iterating all
+   `pane.tree.nodes`, even though the tree only changes on git reconcile. The
+   sibling `overlay_nodes` parse is correctly cached per `dirty_gen`
+   (`render.rs:801-818`) but this map was left outside the cache. N = expanded
+   tree nodes (can be thousands in an expanded repo; per-keystroke frames while
+   explorer is open). Fix: build the map once per reconcile (store on the
+   pane/tree) or fold into the `ExplorerRenderCache` key. Trade: a hashmap copy
+   held per tree revision.
+
+7. **NEW — per-cell span sort in `paint_row`**
+   (`crates/hjkl-buffer-tui/src/render.rs:1830-1860`, called per cell at
+   `:1618`, `:1559`). `resolve_span_style` filters AND sorts the row's spans
+   (broadest-first, `:1847`) for every cell of every visible row every frame —
+   O(C × S log S) per row, where the sort result only changes when `byte_offset`
+   crosses a span boundary. Fine for typical code rows (S ≤ ~10); noticeable on
+   heavily nested rows (markdown/HTML fences, S can be 50+, across ~80 cells ×
+   ~50 rows). Fix: pre-sort the row's span list once per row, then filter in
+   that order per cell. Lowest impact — verify with profiling before
+   prioritizing; the scratch Vec already avoids the allocation, only the
+   per-cell sort remains.
+
+### Coverage
+
+Traced in depth: insert-mode per-keystroke path (`event_loop.rs:1100-1310`,
+`sync_after_engine_mutation` `app/mod.rs:1830-1906`, dirty/signature caching
+`app/types.rs:589-621`, LSP didChange `lsp_glue.rs:583-661`); completion
+harvest + merge + popup wiring (`lsp_glue.rs:1560-1728, 2501-2588`,
+`completion/src/lib.rs:145-343`, completion-tui); ex prompt + registry +
+`complete*` (`prompt.rs:100-288`, `ex/src/lib.rs:251-255`, `builtins.rs:1515+`,
+`complete.rs:160-177, 325-369, 414-589, 732-840`); hover render + lifecycle
+(hover-tui/lib.rs:75-112, hover/lib.rs:112-179, render.rs:2176-2184, dismissal +
+timer event_loop.rs:678-683, 1884-1909); sentence/sneak motions
+(`text_object.rs:75-235, 420-494`, `sneak.rs:21-116`, `motion.rs:79-104`);
+per-frame render (render_window + BufferView buffer-tui/render.rs:562-960,
+FoldIndex `:487-550`, signs `:556-560`, per-row search cache `:1245-1288` +
+engine/search.rs:467-537, paint_row + span resolution `:1470-1860`, explorer
+overlay render.rs:1330-1470, statusline `:2438-2705`); syntax pipeline
+(`syntax/src/lib.rs:806-1005, 1114-1160`, bonsai/highlighter.rs:620-760);
+folds/marks rebase (`buffer_impl.rs:558-635`, `buffer.rs:802-824`,
+`editor.rs:2610-2830`); event-loop draw gating + polls
+(`event_loop.rs:2020-2239`).
+
+**GAP — not traced:** hjkl-lsp crate internals (framing/reader thread),
+hjkl-fs-watch, hjkl-clipboard, hjkl-kitty, hjkl-anvil, hjkl-mangler, hjkl-form,
+hjkl-tabs, hjkl-statusline crate, hjkl-theme/css, most of hjkl-buffer-tui's
+remaining ~4000 lines (wrap_segments, blame plan), hjkl-bonsai query/predicate
+machinery, hjkl-ex shell/expand/global/parse internals, hjkl-vim
+operator/insert-bridge internals.
+
+Needs profiling to settle: actual per-cell span-sort cost on syntax-heavy rows
+(#7); `read_dir` cost with a real huge directory (#2b); `set_prefix` at M=2000
+(#4); incremental tree-sitter reparse on very large files (carried over from the
+2026-08-10 pass, still unresolved); whether the hover popup's repaint bursts
+make #3's parse visible in practice.
