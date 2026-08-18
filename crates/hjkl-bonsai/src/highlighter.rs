@@ -2040,10 +2040,7 @@ fn collect_parse_errors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{
-        GrammarCompiler, GrammarLoader, LangSpec, ManifestMeta, QuerySource, QuerySourceCache,
-        SourceCache,
-    };
+    use crate::runtime::{GrammarCompiler, GrammarLoader, QuerySourceCache, SourceCache};
 
     fn span(start: usize, end: usize, capture: &str) -> HighlightSpan {
         HighlightSpan {
@@ -2155,22 +2152,8 @@ mod tests {
             query_sources,
             GrammarCompiler::new(),
         );
-        let meta = ManifestMeta {
-            helix_repo: "https://github.com/helix-editor/helix".into(),
-            helix_rev: "87d5c05c4432a079d3b7aaa10cda1cfe1803c18c".into(),
-            nvim_treesitter_repo: "https://github.com/nvim-treesitter/nvim-treesitter".into(),
-            nvim_treesitter_rev: "cf12346a3414fa1b06af75c79faebe7f76df080a".into(),
-        };
-        let spec = LangSpec {
-            git_url: "https://github.com/tree-sitter/tree-sitter-c".into(),
-            git_rev: "2a265d69a4caf57108a73ad2ed1e6922dd2f998c".into(),
-            subpath: None,
-            extensions: vec!["c".into()],
-            c_files: vec!["src/parser.c".into()],
-            query_source: QuerySource::Helix,
-            query_subdir: None,
-            source: None,
-        };
+        let meta = crate::test_support::pinned_manifest_meta();
+        let spec = crate::test_support::c_lang_spec();
 
         let g = Grammar::load("c", &spec, &loader, &meta).unwrap();
         (Arc::new(g), tmp)

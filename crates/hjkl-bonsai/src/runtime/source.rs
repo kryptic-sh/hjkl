@@ -896,16 +896,7 @@ mod tests {
     fn acquire_clones_real_repo() {
         let tmp = tempfile::tempdir().unwrap();
         let cache = SourceCache::new(tmp.path().to_path_buf());
-        let spec = LangSpec {
-            git_url: "https://github.com/tree-sitter/tree-sitter-c".into(),
-            git_rev: "2a265d69a4caf57108a73ad2ed1e6922dd2f998c".into(),
-            subpath: None,
-            extensions: vec!["c".into()],
-            c_files: vec!["src/parser.c".into()],
-            query_source: QuerySource::Helix,
-            query_subdir: None,
-            source: None,
-        };
+        let spec = crate::test_support::c_lang_spec();
         let root = cache.acquire("c", &spec).unwrap();
         assert!(root.join("src/parser.c").is_file());
         let root2 = cache.acquire("c", &spec).unwrap();

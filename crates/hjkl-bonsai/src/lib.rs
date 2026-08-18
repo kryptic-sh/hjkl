@@ -74,6 +74,8 @@ pub mod query_sanitize;
 pub mod rainbow;
 mod rope_slice;
 pub mod runtime;
+#[cfg(test)]
+mod test_support;
 pub mod theme;
 
 // Flat re-exports for the primary public API surface.

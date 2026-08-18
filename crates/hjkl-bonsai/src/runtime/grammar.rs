@@ -274,7 +274,6 @@ mod tests {
     #[ignore = "network + compiler: clones tree-sitter-c + helix queries, builds, installs, dlopens"]
     fn load_real_grammar_end_to_end() {
         use super::super::compile::GrammarCompiler;
-        use super::super::manifest::{ManifestMeta, QuerySource};
         use super::super::source::{QuerySourceCache, SourceCache};
 
         let tmp = tempfile::tempdir().unwrap();
@@ -289,22 +288,8 @@ mod tests {
             GrammarCompiler::new(),
         );
 
-        let meta = ManifestMeta {
-            helix_repo: "https://github.com/helix-editor/helix".into(),
-            helix_rev: "87d5c05c4432a079d3b7aaa10cda1cfe1803c18c".into(),
-            nvim_treesitter_repo: "https://github.com/nvim-treesitter/nvim-treesitter".into(),
-            nvim_treesitter_rev: "cf12346a3414fa1b06af75c79faebe7f76df080a".into(),
-        };
-        let spec = LangSpec {
-            git_url: "https://github.com/tree-sitter/tree-sitter-c".into(),
-            git_rev: "2a265d69a4caf57108a73ad2ed1e6922dd2f998c".into(),
-            subpath: None,
-            extensions: vec!["c".into()],
-            c_files: vec!["src/parser.c".into()],
-            query_source: QuerySource::Helix,
-            query_subdir: None,
-            source: None,
-        };
+        let meta = crate::test_support::pinned_manifest_meta();
+        let spec = crate::test_support::c_lang_spec();
 
         let grammar = Grammar::load("c", &spec, &loader, &meta).unwrap();
         assert_eq!(grammar.name(), "c");

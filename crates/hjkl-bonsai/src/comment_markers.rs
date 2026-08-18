@@ -753,7 +753,7 @@ fn ceil_char_boundary_bytes(bytes: &[u8], byte_idx: usize) -> usize {
 mod tests {
     use super::*;
     use crate::Highlighter;
-    use crate::runtime::{Grammar, GrammarLoader, LangSpec, ManifestMeta, QuerySource};
+    use crate::runtime::{Grammar, GrammarLoader, LangSpec, QuerySource};
     use std::sync::{Arc, OnceLock};
 
     /// Tree-sitter-rust pinned rev for tests; matches what `bonsai.toml` ships.
@@ -766,12 +766,7 @@ mod tests {
     fn rust_grammar() -> Arc<Grammar> {
         static G: OnceLock<Arc<Grammar>> = OnceLock::new();
         G.get_or_init(|| {
-            let meta = ManifestMeta {
-                helix_repo: "https://github.com/helix-editor/helix".into(),
-                helix_rev: "87d5c05c4432a079d3b7aaa10cda1cfe1803c18c".into(),
-                nvim_treesitter_repo: "https://github.com/nvim-treesitter/nvim-treesitter".into(),
-                nvim_treesitter_rev: "cf12346a3414fa1b06af75c79faebe7f76df080a".into(),
-            };
+            let meta = crate::test_support::pinned_manifest_meta();
             let loader = GrammarLoader::user_default(&meta).expect("XDG paths");
             let spec = LangSpec {
                 git_url: RUST_GIT.into(),
