@@ -68,10 +68,16 @@ impl LanguageDirectory {
     pub fn detect(&self, path: &Path, content: &str, opts: &DetectOptions) -> Option<String> {
         // 1–2. Infer from basename before extension, but let an explicit
         // modeline override either result.
-        let basename = path.file_name()?.to_str()?;
-        let inferred = known_filename_language(basename)
+        let path = path.to_str()?.replace('\\', "/");
+        let basename = path.rsplit('/').next()?;
+        let inferred = known_path_language(&path)
+            .or_else(|| known_filename_language(basename))
             .map(str::to_owned)
-            .or_else(|| self.registry.name_for_path(path).map(str::to_owned));
+            .or_else(|| {
+                self.registry
+                    .name_for_path(Path::new(&path))
+                    .map(str::to_owned)
+            });
         // 3. Modeline `ft=` / `filetype=` — an explicit author-stated type
         // outranks every inferred type and a shebang, matching Neovim.
         if opts.modeline
@@ -92,7 +98,193 @@ impl LanguageDirectory {
     }
 }
 
-// ── Known basenames ───────────────────────────────────────────────────────────
+// ── Known filenames ───────────────────────────────────────────────────────────
+
+// Literal `filename` entries from Neovim 0.12.4 whose target exactly names an
+// installed hjkl grammar. Keep this data separate from hjkl's intentional
+// fallbacks below; it can be mechanically compared with Neovim on upgrades.
+const NVIM_LITERAL_BASENAMES: &[(&str, &str)] = &[
+    ("init.trans", "clojure"),
+    (".trans", "clojure"),
+    ("CMakeLists.txt", "cmake"),
+    (".cling_history", "cpp"),
+    ("Containerfile", "dockerfile"),
+    ("dockerfile", "dockerfile"),
+    ("Dockerfile", "dockerfile"),
+    ("Earthfile", "earthfile"),
+    (".editorconfig", "editorconfig"),
+    ("rebar.config", "erlang"),
+    ("mix.lock", "elixir"),
+    ("fennelrc", "fennel"),
+    (".fennelrc", "fennel"),
+    ("TAG_EDITMSG", "gitcommit"),
+    ("MERGE_MSG", "gitcommit"),
+    ("COMMIT_EDITMSG", "gitcommit"),
+    ("NOTES_EDITMSG", "gitcommit"),
+    ("EDIT_DESCRIPTION", "gitcommit"),
+    (".gitattributes", "gitattributes"),
+    (".gitignore", "gitignore"),
+    (".ignore", "gitignore"),
+    (".containerignore", "gitignore"),
+    (".dockerignore", "gitignore"),
+    (".fdignore", "gitignore"),
+    (".npmignore", "gitignore"),
+    (".rgignore", "gitignore"),
+    (".vscodeignore", "gitignore"),
+    (".gnuplot_history", "gnuplot"),
+    ("go.sum", "gosum"),
+    ("go.work.sum", "gosum"),
+    ("go.work", "gowork"),
+    ("Jenkinsfile", "groovy"),
+    (".hy-history", "hy"),
+    ("hyprland.conf", "hyprlang"),
+    ("hyprpaper.conf", "hyprlang"),
+    ("hypridle.conf", "hyprlang"),
+    ("hyprlock.conf", "hyprlang"),
+    (".bun_repl_history", "javascript"),
+    (".node_repl_history", "javascript"),
+    ("deno_history.txt", "javascript"),
+    ("Pipfile.lock", "json"),
+    (".firebaserc", "json"),
+    (".prettierrc", "json"),
+    (".stylelintrc", "json"),
+    (".lintstagedrc", "json"),
+    ("deno.lock", "json"),
+    ("flake.lock", "json"),
+    (".swcrc", "json"),
+    ("composer.lock", "json"),
+    ("symfony.lock", "json"),
+    (".babelrc", "jsonc"),
+    (".eslintrc", "jsonc"),
+    (".hintrc", "jsonc"),
+    (".jscsrc", "jsonc"),
+    (".jsfmtrc", "jsonc"),
+    (".jshintrc", "jsonc"),
+    (".luaurc", "jsonc"),
+    (".swrc", "jsonc"),
+    (".vsconfig", "jsonc"),
+    ("bun.lock", "jsonc"),
+    (".justfile", "just"),
+    (".Justfile", "just"),
+    (".JUSTFILE", "just"),
+    ("justfile", "just"),
+    ("Justfile", "just"),
+    ("JUSTFILE", "just"),
+    ("Kconfig", "kconfig"),
+    ("Kconfig.debug", "kconfig"),
+    ("Config.in", "kconfig"),
+    (".busted", "lua"),
+    (".luacheckrc", "lua"),
+    (".lua_history", "lua"),
+    ("config.ld", "lua"),
+    ("rock_manifest", "lua"),
+    (".followup", "mail"),
+    (".article", "mail"),
+    (".letter", "mail"),
+    ("Kbuild", "make"),
+    ("meson.build", "meson"),
+    ("meson.options", "meson"),
+    ("meson_options.txt", "meson"),
+    ("Muttngrc", "muttrc"),
+    ("Muttrc", "muttrc"),
+    (".ocamlinit", "ocaml"),
+    (".gitolite.rc", "perl"),
+    ("gitolite.rc", "perl"),
+    ("example.gitolite.rc", "perl"),
+    ("latexmkrc", "perl"),
+    (".latexmkrc", "perl"),
+    ("MANIFEST.in", "pymanifest"),
+    (".pythonstartup", "python"),
+    (".pythonrc", "python"),
+    (".python_history", "python"),
+    (".jline-jython.history", "python"),
+    ("SConstruct", "python"),
+    ("qmldir", "qmldir"),
+    (".Rhistory", "r"),
+    (".Rprofile", "r"),
+    ("Rprofile", "r"),
+    ("Rprofile.site", "r"),
+    ("inputrc", "readline"),
+    (".inputrc", "readline"),
+    ("requirements.txt", "requirements"),
+    ("constraints.txt", "requirements"),
+    ("requirements.in", "requirements"),
+    ("robots.txt", "robots"),
+    ("Brewfile", "ruby"),
+    ("Gemfile", "ruby"),
+    ("Puppetfile", "ruby"),
+    (".irbrc", "ruby"),
+    ("irbrc", "ruby"),
+    (".irb_history", "ruby"),
+    ("irb_history", "ruby"),
+    ("rakefile", "ruby"),
+    ("Rakefile", "ruby"),
+    ("rantfile", "ruby"),
+    ("Rantfile", "ruby"),
+    ("Vagrantfile", "ruby"),
+    (".lips_repl_history", "scheme"),
+    (".guile", "scheme"),
+    ("Snakefile", "snakemake"),
+    (".sqlite_history", "sql"),
+    (".tclshrc", "tcl"),
+    (".wishrc", "tcl"),
+    (".tclsh-history", "tcl"),
+    ("tclsh.rc", "tcl"),
+    (".xsctcmdhistory", "tcl"),
+    (".xsdbcmdhistory", "tcl"),
+    (".tmux.conf", "tmux"),
+    ("Cargo.lock", "toml"),
+    ("Pipfile", "toml"),
+    ("Gopkg.lock", "toml"),
+    ("uv.lock", "toml"),
+    (".black", "toml"),
+    (".ts_node_repl_history", "typescript"),
+    (".exrc", "vim"),
+    ("_exrc", "vim"),
+    (".netrwhist", "vim"),
+    (".XCompose", "xcompose"),
+    ("Compose", "xcompose"),
+    ("fglrxrc", "xml"),
+    ("fonts.conf", "xml"),
+    ("Directory.Packages.props", "xml"),
+    ("Directory.Build.props", "xml"),
+    ("Directory.Build.targets", "xml"),
+    (".clangd", "yaml"),
+    (".clang-format", "yaml"),
+    (".clang-tidy", "yaml"),
+    ("pixi.lock", "yaml"),
+    ("yarn.lock", "yaml"),
+    ("matplotlibrc", "yaml"),
+    (".condarc", "yaml"),
+    ("condarc", "yaml"),
+    (".mambarc", "yaml"),
+    ("mambarc", "yaml"),
+    ("zathurarc", "zathurarc"),
+];
+
+const NVIM_LITERAL_PATHS: &[(&str, &str)] = &[
+    ("/.gnupg/gpg.conf", "gpg"),
+    ("/.gnupg/options", "gpg"),
+    ("/var/backups/passwd.bak", "passwd"),
+    ("/var/backups/shadow.bak", "passwd"),
+    ("/etc/passwd", "passwd"),
+    ("/etc/passwd-", "passwd"),
+    ("/etc/shadow.edit", "passwd"),
+    ("/etc/shadow-", "passwd"),
+    ("/etc/shadow", "passwd"),
+    ("/etc/passwd.edit", "passwd"),
+    ("/.cargo/config", "toml"),
+    ("/.cargo/credentials", "toml"),
+    ("/etc/blkid.tab", "xml"),
+    ("/etc/blkid.tab.old", "xml"),
+];
+
+/// Map a normalized full path to Neovim's path-specific literal mappings.
+fn known_path_language(path: &str) -> Option<&'static str> {
+    NVIM_LITERAL_PATHS
+        .iter()
+        .find_map(|&(candidate, language)| (path == candidate).then_some(language))
+}
 
 /// Map a file's basename to a language name, for files whose *name* (not
 /// extension) is the type signal. Mirrors the classic vim `filetype.vim`
@@ -102,6 +294,13 @@ impl LanguageDirectory {
 /// Matches are case-sensitive (as in vim: `Dockerfile` ≠ `dockerfile`), with
 /// the `Dockerfile.*` / `Containerfile.*` prefix forms handled separately.
 pub fn known_filename_language(basename: &str) -> Option<&'static str> {
+    if let Some(language) = NVIM_LITERAL_BASENAMES
+        .iter()
+        .find_map(|&(candidate, language)| (basename == candidate).then_some(language))
+    {
+        return Some(language);
+    }
+
     // `Dockerfile.dev`, `Containerfile.fedora` — the suffix is the variant
     // name, not a type signal.
     if basename.starts_with("Dockerfile.") || basename.starts_with("Containerfile.") {
@@ -203,10 +402,17 @@ fn interpreter_language_exact(name: &str) -> Option<&'static str> {
         // No separate `sh`/`zsh`/`ksh`/`dash` grammar — bash is the
         // superset, and tree-sitter-bash handles their common syntax.
         "sh" | "bash" | "dash" | "ksh" | "zsh" => "bash",
+        "just" => "just",
+        "fennel" => "fennel",
+        "gnuplot" => "gnuplot",
+        "janet" => "janet",
+        "gforth" => "forth",
+        "haskell" | "runghc" | "runhaskell" | "ghc" | "stack" => "haskell",
+        "scheme" | "guile" => "scheme",
         "python" | "python2" | "python3" | "pypy" | "pypy3" => "python",
         "perl" => "perl",
         "ruby" => "ruby",
-        "node" | "nodejs" | "bun" => "javascript",
+        "node" | "nodejs" | "bun" | "js" | "rhino" => "javascript",
         "deno" => "typescript",
         "lua" | "luajit" => "lua",
         "php" => "php",
@@ -214,9 +420,9 @@ fn interpreter_language_exact(name: &str) -> Option<&'static str> {
         "julia" => "julia",
         "elixir" => "elixir",
         "escript" | "erl" => "erlang",
-        "runghc" | "runhaskell" | "ghc" | "stack" => "haskell",
         "ocaml" => "ocaml",
-        "tclsh" | "wish" => "tcl",
+        "tclsh" | "wish" | "expectk" | "itclsh" | "itkwish" => "tcl",
+        "instantfpc" => "pascal",
         "awk" | "gawk" | "nawk" | "mawk" => "awk",
         "gjs" => "gjs",
         "groovy" => "groovy",
@@ -226,7 +432,6 @@ fn interpreter_language_exact(name: &str) -> Option<&'static str> {
         "nu" => "nu",
         "vim" => "vim",
         "sbcl" | "clisp" => "commonlisp",
-        "guile" => "scheme",
         "racket" => "racket",
         "clojure" => "clojure",
         "crystal" => "crystal",
@@ -417,6 +622,46 @@ mod tests {
     }
 
     #[test]
+    fn nvim_literal_filename_mappings_resolve() {
+        for &(name, want) in NVIM_LITERAL_BASENAMES {
+            assert_eq!(
+                detect(name, "", &DetectOptions::default()),
+                Some(want.to_string()),
+                "basename {name:?} should detect as {want}",
+            );
+        }
+        for &(path, want) in NVIM_LITERAL_PATHS {
+            assert_eq!(
+                detect(path, "", &DetectOptions::default()),
+                Some(want.to_string()),
+                "path {path:?} should detect as {want}",
+            );
+            let windows_separators = path.replace('/', "\\");
+            assert_eq!(
+                detect(&windows_separators, "", &DetectOptions::default()),
+                Some(want.to_string()),
+                "path {windows_separators:?} should detect as {want}",
+            );
+        }
+    }
+
+    #[test]
+    fn nvim_literal_filename_precedence_is_specific() {
+        assert_eq!(
+            detect("meson.build", "", &DetectOptions::default()),
+            Some("meson".into()),
+        );
+        assert_eq!(
+            detect("/etc/blkid.tab", "", &DetectOptions::default()),
+            Some("xml".into()),
+        );
+        assert_eq!(
+            detect("elsewhere/passwd", "", &DetectOptions::default()),
+            None,
+        );
+    }
+
+    #[test]
     fn dockerfile_prefix_forms_resolve() {
         assert_eq!(
             detect("Dockerfile.prod", "", &DetectOptions::default()),
@@ -434,7 +679,10 @@ mod tests {
             detect("makefile", "", &DetectOptions::default()),
             Some("make".into())
         );
-        assert_eq!(detect("dockerfile", "", &DetectOptions::default()), None);
+        assert_eq!(
+            detect("dockerfile", "", &DetectOptions::default()),
+            Some("dockerfile".into())
+        );
     }
 
     #[test]
@@ -461,6 +709,38 @@ mod tests {
     }
 
     // ── Shebangs ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn nvim_hashbang_aliases_resolve() {
+        for (interpreter, want) in [
+            ("just", "just"),
+            ("fennel", "fennel"),
+            ("gnuplot", "gnuplot"),
+            ("janet", "janet"),
+            ("gforth", "forth"),
+            ("haskell", "haskell"),
+            ("scheme", "scheme"),
+            ("js", "javascript"),
+            ("rhino", "javascript"),
+            ("expectk", "tcl"),
+            ("itclsh", "tcl"),
+            ("itkwish", "tcl"),
+            ("instantfpc", "pascal"),
+        ] {
+            assert_eq!(
+                shebang_language(&format!("#!/usr/bin/{interpreter}")),
+                Some(want),
+                "direct {interpreter}",
+            );
+            assert_eq!(
+                shebang_language(&format!("#!/usr/bin/env -S {interpreter} --flag")),
+                Some(want),
+                "env {interpreter}",
+            );
+        }
+        assert_eq!(shebang_language("#!/usr/bin/env expectk8.6"), Some("tcl"));
+        assert_eq!(shebang_language("#!/usr/bin/instantfpc3.2"), Some("pascal"));
+    }
 
     #[test]
     fn shebang_direct_path() {
