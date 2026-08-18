@@ -2773,7 +2773,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         if delta != 0 {
             self.shift_marks_after_edit(pre_row, delta);
         }
-        self.push_buffer_content_to_textarea();
         self.mark_content_dirty();
         inverse
     }
@@ -2843,15 +2842,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         shift_jumps(&mut self.jump_back);
         shift_jumps(&mut self.jump_fwd);
     }
-
-    /// Reverse-sync helper paired with [`Editor::mutate_edit`]: rebuild
-    /// the textarea from the buffer's lines + cursor, preserving yank
-    /// text. Heavy (allocates a fresh `TextArea`) but correct; the
-    /// textarea field disappears at the end of Phase 7f anyway.
-    /// No-op since View is the content authority. Retained as a
-    /// shim so call sites in `mutate_edit` and friends don't have to
-    /// be ripped in lockstep with the field removal.
-    pub(crate) fn push_buffer_content_to_textarea(&mut self) {}
 
     /// Single choke-point for "the buffer just changed". Sets the
     /// dirty flag and drops the cached `content_arc` snapshot so
@@ -4467,7 +4457,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     pub fn insert_str(&mut self, text: &str) {
         let pos = crate::types::Cursor::cursor(&self.buffer);
         crate::types::BufferEdit::insert_at(&mut self.buffer, pos, text);
-        self.push_buffer_content_to_textarea();
         self.mark_content_dirty();
     }
 
@@ -4492,7 +4481,6 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         }
         let cursor = CursorTrait::cursor(&self.buffer);
         BufferEdit::insert_at(&mut self.buffer, cursor, completion);
-        self.push_buffer_content_to_textarea();
         self.mark_content_dirty();
     }
 

@@ -471,15 +471,7 @@ fn write_buffer(
 ) -> std::result::Result<(), String> {
     match path {
         None => Err("E32: No file name".to_string()),
-        Some(p) => {
-            let joined = editor.buffer().content_joined();
-            // vim `'endofline'`/`'fixendofline'` — see
-            // `save::EolState::trailing_newline`.
-            let trailing_nl = eol.trailing_newline(&joined, editor.settings().fixendofline);
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            crate::save::save_file_durable(p, joined.as_bytes(), trailing_nl, &cwd)
-                .map_err(|e| format!("hjkl: {}: {e}", p.display()))
-        }
+        Some(p) => crate::save::write_editor_to_file(editor, p, eol),
     }
 }
 

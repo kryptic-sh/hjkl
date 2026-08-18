@@ -238,6 +238,23 @@ pub fn save_file_durable(
     })
 }
 
+/// Serialise the editor's buffer and write it to `path`, honouring
+/// `'endofline'`/`'fixendofline'`. Shared by the headless and embed
+/// `write_buffer` helpers, whose `Some(p)` arms were byte-identical.
+pub fn write_editor_to_file(
+    editor: &hjkl_engine::Editor<hjkl_buffer::View, hjkl_engine::types::DefaultHost>,
+    path: &std::path::Path,
+    eol: EolState,
+) -> Result<(), String> {
+    let joined = editor.buffer().content_joined();
+    // vim `'endofline'`/`'fixendofline'` — see
+    // `save::EolState::trailing_newline`.
+    let trailing_nl = eol.trailing_newline(&joined, editor.settings().fixendofline);
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    save_file_durable(path, joined.as_bytes(), trailing_nl, &cwd)
+        .map_err(|e| format!("hjkl: {}: {e}", path.display()))
+}
+
 #[cfg(test)]
 mod save_file_durable_tests {
     use super::save_file_durable;
