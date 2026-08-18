@@ -17,28 +17,13 @@ use hjkl_engine::types::{OptionValue, Options};
 
 // ── Parser ────────────────────────────────────────────────────────────────────
 
-/// Cap on how much of a scanned line the modeline parser reads, in chars.
-/// A modeline is a short comment (`# vim: set ts=2`); nothing realistic sits
-/// past this, and the cap bounds the worst case (a single giant line) no
-/// matter how big the file is. Mirrors the seam's bound in `hjkl-lang`
-/// (`detect::MODELINE_LINE_CAP`), which reads `ft=` from the same lines.
-const MODELINE_LINE_CAP: usize = 500;
-
-/// First [`MODELINE_LINE_CAP`] chars of `line`, cut at a char boundary.
-fn cap_modeline_line(line: &str) -> &str {
-    match line.char_indices().nth(MODELINE_LINE_CAP) {
-        Some((byte_idx, _)) => &line[..byte_idx],
-        None => line,
-    }
-}
-
 /// Scan `content` for vim modelines and return the parsed option overrides.
 ///
 /// `scan_depth` lines from the top AND bottom of the file are checked
 /// (matching vim's `modelines` default of 5); the middle is never examined —
 /// `lines().rev()` is double-ended, so the bottom pass starts from the end
 /// via a backward newline search and a huge file costs O(depth) lines, not
-/// O(lines). Each line is read for at most [`MODELINE_LINE_CAP`] chars.
+/// O(lines).
 ///
 /// Later lines win: entries are emitted top-first, then the bottom lines in
 /// line order, and the caller applies them left to right (vim applies every
@@ -72,9 +57,7 @@ pub fn parse_modelines(content: &str, scan_depth: usize) -> Vec<(String, OptionV
 }
 
 /// Try to extract modeline options from a single line, appending to `out`.
-/// Reads at most [`MODELINE_LINE_CAP`] chars of the line.
 fn parse_line(line: &str, out: &mut Vec<(String, OptionValue)>) {
-    let line = cap_modeline_line(line);
     // Find a `vim:` / `ex:` / `vi:` marker.  The character immediately before
     // the marker must be start-of-line, whitespace, or a non-alphanumeric
     // character — so `xvim:` is rejected but `// vim:` and `#vim:` are accepted.
@@ -94,36 +77,25 @@ fn parse_line(line: &str, out: &mut Vec<(String, OptionValue)>) {
     // Strip optional leading whitespace after the marker.
     let rest = rest.trim_start();
 
-    // Strip optional `set ` keyword.
-    let body = if let Some(after_set) = rest
+    let (body, set_form) = match rest
         .strip_prefix("set ")
         .or_else(|| rest.strip_prefix("set\t"))
     {
-        after_set
-    } else {
-        rest
+        // The `set` form ends at its first colon; following text is prose.
+        Some(body) => (
+            body.split_once(':').map_or(body, |(options, _)| options),
+            true,
+        ),
+        // The basic form uses colons as option separators, like `:set`.
+        None => (rest, false),
     };
 
-    // Tokenise: split on whitespace. Vim terminates the modeline at the first
-    // `:` after the options — everything past that colon is ordinary comment
-    // text, not more options. So the token that *carries* the trailing colon
-    // is the last one we look at; we parse it, then stop. Breaking only on an
-    // empty token (a bare `:`) let the trailing comment of
-    // `/* vim: set ts=2: list of pending items */` keep parsing, and words
-    // like `list` / `wrap` / `number` / `expandtab` are perfectly ordinary
-    // English that would silently flip real options.
-    for token in body.split_whitespace() {
-        let (token, terminates) = match token.strip_suffix(':') {
-            // e.g. "et:" → "et", and nothing after this token is a modeline.
-            Some(stripped) => (stripped, true),
-            None => (token, false),
-        };
-        // An empty token (the bare `:` case) is rejected by `parse_token`.
+    for token in body.split(|c: char| c.is_whitespace() || (!set_form && c == ':')) {
+        if !set_form && matches!(token, "vi" | "vim" | "ex") {
+            break;
+        }
         if let Some(entry) = parse_token(token) {
             out.push(entry);
-        }
-        if terminates {
-            break;
         }
     }
 }
@@ -342,18 +314,18 @@ mod tests {
     // ── parse_modeline_beyond_line_cap ────────────────────────────────────────
 
     #[test]
-    fn parse_modeline_beyond_line_cap_is_ignored() {
-        // Per-line scan is capped at MODELINE_LINE_CAP chars; an option
-        // sitting past the cap is invisible (deliberate bound). 4 is the
-        // engine default, untouched by the cap'd-out modeline.
+    fn parse_modeline_beyond_line_cap_applies() {
         let mut line = "x".repeat(600);
         line.push_str(" # vim: ts=7:");
         let content = format!("{line}\n");
         let opts = opts_with_modeline(&content);
-        assert_eq!(
-            opts.tabstop, 4,
-            "modeline beyond the line cap must not apply"
-        );
+        assert_eq!(opts.tabstop, 7);
+    }
+
+    #[test]
+    fn parse_modeline_colon_separates_basic_form_options() {
+        let opts = opts_with_modeline("# vim: ts=2 : ts=7\n");
+        assert_eq!(opts.tabstop, 7);
     }
 
     // ── parse_modeline_unknown_option_ignored ─────────────────────────────────
