@@ -1421,10 +1421,80 @@ prior audit (§10.1/§10.2) were re-verified as fixed. What shipped:
   byte-identical copies (visual extend, operator-pending, sneak) collapsed into
   `text_object_from_char`; each caller keeps its own `None` handling.
 
-Open from §13–§16, still actionable: the X11 stale-`SELECTION_NOTIFY`
-misattribution (§13 #3), vim `\zs`/`\ze` translation (§14 #2 / §1.11), and the
-seven perf findings (§16) — the buffer-word harvest and ex-prompt registry
-rebuild are the top two.
+Open from §13–§16 after the 2026-08-18 evening pass: the vim `\zs`/`\ze`
+translation (§14 #2 / §1.11 — needs match-boundary rewriting rust-regex has no
+anchor for; a design task, not mechanical) and the per-cell span sort in
+`paint_row` (§16 #7 — lowest impact; verify with profiling before prioritizing).
+Everything else — §13 #3, §16 #1–#6, and the §15 #4–#7 tidy leftovers — shipped
+that evening; see the §7 session entry below.
+
+### Backlog-work session 2026-08-18 (evening — the §13–§16 remainder)
+
+The rest of the §13–§16 findings, worked as delegate → review → commit slices
+(commits `095433e5`..`81335704`); every slice ran the full CI gate green before
+committing.
+
+- **X11 stale-`SELECTION_NOTIFY` misattribution closed (`095433e5`)** — §13 #3.
+  `DrainGoal::SelectionNotify` now carries the target atom the pending
+  `xcb_convert_selection` asked for and requires `notify.target` to match
+  (`save_targets` from `do_save_targets`, `mime_atom` from `do_get`), so a late
+  reply to a timed-out `SAVE_TARGETS` can no longer be consumed by the next
+  paste as empty / atom-bytes / spurious-`UnsupportedMime`. The full clipboard
+  suite (152 tests, live Xvfb) stayed green; the race itself is timing-only and
+  has no deterministic harness.
+- **Buffer-word harvest cached (`ee21e78c`)** — §16 #1. The harvest is keyed by
+  a fingerprint of every slot's `buffer_id` + `dirty_gen`; the per-keystroke
+  `exclude` token is filtered at query time so one harvest serves all keystrokes
+  of a buffer state. Measured: 50 calls 66.4 → 8.1 ms on a ~100k-char buffer.
+  Scan-counter test red on the uncached code.
+- **Ex-prompt completion data cached (`59086054`)** — §16 #2. New
+  `merged_command_names`; `complete`/`complete_command_meta` take the pre-built
+  list; `EDITOR_REGISTRY`/`COMMAND_NAMES` are `LazyLock` statics in the app;
+  `complete_path_entries` serves listings from a single-entry `(dir, mtime)`
+  cache. Measured: path completion on a 14-entry dir 10.9 → 3.3 µs. Name-work
+  per keystroke ~60 µs → static. Note: the finding's "partial sort" suggestion
+  for `set_prefix` (§16 #4) does NOT apply to the picker-style truncation — the
+  completion popup cycles through ALL matches, so `visible` must stay fully
+  sorted; see the §16 #4 entry below for what was done instead.
+- **Hover/info popup repaint caches (`fe2ad14f`)** — §16 #3. Content- and
+  width-keyed `HoverRenderCache`/`InfoRenderCache` held by the app; parse only
+  on content change, wrap only on resize. Measured: 200 draws 63.8 ms (vs ~1.1
+  ms/frame parse+wrap before). Deviation from the finding's "in HoverState": the
+  caches live in the TUI crates beside the popup instead, keeping
+  hjkl-hover/hjkl-info-popup dependency-free and `render`'s state borrow shared.
+- **Completion `set_prefix` fast path + scratch reuse (`11c79970`)** — §16 #4.
+  The picker's top-K `select_nth_unstable` was NOT applied — the completion
+  popup navigates every match (`visible` drives `<C-n>` cycling and the total
+  count), so truncating it would change behavior. Instead: empty prefix
+  short-circuits to the original index order (empty needle matches everything
+  with a neutral score), the scoring pass reuses a `scored_buf` + `visible`'s
+  capacity, and the total-order tiebreak lets `sort_unstable_by` replace the
+  stable sort. Release M=2000: `"a"` 11.1 → 8.0 µs, empty 5.7 → 0.12 µs; the
+  long-needle case is unchanged (inherent O(M × h) match). Full per-prefix
+  `visible` order pinned by test.
+- **Sneak/sentence per-row allocs (`0a1eec97`)** — §16 #5. Both sneak scans
+  iterate the borrowed rope row slice (peekable / reversed chars iterators) via
+  `rope_line_slice`, now re-exported from hjkl-engine; sentence scans fetch each
+  row's chars once and the per-row helpers take `&[char]`. Release, 50k-line
+  full-buffer sneak miss: 17.1 → 12.9 ms. Differential sentence/sneak tests
+  unchanged.
+- **Explorer git-status map per reconcile (`56208327`)** — §16 #6. The render
+  rebuilt a path→status map from all tree nodes every frame; `ExplorerTree` now
+  maintains `git_map` at the two mutation points (`rebuild`, `retag_git`) and
+  the overlay does an O(1) lookup. Test pins the map mirrors `node.git` (incl.
+  rollups) and refreshes on retag.
+- **§15 tidy leftovers shipped** — FoldIndex dedup (`413c93c9`, buffer-tui's
+  private index now pre-sorts and delegates the hidden-set to
+  `hjkl_buffer::FoldIndex`, keeping only its own `closed_by_start`), bonsai
+  pinned-rev fixture dedup (`328ef910`, new `test_support` module owns the
+  ManifestMeta + C LangSpec that were duplicated in four test modules), CSS
+  alias merge (`bcc57d87`, all eight gray/grey pairs + aqua/cyan), picker
+  `_scan` rename (`81335704`).
+
+Still open and needs the user, not more code: §14 #2 (`\zs`/`\ze` — match
+semantics design), §16 #7 (per-cell span sort — profile first), and the
+pre-existing needs-guidance items (§1.6 phase 2, §1.8 decisions, §1.12 explorer
+render report + SHIFT normalization, trash reaper, YAML injection queries).
 
 ## 8. 2026-08-05 code review (audit depth)
 

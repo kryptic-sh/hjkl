@@ -29,6 +29,47 @@ patch bumps.
   newline-terminated buffer with no further `{`/`}` below, the section motions
   clamped to ropey's synthetic empty final row; they now stop at the last
   content row like `G`, matching nvim.
+- **X11 paste no longer consumes a stale `SELECTION_NOTIFY`.** Every clipboard
+  op reuses the same private property, so a late reply to a timed-out
+  `SAVE_TARGETS` handshake was misattributed to the next paste — surfacing as a
+  silent empty paste, atom-list bytes as the payload, or a spurious
+  `UnsupportedMime`. The wait now matches the reply's target atom.
+
+### Performance
+
+- **Buffer-word completion is harvested once per buffer change, not per
+  keystroke.** `open_buffer_word_completion` re-scanned up to 1 MB of every open
+  buffer (a `String` clone per unique word) on each identifier keystroke and
+  each LSP completion response; the harvest is now cached against the open
+  buffers' `dirty_gen`s and only the per-keystroke prefix filter runs on hits.
+  Measured on a ~100k-char buffer: 50 calls 66 ms → 8 ms.
+- **The `:` prompt no longer rebuilds its completion data per keystroke.** The
+  editor ex-command registry (122 command builds), the merged command-name set
+  (~60 µs of String clones + sorts), and the target directory listing were all
+  recomputed on every text-changing key. The registry and name set are now
+  `LazyLock` statics and the directory listing is cached keyed by
+  `(dir, mtime)`. Path completion on a 14-entry dir: ~11 µs → ~3 µs per call,
+  scaling with directory size.
+- **Hover and info popups no longer re-parse their markdown every repaint.**
+  While a popup was visible, every frame re-ran the full tokenizer (~0.8 ms) and
+  re-wrapped it into styled lines (~0.3 ms) on a multi-KB doc — paid on every
+  keystroke before dismissal and every time-animated repaint. The parse is
+  cached per content change and the wrap per resize (~3.4× faster steady
+  repaint).
+- **Completion `set_prefix` skips the match pass on an empty prefix and reuses
+  scratch buffers.** A fresh scored Vec + full re-sort ran per keystroke while
+  the popup was open; the empty-prefix case (how a popup opens) now
+  short-circuits, and the scoring pass reuses its buffers. Release, M=2000:
+  `set_prefix("a")` 11.1 → 8.0 µs, empty prefix 5.7 → 0.12 µs.
+- **Sneak and sentence motions no longer allocate per scanned row.** The sneak
+  scans materialized a `String` + `Vec<char>` per row — `;`/`,` re-scan to
+  end-of-buffer per keystroke, so a miss paid 2 allocs × every row — and now
+  iterate the borrowed rope row slice. Release, 50k-line full-buffer sneak miss:
+  17.1 → 12.9 ms.
+- **The explorer's git-status map is built per reconcile, not per frame.** The
+  overlay rebuilt a path→status map from all tree nodes on every frame while the
+  pane was visible; the tree now maintains it at each rebuild/retag and per-row
+  colors are an O(1) lookup.
 
 ## [0.41.3] - 2026-08-12
 
