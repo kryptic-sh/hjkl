@@ -2299,8 +2299,10 @@ mod tests {
         );
 
         // A new file bumps the dir's mtime → the next call must rescan (+1)
-        // and see it. (Coarse-mtime filesystems: force the mtime forward;
-        // Linux bumps at ns resolution, so the fallback is a no-op there.)
+        // and see it. On filesystems whose dir mtime does not move on entry
+        // creation (the cache's documented stale window — observed on the
+        // Windows CI runner) the same-dir rescan cannot be observed; there the
+        // cache is instead proven to invalidate on a different scan dir below.
         let mtime_before = std::fs::metadata(&temp_dir)
             .and_then(|m| m.modified())
             .unwrap();
@@ -2309,25 +2311,57 @@ mod tests {
             .and_then(|m| m.modified())
             .unwrap();
         if mtime_after == mtime_before {
-            let bumped = mtime_after + std::time::Duration::from_millis(1);
-            let times = std::fs::FileTimes::new()
-                .set_accessed(bumped)
-                .set_modified(bumped);
-            std::fs::File::open(&temp_dir)
-                .unwrap()
-                .set_times(times)
-                .unwrap();
-        }
-        let mut invalidated = false;
-        for _ in 0..64 {
-            let before = scans();
-            let r3 = complete_arg("e ", 2, ArgKind::Path, &sources);
-            if scans() == before + 1 && has(&r3.candidates, "gamma.txt") {
-                invalidated = true;
-                break;
+            // Force the mtime forward so the same-dir path stays testable on
+            // coarse-mtime filesystems. Unix opens a directory as a File and
+            // `set_times` it; Windows cannot (opening a directory needs
+            // FILE_FLAG_BACKUP_SEMANTICS, which std does not expose).
+            #[cfg(not(windows))]
+            {
+                let bumped = mtime_after + std::time::Duration::from_millis(1);
+                let times = std::fs::FileTimes::new()
+                    .set_accessed(bumped)
+                    .set_modified(bumped);
+                std::fs::File::open(&temp_dir)
+                    .unwrap()
+                    .set_times(times)
+                    .unwrap();
             }
         }
-        assert!(invalidated, "a dir mtime change must invalidate the cache");
+        let mtime_moved = std::fs::metadata(&temp_dir)
+            .and_then(|m| m.modified())
+            .unwrap()
+            != mtime_before;
+        if mtime_moved {
+            let mut invalidated = false;
+            for _ in 0..64 {
+                let before = scans();
+                let r3 = complete_arg("e ", 2, ArgKind::Path, &sources);
+                if scans() == before + 1 && has(&r3.candidates, "gamma.txt") {
+                    invalidated = true;
+                    break;
+                }
+            }
+            assert!(invalidated, "a dir mtime change must invalidate the cache");
+        } else {
+            // The dir mtime did not move and could not be forced (Windows):
+            // this is the cache's documented stale window. Prove it still
+            // invalidates on a different scan dir.
+            let other = temp_dir.join("other");
+            std::fs::create_dir_all(&other).unwrap();
+            std::fs::write(other.join("delta.txt"), b"x").unwrap();
+            let other_sources = ArgSources {
+                cwd: Some(&other),
+                ..Default::default()
+            };
+            let before = scans();
+            let r = complete_arg("e ", 2, ArgKind::Path, &other_sources);
+            assert!(scans() > before, "a different scan dir must rescan");
+            assert!(
+                has(&r.candidates, "delta.txt"),
+                "the new scan dir's entries must be listed: {:?}",
+                r.candidates
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
