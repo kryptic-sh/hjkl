@@ -22,6 +22,13 @@ patch bumps.
   matching neovim 0.12.4), so `<C-v>jip~` flips both paragraphs' first column
   instead of silently switching to a line/charwise selection. Pinned by 9 new
   oracle corpus cases.
+- **Counted `J` / `gJ` / `~` revert as a single undo step.** `3J` and `5~`
+  previously created one undo entry per join/char, so a single `u` only reverted
+  part of the command; the counted command is now one undo unit, matching nvim.
+- **`]]` / `][` no longer land on the phantom trailing row.** On a
+  newline-terminated buffer with no further `{`/`}` below, the section motions
+  clamped to ropey's synthetic empty final row; they now stop at the last
+  content row like `G`, matching nvim.
 
 ## [0.41.3] - 2026-08-12
 

@@ -1393,6 +1393,39 @@ config) and the SHIFT-normalization unification decision (tidy §11 #8).
   cases in `tier2_viewport_bounds.toml`. See §1.5b. Still open: the separate
   `*`/`#`-in-visual search divergence.
 
+### Backlog-work session 2026-08-18 (the §13–§16 sweep findings)
+
+The 2026-08-18 sweep (review §13, audit §14, tidy §15, perf §16), worked as
+delegate → review → commit → push slices. The two RPC escape hatches from the
+prior audit (§10.1/§10.2) were re-verified as fixed. What shipped:
+
+- **Counted `J`/`gJ`/`~` are a single undo step (`75fd8459`)** — §13 #1. The
+  counted-command bridges pushed one undo entry per iteration, so `3J`/`5~`
+  needed `count` `u` presses; wrapped in the re-entrant `undo_group` (the
+  macro-replay pattern). Two tests (red on the old code) + dfcase parity with
+  neovim 0.12.4 on `3Ju` and `5~u`.
+- **`]]` / `][` clamp at the last content row (`7f8301be`)** — §13 #2. Both
+  forward section motions used the raw row count for the clamp, landing on
+  ropey's phantom trailing row after a trailing `\n`; now clamp with
+  `content_row_count` like `G`. Two tests (red on old code) + dfcase parity on
+  `"{\nfoo\n"` from row 0.
+- **X11 non-INCR property reads capped at 256 MiB (`818094ca`)** — §14 #1.
+  `read_property` accumulated an unbounded property while the INCR arm capped
+  the same hostile data; the loop now errors past `MAX_INCR_TOTAL_BYTES`,
+  matching the INCR path.
+- **Dead textarea shim + `write_buffer` dedup (`f84e1a1b`)** — tidy §15 #2/#3.
+  `push_buffer_content_to_textarea` was an empty stub for a field removal that
+  already happened; the headless/embed `write_buffer` `Some(p)` arms were
+  byte-identical and now share `save::write_editor_to_file`.
+- **Single `ch → TextObject` mapping (`c37396db`)** — tidy §15 #1. Three
+  byte-identical copies (visual extend, operator-pending, sneak) collapsed into
+  `text_object_from_char`; each caller keeps its own `None` handling.
+
+Open from §13–§16, still actionable: the X11 stale-`SELECTION_NOTIFY`
+misattribution (§13 #3), vim `\zs`/`\ze` translation (§14 #2 / §1.11), and the
+seven perf findings (§16) — the buffer-word harvest and ex-prompt registry
+rebuild are the top two.
+
 ## 8. 2026-08-05 code review (audit depth)
 
 Scope: whole workspace (~260k lines, 57 crates + app), clean tree. Method:
