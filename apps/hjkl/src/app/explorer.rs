@@ -4934,23 +4934,31 @@ mod tests {
 
     /// `git_map` must be maintained by `rebuild` and `retag_git` — the render
     /// overlay reads it per frame instead of re-deriving it from `nodes`, so
-    /// this pins that it tracks the nodes' git state (incl. rollups) and that
-    /// a retag refreshes it.
+    /// this pins that it mirrors the nodes' post-rollup git state and that a
+    /// retag refreshes it. Driven through `retag_git` with a hand-built map:
+    /// the real `explorer_status_map` keys are the repo's canonicalized
+    /// workdir, which differs from the tempdir path on macOS (`/var` →
+    /// `/private/var`) and in case on Windows, so a real-repo assertion would
+    /// be platform-fragile for no coverage of the maintenance logic.
     #[test]
     fn git_map_tracks_nodes_and_refreshes_on_retag() {
         let tmp = tempfile::tempdir().unwrap();
-        let _repo = git2::Repository::init(tmp.path()).unwrap();
-        std::fs::write(tmp.path().join("new.txt"), b"x").unwrap();
+        std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
+        std::fs::write(tmp.path().join("b.txt"), b"x").unwrap();
         let mut tree = ExplorerTree::new(tmp.path().to_path_buf());
-        let new_path = tmp.path().join("new.txt");
-        assert!(
-            matches!(
-                tree.git_map.get(&new_path),
-                Some(hjkl_app::git::ExplorerGit::Untracked)
-            ),
-            "an untracked file must appear in git_map after rebuild: {:?}",
-            tree.git_map.get(&new_path)
+        // No git repo: rebuild tags nothing.
+        assert!(tree.git_map.is_empty(), "no repo => no git status");
+
+        let mut status = std::collections::HashMap::new();
+        status.insert(
+            tmp.path().join("a.txt"),
+            hjkl_app::git::ExplorerGit::Modified,
         );
+        status.insert(
+            tmp.path().join("b.txt"),
+            hjkl_app::git::ExplorerGit::Untracked,
+        );
+        tree.retag_git(&status);
         // Every mapped path must have a node carrying the same status (the
         // map is derived from the nodes' post-rollup git fields).
         for (path, git) in &tree.git_map {
@@ -4966,12 +4974,21 @@ mod tests {
                 "git_map must mirror node.git for {path:?}"
             );
         }
-        // A retag with an empty status (e.g. the dirty-buffer overlay cleared)
-        // must refresh git_map, not leave stale entries.
+        assert_eq!(
+            tree.git_map.get(&tmp.path().join("a.txt")),
+            Some(&hjkl_app::git::ExplorerGit::Modified)
+        );
+        assert_eq!(
+            tree.git_map.get(&tmp.path().join("b.txt")),
+            Some(&hjkl_app::git::ExplorerGit::Untracked)
+        );
+        // A retag with an empty status (e.g. the dirty-buffer overlay
+        // cleared) must refresh git_map, not leave stale entries.
         tree.retag_git(&std::collections::HashMap::new());
         assert!(
-            !tree.git_map.contains_key(&new_path),
-            "retag must clear git_map entries whose node.git is now None"
+            tree.git_map.is_empty(),
+            "retag with an empty status must clear git_map, got {:?}",
+            tree.git_map
         );
     }
 }
