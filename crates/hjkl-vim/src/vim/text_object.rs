@@ -154,9 +154,12 @@ pub fn sentence_boundary<H: hjkl_engine::types::Host>(
             closest_stopper_below(&line_chars, cr - 1)
         };
         for r in (0..=cr).rev() {
-            let blank = line_chars(r).is_empty();
-            let first_ns = line_chars(r).iter().position(|&c| !c.is_whitespace());
-            let (mid, _has_eol) = scan_row_boundaries(r, &line_chars);
+            // Fetch the row's chars once — the blank check, first-non-ws and
+            // `scan_row_boundaries` used to re-materialize the row each time.
+            let lc = line_chars(r);
+            let blank = lc.is_empty();
+            let first_ns = lc.iter().position(|&c| !c.is_whitespace());
+            let (mid, _has_eol) = scan_row_boundaries(r, &lc);
             // Candidates in descending order: mid-line boundaries (largest
             // col first), the walk-from-below landing, the blank-line
             // transition, then `(0, 0)`.
@@ -183,7 +186,7 @@ pub fn sentence_boundary<H: hjkl_engine::types::Host>(
                 }
             }
             origin = if r > 0 {
-                if row_skippable(&line_chars, r - 1) {
+                if row_skippable(&line_chars(r - 1)) {
                     // The row below the next row is skippable, so the
                     // closest stopper below it is unchanged.
                     origin
@@ -227,8 +230,11 @@ fn first_sentence_boundary_forward<F: Fn(usize) -> Vec<char>>(
     };
     let mut prev_blank = cr > 0 && line_chars(cr - 1).is_empty();
     for r in cr..n_lines {
-        let blank = line_chars(r).is_empty();
-        let first_ns = line_chars(r).iter().position(|&c| !c.is_whitespace());
+        // Fetch the row's chars once — the blank check, first-non-ws and
+        // `scan_row_boundaries` used to re-materialize the row each time.
+        let lc = line_chars(r);
+        let blank = lc.is_empty();
+        let first_ns = lc.iter().position(|&c| !c.is_whitespace());
         let mut cands: Vec<(usize, usize)> = Vec::new();
         // Blank-line transition: `(r, 0)` when the previous row's
         // blankness differs.
@@ -240,7 +246,7 @@ fn first_sentence_boundary_forward<F: Fn(usize) -> Vec<char>>(
         if stopper_eol && let Some(c) = first_ns {
             cands.push((r, c));
         }
-        let (mid, has_eol) = scan_row_boundaries(r, line_chars);
+        let (mid, has_eol) = scan_row_boundaries(r, &lc);
         cands.extend(mid);
         for (row, col) in cands {
             if r > cr || col > cc {
@@ -259,9 +265,8 @@ fn first_sentence_boundary_forward<F: Fn(usize) -> Vec<char>>(
 
 /// A row the trailing-whitespace walk passes *through* without stopping:
 /// non-blank and holding only whitespace.
-fn row_skippable<F: Fn(usize) -> Vec<char>>(line_chars: &F, r: usize) -> bool {
-    let lc = line_chars(r);
-    !lc.is_empty() && lc.iter().all(|&c| c.is_whitespace())
+fn row_skippable(line: &[char]) -> bool {
+    !line.is_empty() && line.iter().all(|&c| c.is_whitespace())
 }
 
 /// The closest row at or below `p` (walking down past skippable rows)
@@ -272,17 +277,17 @@ fn closest_stopper_below<F: Fn(usize) -> Vec<char>>(
     line_chars: &F,
     mut p: usize,
 ) -> Option<(usize, bool)> {
-    while p > 0 && row_skippable(line_chars, p) {
+    while p > 0 && row_skippable(&line_chars(p)) {
         p -= 1;
     }
-    (!row_skippable(line_chars, p)).then(|| (p, row_has_eol_walk(line_chars, p)))
+    (!row_skippable(&line_chars(p))).then(|| (p, row_has_eol_walk(line_chars, p)))
 }
 
 /// True when row `r` has a terminator whose trailing whitespace (or the
 /// terminator itself) runs to end-of-line — such a terminator pushes a
 /// boundary onto a later row.
 fn row_has_eol_walk<F: Fn(usize) -> Vec<char>>(line_chars: &F, r: usize) -> bool {
-    scan_row_boundaries(r, line_chars).1
+    scan_row_boundaries(r, &line_chars(r)).1
 }
 
 /// Per-row sentence-boundary scan, mirroring `sentence_boundaries`'s
@@ -291,11 +296,8 @@ fn row_has_eol_walk<F: Fn(usize) -> Vec<char>>(line_chars: &F, r: usize) -> bool
 /// boundaries landing on this row (ascending) and whether a terminator's
 /// trailing whitespace runs to end-of-line (its boundary lands on a later
 /// row — see [`sentence_boundary`]).
-fn scan_row_boundaries<F: Fn(usize) -> Vec<char>>(
-    r: usize,
-    line_chars: &F,
-) -> (Vec<(usize, usize)>, bool) {
-    let lc = line_chars(r);
+fn scan_row_boundaries(r: usize, line: &[char]) -> (Vec<(usize, usize)>, bool) {
+    let lc = line;
     let mut mid: Vec<(usize, usize)> = Vec::new();
     let mut has_eol = false;
     let mut i = 0;

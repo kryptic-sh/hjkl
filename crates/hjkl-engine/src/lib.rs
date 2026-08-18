@@ -49,6 +49,7 @@ pub use editor::{
 pub use input::{Input, Key, decode_macro, from_planned as decode_planned_input};
 pub use registers::{Registers, Slot};
 pub use selection_shift::{Sel, shift_position, shift_sel};
+pub use viewport_math::rope_line_slice;
 
 pub use buffer_impl::{BufferFoldProvider, BufferFoldProviderMut, SnapshotFoldProvider};
 pub use keymap_motion::MotionKind;

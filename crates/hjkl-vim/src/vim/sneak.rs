@@ -7,7 +7,7 @@ use hjkl_vim_types::{LastChange, LastHorizontalMotion, Motion, Operator, RangeKi
 use super::*;
 use crate::vim_state::{vim, vim_mut};
 use hjkl_engine::Editor;
-use hjkl_engine::buf_helpers::{buf_line, buf_line_chars, buf_row_count, buf_set_cursor_rc};
+use hjkl_engine::buf_helpers::{buf_line_chars, buf_row_count, buf_set_cursor_rc};
 
 /// Scan the buffer from the current cursor position for the `count`-th
 /// occurrence of the two-char digraph `(c1, c2)`.
@@ -54,22 +54,32 @@ pub fn sneak_scan_forward<H: hjkl_engine::types::Host>(
     count: usize,
 ) -> Option<(usize, usize)> {
     let row_count = buf_row_count(ed.buffer());
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let mut hits = 0usize;
     for row in start_row..row_count {
-        let line = buf_line(ed.buffer(), row).unwrap_or_default();
-        let chars: Vec<char> = line.chars().collect();
+        // Borrow the row's slice instead of materializing a per-row String
+        // and Vec<char> — `;`/`,` re-scan from the cursor to end-of-buffer
+        // per keystroke, so the allocation pattern is per-row on a full-buffer
+        // worst case.
+        let line = hjkl_engine::rope_line_slice(&rope, row);
         // On the start row begin scanning one past the current column.
         let col_start = if row == start_row { start_col + 1 } else { 0 };
-        if col_start + 1 > chars.len() {
-            continue;
+        let mut chars = line.chars().peekable();
+        for _ in 0..col_start {
+            chars.next();
         }
-        for col in col_start..chars.len().saturating_sub(1) {
-            if chars[col] == c1 && chars[col + 1] == c2 {
+        let mut col = col_start;
+        while let Some(c) = chars.next() {
+            if let Some(d) = chars.peek()
+                && c == c1
+                && *d == c2
+            {
                 hits += 1;
                 if hits == count {
                     return Some((row, col));
                 }
             }
+            col += 1;
         }
     }
     None
@@ -85,31 +95,40 @@ pub fn sneak_scan_backward<H: hjkl_engine::types::Host>(
     count: usize,
 ) -> Option<(usize, usize)> {
     let row_count = buf_row_count(ed.buffer());
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let mut hits = 0usize;
     // Iterate rows from start_row down to 0.
     let rows_to_scan = (0..row_count).rev().skip(row_count - start_row - 1);
     for row in rows_to_scan {
-        let line = buf_line(ed.buffer(), row).unwrap_or_default();
-        let chars: Vec<char> = line.chars().collect();
+        // Borrow the row's slice like the forward scan (no per-row String /
+        // Vec<char>); `;`/`,` re-scan per keystroke.
+        let line = hjkl_engine::rope_line_slice(&rope, row);
+        let char_count = line.chars().count();
         // On the start row end scanning one before the current column.
         let col_end = if row == start_row {
             start_col.saturating_sub(1)
-        } else if chars.is_empty() {
+        } else if char_count == 0 {
             continue;
         } else {
-            chars.len().saturating_sub(1)
+            char_count.saturating_sub(1)
         };
         if col_end == 0 {
             continue;
         }
-        // Scan cols right-to-left from col_end-1 so we match c1 at col, c2 at col+1.
-        for col in (0..col_end).rev() {
-            if col + 1 < chars.len() && chars[col] == c1 && chars[col + 1] == c2 {
+        // Scan cols right-to-left from col_end-1 so we match c1 at col, c2 at
+        // col+1. `later` holds the char at col+1 (seen on the previous
+        // reverse step), which is `None` for the last forward char — the
+        // `col + 1 < len` bound of the old indexed loop.
+        let mut later: Option<char> = None;
+        for (ri, c) in line.chars().rev().enumerate() {
+            let col = char_count - 1 - ri;
+            if col < col_end && c == c1 && later == Some(c2) {
                 hits += 1;
                 if hits == count {
                     return Some((row, col));
                 }
             }
+            later = Some(c);
         }
     }
     None
