@@ -10,6 +10,14 @@ patch bumps.
 
 ### Fixed
 
+- **Filetype detection now follows Neovim 0.12.4 for supported grammars.**
+  Modelines override inferred path types, scan the complete selected lines, and
+  distinguish colon-separated options from terminating `set` forms; hashbangs
+  require `#!` at byte zero. Extension matching preserves case (`.C` is C++,
+  `.c` is C), 140 extension aliases and 170 literal filename mappings are
+  synced, supported hashbang aliases resolve, and shell buffers retain
+  `sh`/`zsh`/`csh`/`tcsh` identities while using the bundled bash grammar and
+  LSP fallback.
 - **Blockwise visual `g`-motions extend the block column.** `gE` / `ge` / `g_` /
   `gM` / `gm` / `g#` in `<C-v>` visual now sync the block's column like the
   plain `E`/`e`/`_` forms, so `<C-v>jgE~` flips the whole words instead of a
