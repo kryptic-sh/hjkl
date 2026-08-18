@@ -680,6 +680,14 @@ pub struct App {
     /// [`Self::disable_swapfiles`] when `-n` is passed. Gates
     /// `write_swap_for_slot` and `arm_swap_on_open` (issue #185).
     pub(crate) swapfile_enabled: bool,
+    /// Cache of [`Self::buffer_word_items`]'s harvest, keyed by a
+    /// fingerprint of every open buffer's identity and `dirty_gen` — rebuilt
+    /// only when an open buffer changes. The hot completion paths call
+    /// `buffer_word_items` on every identifier keystroke and every LSP
+    /// response; without this cache each call rescans up to `MAX_SCAN_BYTES`
+    /// per buffer and clones a String per unique word. `None` until the
+    /// first harvest runs.
+    buffer_words_cache: Option<lsp_glue::BufferWordsCache>,
 }
 
 /// Pending crash-recovery prompt state (issue #185).
@@ -2526,6 +2534,7 @@ impl App {
             nvim_wvars: std::collections::HashMap::new(),
             last_frame_rect: None,
             swapfile_enabled: true,
+            buffer_words_cache: None,
         };
         // Build the per-window view editor for the initial window (#151 Phase D).
         app.reconcile_window_editors();

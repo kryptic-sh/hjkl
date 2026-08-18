@@ -330,6 +330,24 @@ fn severity_priority(sev: DiagSeverity) -> u8 {
     }
 }
 
+/// Cached buffer-word harvest, keyed by a fingerprint of every open
+/// buffer's identity and dirty_gen; rebuilt only when an open buffer
+/// changes. Bounded at MAX_WORDS items like the harvest itself.
+///
+/// `pub` (not `pub(crate)`) because the enclosing `crate::app` module is
+/// private to the crate, so clippy's `redundant_pub_crate` would flag the
+/// narrower qualifier; the reachability is identical.
+pub struct BufferWordsCache {
+    fingerprint: u64,
+    /// The raw harvest, NOT filtered by `exclude` — the exclude token
+    /// changes every keystroke, so filtering happens at query time.
+    items: Vec<crate::completion::CompletionItem>,
+    /// Number of times the harvest actually rescanned (cache misses).
+    /// Tests read this to prove a repeat call on unchanged buffers hits
+    /// the cache instead of rescanning.
+    pub scans: u64,
+}
+
 impl App {
     /// Drain all pending LSP events and dispatch them.
     /// Called at the top of every event-loop iteration.
@@ -1659,13 +1677,42 @@ impl App {
     ///
     /// Bounded: scans at most `MAX_SCAN_BYTES` per buffer and returns at most
     /// `MAX_WORDS` items so a giant buffer can't stall the insert path.
+    ///
+    /// The harvest is cached in [`BufferWordsCache`], keyed by a fingerprint
+    /// of every open buffer's identity and `dirty_gen`, so the hot callers
+    /// (every identifier keystroke, every LSP response) don't rescan the
+    /// buffers on each call. The cache stores the harvest WITHOUT the
+    /// `exclude` filter — the exclude token changes every keystroke, so it is
+    /// applied to the returned items at query time instead.
     pub(crate) fn buffer_word_items(
-        &self,
+        &mut self,
         exclude: &str,
     ) -> Vec<crate::completion::CompletionItem> {
         use crate::completion::CompletionItem;
         const MAX_WORDS: usize = 2000;
         const MAX_SCAN_BYTES: usize = 1_000_000;
+
+        // Fingerprint of every open buffer's identity + content generation:
+        // any buffer edit or open/close changes it; cursor moves and the
+        // exclude token don't.
+        let mut fingerprint: u64 = 0;
+        for slot in &self.slots {
+            fingerprint = fingerprint.wrapping_mul(31).wrapping_add(slot.buffer_id);
+            fingerprint = fingerprint
+                .wrapping_mul(31)
+                .wrapping_add(slot.buffer().dirty_gen());
+        }
+
+        if let Some(cache) = &self.buffer_words_cache
+            && cache.fingerprint == fingerprint
+        {
+            return cache
+                .items
+                .iter()
+                .filter(|i| i.label != exclude)
+                .cloned()
+                .collect();
+        }
 
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut items: Vec<CompletionItem> = Vec::new();
@@ -1682,13 +1729,7 @@ impl App {
                 if is_word_char(ch) {
                     word.push(ch);
                 } else if !word.is_empty() {
-                    Self::push_buffer_word(
-                        &mut word,
-                        exclude,
-                        &mut seen,
-                        &mut items,
-                        is_word_start,
-                    );
+                    Self::push_buffer_word(&mut word, &mut seen, &mut items, is_word_start);
                     if items.len() >= MAX_WORDS {
                         break 'buffers;
                     }
@@ -1698,27 +1739,34 @@ impl App {
                 }
             }
             if !word.is_empty() {
-                Self::push_buffer_word(&mut word, exclude, &mut seen, &mut items, is_word_start);
+                Self::push_buffer_word(&mut word, &mut seen, &mut items, is_word_start);
                 if items.len() >= MAX_WORDS {
                     break 'buffers;
                 }
             }
         }
-        items
+
+        let scans = self.buffer_words_cache.as_ref().map_or(0, |c| c.scans) + 1;
+        self.buffer_words_cache = Some(BufferWordsCache {
+            fingerprint,
+            items: items.clone(),
+            scans,
+        });
+
+        items.into_iter().filter(|i| i.label != exclude).collect()
     }
 
-    /// Helper for [`Self::buffer_word_items`]: accept `word` as a candidate when
-    /// it is a valid identifier, not the excluded prefix, and not already seen.
-    /// Clears `word` for reuse either way.
+    /// Helper for [`Self::buffer_word_items`]: accept `word` as a candidate
+    /// when it is a valid identifier and not already seen. Clears `word` for
+    /// reuse either way. The `exclude` filter is applied at query time (the
+    /// cache stores the full harvest), not here.
     fn push_buffer_word(
         word: &mut String,
-        exclude: &str,
         seen: &mut std::collections::HashSet<String>,
         items: &mut Vec<crate::completion::CompletionItem>,
         is_word_start: impl Fn(char) -> bool,
     ) {
         if word.len() >= 2
-            && word.as_str() != exclude
             && word.chars().next().is_some_and(&is_word_start)
             && seen.insert(word.clone())
         {
@@ -3206,5 +3254,98 @@ mod lsp_glue_tests {
             .history()
             .any(|h| h.severity == hjkl_holler::Severity::Warn && h.body.contains("victim.txt"));
         assert!(warned, "expected a WARN toast naming the out-of-root file");
+    }
+
+    // ── buffer_word_items harvest cache ───────────────────────────────────
+
+    /// The harvest must be cached: a second call on unchanged buffers must
+    /// not rescan (proven by `BufferWordsCache::scans`), and a content
+    /// change must invalidate the cache and rescan. On the uncached
+    /// implementation `scans` climbs on every call, so this is red there.
+    #[test]
+    fn buffer_word_items_caches_harvest_and_invalidates() {
+        let mut app = super::App::new(None, false, None, None).unwrap();
+        hjkl_engine::BufferEdit::replace_all(
+            app.active_editor_mut().buffer_mut(),
+            "alpha beta gamma\n",
+        );
+
+        let first = app.buffer_word_items("");
+        assert!(!first.is_empty(), "seed words must be harvested");
+        assert_eq!(
+            app.buffer_words_cache.as_ref().unwrap().scans,
+            1,
+            "first call must scan exactly once"
+        );
+
+        let second = app.buffer_word_items("");
+        let second_labels: Vec<&str> = second.iter().map(|i| i.label.as_str()).collect();
+        let first_labels: Vec<&str> = first.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(
+            second_labels, first_labels,
+            "unchanged buffers must yield the same items"
+        );
+        assert_eq!(
+            app.buffer_words_cache.as_ref().unwrap().scans,
+            1,
+            "second call must hit the cache, not rescan"
+        );
+
+        hjkl_engine::BufferEdit::replace_all(
+            app.active_editor_mut().buffer_mut(),
+            "delta epsilon zeta\n",
+        );
+        let third = app.buffer_word_items("");
+        assert_eq!(
+            app.buffer_words_cache.as_ref().unwrap().scans,
+            2,
+            "a content change must invalidate the cache and rescan"
+        );
+        assert!(
+            !third.iter().any(|i| i.label == "alpha"),
+            "old words must be gone after the content change"
+        );
+        assert!(
+            third.iter().any(|i| i.label == "delta"),
+            "new words must appear after the content change"
+        );
+    }
+
+    /// The `exclude` filter must apply per query against the cached harvest:
+    /// two different excludes on unchanged buffers must both filter the same
+    /// cached item set, proving the cache is reusable across excludes.
+    #[test]
+    fn buffer_word_items_exclude_filters_through_cache() {
+        let mut app = super::App::new(None, false, None, None).unwrap();
+        hjkl_engine::BufferEdit::replace_all(app.active_editor_mut().buffer_mut(), "foo foobar\n");
+
+        let mut labels = |exclude: &str| -> Vec<String> {
+            app.buffer_word_items(exclude)
+                .into_iter()
+                .map(|i| i.label)
+                .collect()
+        };
+
+        let without_foo = labels("foo");
+        assert!(
+            without_foo.iter().any(|l| l == "foobar"),
+            "foobar must survive excluding foo: {without_foo:?}"
+        );
+        assert!(
+            !without_foo.iter().any(|l| l == "foo"),
+            "foo must be excluded: {without_foo:?}"
+        );
+
+        let without_foobar = labels("foobar");
+        assert!(
+            without_foobar.iter().any(|l| l == "foo"),
+            "foo must survive excluding foobar: {without_foobar:?}"
+        );
+        assert!(
+            !without_foobar.iter().any(|l| l == "foobar"),
+            "foobar must be excluded: {without_foobar:?}"
+        );
+        // Both queries were served from the same single harvest.
+        assert_eq!(app.buffer_words_cache.as_ref().unwrap().scans, 1);
     }
 }
