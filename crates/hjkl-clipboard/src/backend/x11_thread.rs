@@ -1235,6 +1235,14 @@ fn read_property(state: &X11State) -> Result<(u32, Vec<u8>), ClipboardError> {
         }
 
         bytes.extend_from_slice(&chunk);
+        // Bound the total like the INCR arm: a hostile selection owner can
+        // grow a property to the X server's memory limit, and the non-INCR
+        // path is the one route a size cap does not already cover.
+        if bytes.len() > MAX_INCR_TOTAL_BYTES {
+            return Err(ClipboardError::io_other(
+                "xcb_get_property: property exceeded size limit",
+            ));
+        }
         if bytes_after == 0 {
             break;
         }
