@@ -1803,18 +1803,8 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     }
 
     fn visual_text_obj_extend(&mut self, ch: char, inner: bool) {
-        let obj = match ch {
-            'w' => TextObject::Word { big: false },
-            'W' => TextObject::Word { big: true },
-            '"' | '\'' | '`' => TextObject::Quote(ch),
-            '(' | ')' | 'b' => TextObject::Bracket('('),
-            '[' | ']' => TextObject::Bracket('['),
-            '{' | '}' | 'B' => TextObject::Bracket('{'),
-            '<' | '>' => TextObject::Bracket('<'),
-            'p' => TextObject::Paragraph,
-            't' => TextObject::XmlTag,
-            's' => TextObject::Sentence,
-            _ => return,
+        let Some(obj) = crate::vim::text_object_from_char(ch) else {
+            return;
         };
         let Some((start, end, kind)) = crate::vim::text_object_range(self, obj, inner, 1) else {
             return;

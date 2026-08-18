@@ -13,6 +13,29 @@ use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line, buf_set_cursor_rc};
 
 /// Cursor position as `(row, col)`.
 pub type Pos = (usize, usize);
+
+/// Map a text-object key to its [`TextObject`]: `w`/`W` words, `"`/`'`/`` ` ``
+/// quotes, `(`/`)`/`b`, `[`/`]`, `{`/`}`/`B`, `<`/`>`, `p` paragraph,
+/// `t` XML tag, `s` sentence. `None` for keys with no text object.
+///
+/// Single source for the mapping — three callers previously carried
+/// byte-identical copies (visual extend, operator-pending, sneak), which
+/// drifted in fallback style. Each caller keeps its own `None` handling.
+pub fn text_object_from_char(ch: char) -> Option<TextObject> {
+    Some(match ch {
+        'w' => TextObject::Word { big: false },
+        'W' => TextObject::Word { big: true },
+        '"' | '\'' | '`' => TextObject::Quote(ch),
+        '(' | ')' | 'b' => TextObject::Bracket('('),
+        '[' | ']' => TextObject::Bracket('['),
+        '{' | '}' | 'B' => TextObject::Bracket('{'),
+        '<' | '>' => TextObject::Bracket('<'),
+        'p' => TextObject::Paragraph,
+        't' => TextObject::XmlTag,
+        's' => TextObject::Sentence,
+        _ => return None,
+    })
+}
 /// Returns `(start, end, kind)` where `end` is *exclusive* (one past the
 /// last character to act on). `kind` is `Linewise` for line-oriented text
 /// objects like paragraphs and `Exclusive` otherwise.

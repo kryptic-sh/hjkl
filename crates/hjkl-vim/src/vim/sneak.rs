@@ -2,7 +2,7 @@
 //!
 //! Split out of the monolithic `vim.rs` (#267 follow-up).
 
-use hjkl_vim_types::{LastChange, LastHorizontalMotion, Motion, Operator, RangeKind, TextObject};
+use hjkl_vim_types::{LastChange, LastHorizontalMotion, Motion, Operator, RangeKind};
 
 use super::*;
 use crate::vim_state::{vim, vim_mut};
@@ -195,18 +195,8 @@ pub fn apply_op_text_obj_inner<H: hjkl_engine::types::Host>(
 ) -> bool {
     // `total_count` drives bracket text objects: `2di{` targets the Nth
     // enclosing pair. Non-bracket objects ignore it (vim does too).
-    let obj = match ch {
-        'w' => TextObject::Word { big: false },
-        'W' => TextObject::Word { big: true },
-        '"' | '\'' | '`' => TextObject::Quote(ch),
-        '(' | ')' | 'b' => TextObject::Bracket('('),
-        '[' | ']' => TextObject::Bracket('['),
-        '{' | '}' | 'B' => TextObject::Bracket('{'),
-        '<' | '>' => TextObject::Bracket('<'),
-        'p' => TextObject::Paragraph,
-        't' => TextObject::XmlTag,
-        's' => TextObject::Sentence,
-        _ => return false,
+    let Some(obj) = text_object_from_char(ch) else {
+        return false;
     };
     let register = vim(ed).pending_register;
     apply_op_with_text_object(ed, op, obj, inner, total_count.max(1));

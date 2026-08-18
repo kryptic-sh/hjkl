@@ -2,7 +2,7 @@
 //!
 //! Split out of the monolithic `vim.rs` (#267 follow-up).
 
-use hjkl_vim_types::{InsertEntry, InsertReason, LastChange, Motion, Operator, TextObject};
+use hjkl_vim_types::{InsertEntry, InsertReason, LastChange, Motion, Operator};
 
 use super::*;
 use crate::vim_state::{vim, vim_mut};
@@ -509,19 +509,7 @@ pub fn range_for_op_text_obj_bridge<H: hjkl_engine::types::Host>(
     inner: bool,
     total_count: usize,
 ) -> Option<(usize, usize)> {
-    let obj = match ch {
-        'w' => TextObject::Word { big: false },
-        'W' => TextObject::Word { big: true },
-        '"' | '\'' | '`' => TextObject::Quote(ch),
-        '(' | ')' | 'b' => TextObject::Bracket('('),
-        '[' | ']' => TextObject::Bracket('['),
-        '{' | '}' | 'B' => TextObject::Bracket('{'),
-        '<' | '>' => TextObject::Bracket('<'),
-        'p' => TextObject::Paragraph,
-        't' => TextObject::XmlTag,
-        's' => TextObject::Sentence,
-        _ => return None,
-    };
+    let obj = text_object_from_char(ch)?;
     let (start, end, _kind) = text_object_range(ed, obj, inner, total_count.max(1))?;
     let (r0, r1) = (start.0.min(end.0), start.0.max(end.0));
     Some((r0, r1))
