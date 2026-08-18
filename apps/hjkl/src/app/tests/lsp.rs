@@ -2583,10 +2583,11 @@ fn language_id_pins_legacy_extension_table() {
         );
     }
 
-    // Extension case is normalized, matching the registry's own path lookup.
+    // Extension case is exact, matching Neovim and the registry's path lookup.
+    assert_eq!(crate::app::lsp_glue::language_id_for_ext(&dir, "RS"), None);
     assert_eq!(
-        crate::app::lsp_glue::language_id_for_ext(&dir, "RS").as_deref(),
-        Some("rust")
+        crate::app::lsp_glue::language_id_for_ext(&dir, "C").as_deref(),
+        Some("cpp")
     );
 
     // A genuinely unknown extension still resolves to nothing.

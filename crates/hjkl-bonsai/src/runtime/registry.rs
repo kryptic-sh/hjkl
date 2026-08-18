@@ -9,16 +9,17 @@ use super::manifest::{LangSpec, Manifest};
 
 /// Resolves a path or language name to a [`LangSpec`].
 ///
-/// Extension lookups are first-match-wins by alphabetical language name. This
-/// is how the C/C++ overlap on `.c`/`.h` resolves: `c` < `cpp`, so a bare
-/// header file gets the C grammar by default. The editor layer is responsible
-/// for honoring user overrides (modeline, `:set ft=`, project config).
+/// Extension lookups are first-match-wins by alphabetical language name only
+/// for identical, exact-case extension keys. This is how duplicate `.c` keys
+/// resolve: `c` < `cpp`, so a bare C source file gets the C grammar by default.
+/// The editor layer is responsible for honoring user overrides (modeline,
+/// `:set ft=`, project config).
 #[derive(Debug, Clone)]
 pub struct GrammarRegistry {
     manifest: Manifest,
-    /// Lower-cased extension → canonical language name. Built once at
-    /// construction; alphabetical iteration order of the manifest gives
-    /// deterministic precedence.
+    /// Exact-case extension → canonical language name. Built once at
+    /// construction; alphabetical manifest iteration gives deterministic
+    /// precedence for duplicate keys.
     by_ext: HashMap<String, String>,
 }
 
@@ -28,8 +29,9 @@ impl GrammarRegistry {
         let mut by_ext: HashMap<String, String> = HashMap::new();
         for (name, spec) in manifest.iter() {
             for ext in &spec.extensions {
-                let key = ext.to_ascii_lowercase();
-                by_ext.entry(key).or_insert_with(|| name.to_string());
+                by_ext
+                    .entry(ext.clone())
+                    .or_insert_with(|| name.to_string());
             }
         }
         Self { manifest, by_ext }
@@ -49,8 +51,8 @@ impl GrammarRegistry {
     /// Resolve a path to its default grammar by extension. Returns `None` for
     /// extensionless paths or unknown extensions.
     pub fn detect_for_path(&self, path: &Path) -> Option<&LangSpec> {
-        let ext = path.extension()?.to_str()?.to_ascii_lowercase();
-        let name = self.by_ext.get(&ext)?;
+        let ext = path.extension()?.to_str()?;
+        let name = self.by_ext.get(ext)?;
         self.manifest.get(name)
     }
 
@@ -61,12 +63,12 @@ impl GrammarRegistry {
         self.name_for_ext(ext)
     }
 
-    /// Resolve a bare file extension (no leading dot, any case) to the
+    /// Resolve a bare, exact-case file extension (no leading dot) to the
     /// canonical language name. Same lookup [`Self::name_for_path`] performs,
     /// for callers that already carry an extension string and have no path.
+    /// Undeclared case variants return `None`.
     pub fn name_for_ext(&self, ext: &str) -> Option<&str> {
-        let ext = ext.to_ascii_lowercase();
-        self.by_ext.get(&ext).map(|s| s.as_str())
+        self.by_ext.get(ext).map(|s| s.as_str())
     }
 
     /// Underlying manifest reference, for callers that need to iterate.
@@ -106,11 +108,21 @@ mod tests {
     }
 
     #[test]
-    fn c_extension_picks_c_over_cpp() {
-        // Both grammars claim `.c` (cpp via its uppercase `C` variant after
-        // lower-casing). Alphabetical first-match must give us C.
+    fn c_and_cpp_extensions_preserve_case() {
         let r = embedded();
         assert_eq!(r.name_for_path(&PathBuf::from("foo.c")), Some("c"));
+        assert_eq!(r.name_for_path(&PathBuf::from("foo.C")), Some("cpp"));
+        assert_eq!(r.name_for_ext("c"), Some("c"));
+        assert_eq!(r.name_for_ext("C"), Some("cpp"));
+    }
+
+    #[test]
+    fn undeclared_uppercase_extensions_return_none() {
+        let r = embedded();
+        assert_eq!(r.name_for_path(&PathBuf::from("README.MD")), None);
+        assert_eq!(r.name_for_path(&PathBuf::from("plugin.ZSH")), None);
+        assert_eq!(r.name_for_ext("MD"), None);
+        assert_eq!(r.name_for_ext("ZSH"), None);
     }
 
     #[test]
@@ -118,17 +130,18 @@ mod tests {
         let r = embedded();
         // `.cpp` is unambiguously C++.
         assert_eq!(r.name_for_path(&PathBuf::from("foo.cpp")), Some("cpp"));
-        // The C grammar in the manifest doesn't claim `.h` — only cpp does
-        // (via the lowercased `H`). Distinguishing C vs C++ headers is the
-        // editor layer's job (modeline / project config).
+        // The C grammar does not claim `.h` or `.H`; both exact-case extension
+        // keys belong to cpp. Distinguishing C vs C++ headers is the editor
+        // layer's job (modeline / project config).
         assert_eq!(r.name_for_path(&PathBuf::from("foo.h")), Some("cpp"));
+        assert_eq!(r.name_for_path(&PathBuf::from("foo.H")), Some("cpp"));
     }
 
     #[test]
-    fn case_insensitive_extension() {
+    fn declared_lowercase_extension_resolves() {
         let r = embedded();
         assert_eq!(
-            r.name_for_path(&PathBuf::from("README.MD")),
+            r.name_for_path(&PathBuf::from("README.md")),
             Some("markdown")
         );
     }
@@ -153,8 +166,9 @@ mod tests {
     }
 
     #[test]
-    fn handcrafted_alphabetical_precedence() {
-        // Two grammars claiming the same extension; alphabetically first wins.
+    fn handcrafted_exact_case_precedence() {
+        // Identical extension keys use alphabetical first-match precedence;
+        // differently cased keys remain distinct.
         let toml = r#"
             [meta]
             helix_repo = "https://github.com/helix-editor/helix"
@@ -172,11 +186,12 @@ mod tests {
             [language.bbb]
             git_url = "https://example/bbb"
             git_rev = "2"
-            extensions = ["x"]
+            extensions = ["x", "X"]
             c_files = ["src/parser.c"]
             query_source = "helix"
         "#;
         let r = GrammarRegistry::new(Manifest::from_toml_str(toml).unwrap());
         assert_eq!(r.name_for_path(&PathBuf::from("foo.x")), Some("aaa"));
+        assert_eq!(r.name_for_path(&PathBuf::from("foo.X")), Some("bbb"));
     }
 }

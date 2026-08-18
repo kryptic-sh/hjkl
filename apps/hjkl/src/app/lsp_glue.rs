@@ -270,11 +270,10 @@ pub(super) fn language_id_for_ext(
     directory: &hjkl_lang::LanguageDirectory,
     ext: &str,
 ) -> Option<String> {
-    let lower = ext.to_ascii_lowercase();
-    if let Some(id) = language_id_override(&lower) {
+    if let Some(id) = language_id_override(ext) {
         return Some(id.to_string());
     }
-    directory.name_for_ext(&lower)
+    directory.name_for_ext(ext)
 }
 
 /// Language-name → LSP language id — the name counterpart of
