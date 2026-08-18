@@ -1406,13 +1406,10 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         // Git status follows the PATH, not the row: resolve each row's color
         // from the reconciled tree's status map (which carries rollup + the
         // dirty-buffer overlay). New / renamed paths absent from the map render
-        // clean until the next reconcile.
-        let git_map: std::collections::HashMap<&std::path::Path, hjkl_app::git::ExplorerGit> = pane
-            .tree
-            .nodes
-            .iter()
-            .filter_map(|n| n.git.map(|g| (n.path.as_path(), g)))
-            .collect();
+        // clean until the next reconcile. Maintained by `ExplorerTree` at each
+        // rebuild / retag — the tree's git state only changes on reconcile, so
+        // the map is not re-derived from `nodes` per frame.
+        let git_map = &pane.tree.git_map;
 
         // Walk doc rows starting at vp_top, skipping hidden rows, collecting
         // up to `screen_height` visible rows — mirroring BufferView's render

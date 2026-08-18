@@ -58,6 +58,12 @@ pub struct ExplorerTree {
     /// [`hjkl_app::git::explorer_status_map`] produces). Populated on each
     /// full rebuild; used by [`Self::retag_git`] for cheap live overlay.
     pub(crate) git_base: HashMap<PathBuf, hjkl_app::git::ExplorerGit>,
+    /// Path → git status, re-derived from the nodes' `git` fields after every
+    /// rebuild / retag (i.e. after directory rollups). The render overlay
+    /// resolves per-row colors through this instead of rebuilding a map from
+    /// `nodes` on every frame (P7: the tree's git state only changes on
+    /// reconcile).
+    pub(crate) git_map: HashMap<PathBuf, hjkl_app::git::ExplorerGit>,
     /// `true` when `root` is inside a git repository (cached from the last
     /// rebuild). Gates `retag_git` so no git syscalls occur per keystroke
     /// outside a repo.
@@ -78,6 +84,7 @@ impl ExplorerTree {
             show_hidden: true,
             respect_gitignore: true,
             git_base: HashMap::new(),
+            git_map: HashMap::new(),
             repo_present: false,
         };
         tree.rebuild();
@@ -222,6 +229,18 @@ impl ExplorerTree {
         self.push_children(&root, 1, &[], &mut out, &status);
         roll_up_dir_status(&mut out);
         self.nodes = out;
+        self.refresh_git_map();
+    }
+
+    /// Re-derive `git_map` from the nodes' `git` fields. Called after every
+    /// mutation of node git state (`rebuild`, `retag_git`) so the render
+    /// overlay's per-row path lookup never re-walks the node list per frame.
+    fn refresh_git_map(&mut self) {
+        self.git_map = self
+            .nodes
+            .iter()
+            .filter_map(|n| n.git.map(|g| (n.path.clone(), g)))
+            .collect();
     }
 
     /// The explorer no longer uses buffer folds: with the lazy walk a collapsed
@@ -246,6 +265,7 @@ impl ExplorerTree {
             node.git = status.get(&node.path).copied();
         }
         roll_up_dir_status(&mut self.nodes);
+        self.refresh_git_map();
     }
 
     /// Toggle the expansion of the directory at `path` in the `expanded` set.
@@ -4909,6 +4929,49 @@ mod tests {
         assert!(
             checked && presses < 400,
             "the test must observe a scroll and finish (presses={presses}, checked={checked})"
+        );
+    }
+
+    /// `git_map` must be maintained by `rebuild` and `retag_git` — the render
+    /// overlay reads it per frame instead of re-deriving it from `nodes`, so
+    /// this pins that it tracks the nodes' git state (incl. rollups) and that
+    /// a retag refreshes it.
+    #[test]
+    fn git_map_tracks_nodes_and_refreshes_on_retag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _repo = git2::Repository::init(tmp.path()).unwrap();
+        std::fs::write(tmp.path().join("new.txt"), b"x").unwrap();
+        let mut tree = ExplorerTree::new(tmp.path().to_path_buf());
+        let new_path = tmp.path().join("new.txt");
+        assert!(
+            matches!(
+                tree.git_map.get(&new_path),
+                Some(hjkl_app::git::ExplorerGit::Untracked)
+            ),
+            "an untracked file must appear in git_map after rebuild: {:?}",
+            tree.git_map.get(&new_path)
+        );
+        // Every mapped path must have a node carrying the same status (the
+        // map is derived from the nodes' post-rollup git fields).
+        for (path, git) in &tree.git_map {
+            let node_git = tree
+                .nodes
+                .iter()
+                .find(|n| &n.path == path)
+                .expect("git_map path must exist as a node")
+                .git;
+            assert_eq!(
+                Some(*git),
+                node_git,
+                "git_map must mirror node.git for {path:?}"
+            );
+        }
+        // A retag with an empty status (e.g. the dirty-buffer overlay cleared)
+        // must refresh git_map, not leave stale entries.
+        tree.retag_git(&std::collections::HashMap::new());
+        assert!(
+            !tree.git_map.contains_key(&new_path),
+            "retag must clear git_map entries whose node.git is now None"
         );
     }
 }
