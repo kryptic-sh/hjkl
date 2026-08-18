@@ -847,6 +847,100 @@ completion.
    sharing if a third consumer appears. _All other items from the 2026-08-10
    sweep are closed — see the §7 session entry below._
 
+### 1.13 Neovim filetype-detection parity (2026-08-18)
+
+Audited `LanguageDirectory::detect`, `GrammarRegistry`, the embedded grammar
+manifest, modeline application, and grammar attachment against the installed
+Neovim 0.12.4 runtime. Terra performed the first read-only pass; every item
+below was then checked against the cited hjkl symbol and either Neovim's runtime
+tables or a headless Neovim probe. Work these in behavior-first slices with
+differential cases for the exact examples below.
+
+#### Detection behavior
+
+1. **Modelines lose to a recognized basename or extension.**
+   `LanguageDirectory::detect` returns after filename/extension detection before
+   scanning content. Neovim applies modelines after ordinary filetype detection:
+   `script.py` containing `# vim: ft=ruby` ends as `ruby`, while hjkl's
+   `extension_wins_over_everything` test pins `python`. Move enabled
+   `vi:`/`ex:`/ `vim:` `ft=` and `filetype=` application after path/content
+   detection so it can override every inferred type.
+2. **Extension lookup destroys Neovim's case distinctions.**
+   `GrammarRegistry::new` and `name_for_ext` ASCII-lowercase every key. This
+   collapses the manifest's `.C` → `cpp` and `.c` → `c` entries, making both C;
+   it also accepts undeclared uppercase forms (`foo.MD` → markdown and `foo.ZSH`
+   → bash) for which Neovim returns no filetype. Preserve exact-case keys, then
+   add only intentional case-insensitive aliases explicitly.
+3. **The modeline line cap rejects valid Neovim modelines.** Both
+   `modeline_filetype_on_line` and `modeline::parse_line` truncate each scanned
+   line at `MODELINE_LINE_CAP`; Neovim recognized `# vim: ft=python` after a
+   600-character prefix. Remove the cap or replace it with a limit that does not
+   change accepted modelines.
+4. **Colon tokenization stops before later assignments Neovim applies.**
+   `modeline_filetype_on_line` and `modeline::parse_line` break on every token
+   ending in `:`. Neovim evaluates `# vim: ft=python : ft=ruby` as `ruby`; hjkl
+   keeps `python`. Match Neovim's two modeline forms without letting trailing
+   prose become options, and pin separator-colon and terminating-colon cases.
+5. **Hashbang start syntax is more permissive than Neovim.** `shebang_language`
+   strips a UTF-8 BOM and leading whitespace before `#!`; Neovim requires `#!`
+   at the start and returns no filetype for both prefixed forms. Decide whether
+   this extension is intentional; strict parity means byte-zero `#!`, while
+   retaining it needs an explicit compatibility-policy test rather than calling
+   it Neovim parity.
+6. **Filetype identity and grammar identity are conflated.** A modeline or live
+   `:set ft=sh` correctly leaves the buffer filetype as `sh`, but
+   `set_language_by_name` can only attach an exact manifest name and therefore
+   drops highlighting because the grammar is named `bash`. Add a grammar-alias
+   layer that preserves the buffer's Neovim filetype (`sh`, `zsh`, `dash`,
+   `ksh`) while resolving the available bash grammar. Apply the same separation
+   to shebang detection, which currently reports `bash` where Neovim reports
+   `sh` or `zsh`.
+
+#### Existing-grammar mapping coverage
+
+1. **Sync Neovim's literal filename table into path detection.** High-value
+   misses with an existing hjkl grammar include `Pipfile`, `.gitignore`,
+   `.editorconfig`, `Kconfig.debug`, `.JUSTFILE`/`.Justfile`/`JUSTFILE`,
+   `meson.options`, `.Rhistory`/`.Rprofile`, `.babelrc`/`.eslintrc`,
+   `.clang-format`/`.clang-tidy`/`.clangd`, `.dockerignore`/`.npmignore`/
+   `.ignore`, `.ocamlinit`, `.prettierrc`, `composer.lock`, `deno.lock`,
+   `flake.lock`, `Gopkg.lock`, `uv.lock`, `go.sum`, `go.work`, `rebar.config`,
+   and `mix.lock`. Do not grow `known_filename_language` as an ad hoc sample:
+   import the runtime data in a maintainable form and cover literal full-path,
+   basename, positive-priority pattern, extension, negative-priority pattern,
+   then content precedence.
+2. **Sync missing literal extension aliases into grammar metadata.** Comparing
+   Neovim 0.12.4's literal extension map with `bonsai.toml` found 137 keys whose
+   target grammar already exists after accounting for hjkl's current case-fold.
+   Representative gaps are C++ modules (`c++m`, `ccm`, `cxxm`, `moc`, `mpp`,
+   `tcc`, `tlh`), Fortran variants (`f08`, `F08`, `f77`, `F77`, `fpp`, `FPP`,
+   `ftn`, `FTN`), PHP (`php0`–`php3`, `php6`–`php9`, `phpt`, `theme`), JSON/XML
+   families, GLSL ray stages, OCaml (`mlip`, `mll`, `mlp`, `mlt`, `mly`), and
+   Tcl (`itcl`, `itk`, `jacl`, `tk`, `tm`). Add generated/table-driven parity
+   coverage so future runtime updates expose drift rather than requiring another
+   hand comparison.
+3. **Port supported hashbang aliases.** `interpreter_language_exact` is missing
+   Neovim mappings whose grammar already ships: `just`, `fennel`, `gnuplot`,
+   `janet`, `gforth` → forth, `haskell`, `scheme`, `js`/`rhino` → JavaScript,
+   `expectk`/`itclsh`/`itkwish` → Tcl, and `instantfpc` → Pascal. Test direct
+   paths and `env` forms, including version-suffixed interpreters where Neovim
+   accepts them.
+
+#### Grammar/support policy gaps
+
+- **Shell-family fidelity needs a product decision.** Neovim distinguishes `sh`,
+  `zsh`, `csh`, and `tcsh`; hjkl has only the bash grammar and intentionally
+  maps several families to it. The alias layer above can preserve filetype
+  identity while using bash as a fallback, but exact highlighting requires
+  dedicated zsh/csh/tcsh grammars. Document the fallback until those grammars
+  are selected.
+- **Neovim hashbang types with no hjkl grammar remain unsupported.** These
+  include Raku, Expect, Pike, bc, sed, WML, CFEngine, RouterOS, Icon, Rexx,
+  execline, and bpftrace. Prioritize grammars by demand instead of mapping them
+  to misleading substitutes. In particular, `#!/usr/bin/env raku` currently
+  returns no hjkl type; Terra's initial report said it fell through to Perl, but
+  source verification disproved that claim.
+
 ## 2. Blocked on platform access
 
 | Finding                                                      | Location                                                         | Blocker                                                                             |
