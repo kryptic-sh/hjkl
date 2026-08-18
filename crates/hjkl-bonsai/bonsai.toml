@@ -193,7 +193,7 @@ source = "nvim-treesitter"
 [language.brightscript]
 git_url = "https://github.com/ajdelcimmuto/tree-sitter-brightscript"
 git_rev = "48ce1687125c6dfefcc7a1bef19fa0f0f00426cc"
-extensions = ["brightscript"]
+extensions = ["brightscript", "brs"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -201,7 +201,7 @@ source = "nvim-treesitter"
 [language.c]
 git_url = "https://github.com/tree-sitter/tree-sitter-c"
 git_rev = "2a265d69a4caf57108a73ad2ed1e6922dd2f998c"
-extensions = ["c"]
+extensions = ["c", "epro", "mdh", "qc"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -369,7 +369,7 @@ source = "helix+nvim-treesitter"
 [language.cpp]
 git_url = "https://github.com/tree-sitter/tree-sitter-cpp"
 git_rev = "e5cea0ec884c5c3d2d1e41a741a66ce13da4d945"
-extensions = ["C", "H", "c++", "cc", "cpp", "cppm", "cu", "cuh", "cxx", "h", "h++", "hh", "hpp", "hxx", "ii", "inl", "ino", "ipp", "ixx", "tpp", "txx"]
+extensions = ["C", "H", "c++", "cc", "cpp", "cppm", "cu", "cuh", "cxx", "h", "h++", "hh", "hpp", "hxx", "ii", "inl", "ino", "ipp", "ixx", "tpp", "txx", "c++m", "ccm", "cxxm", "moc", "mpp", "tcc", "tlh"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -442,7 +442,7 @@ source = "helix+nvim-treesitter"
 [language.dart]
 git_url = "https://github.com/UserNobody14/tree-sitter-dart"
 git_rev = "80e23c07b64494f7e21090bb3450223ef0b192f4"
-extensions = ["dart"]
+extensions = ["dart", "drt"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -522,7 +522,7 @@ source = "helix+nvim-treesitter"
 [language.dot]
 git_url = "https://github.com/rydesun/tree-sitter-dot"
 git_rev = "9ab85550c896d8b294d9b9ca1e30698736f08cea"
-extensions = ["dot"]
+extensions = ["dot", "gv"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -644,7 +644,7 @@ source = "helix+nvim-treesitter"
 [language.elsa]
 git_url = "https://github.com/glapa-grossklag/tree-sitter-elsa"
 git_rev = "0a66b2b3f3c1915e67ad2ef9f7dbd2a84820d9d7"
-extensions = ["elsa"]
+extensions = ["elsa", "lc"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -692,7 +692,7 @@ source = "helix"
 [language.erlang]
 git_url = "https://github.com/WhatsApp/tree-sitter-erlang"
 git_rev = "416ca60d7d2a824c0d346163541153e230710780"
-extensions = ["app", "erl", "erlang", "hrl"]
+extensions = ["app", "erl", "erlang", "hrl", "yaws"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -716,7 +716,7 @@ source = "nvim-treesitter"
 [language.faust]
 git_url = "https://github.com/khiner/tree-sitter-faust"
 git_rev = "f3b9274514b5f9bf6b0dd4a01c30f9cc15c58bc4"
-extensions = ["dsp"]
+extensions = ["dsp", "lib"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -748,7 +748,7 @@ source = "helix+nvim-treesitter"
 [language.firrtl]
 git_url = "https://github.com/amaanq/tree-sitter-firrtl"
 git_rev = "8503d3a0fe0f9e427863cb0055699ff2d29ae5f5"
-extensions = ["firrtl"]
+extensions = ["firrtl", "fir"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -780,7 +780,7 @@ source = "nvim-treesitter"
 [language.forth]
 git_url = "https://github.com/AlexanderBrevig/tree-sitter-forth"
 git_rev = "90189238385cf636b9ee99ce548b9e5b5e569d48"
-extensions = ["4th", "forth", "fs", "fth"]
+extensions = ["4th", "forth", "fs", "fth", "ft"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -788,7 +788,7 @@ source = "helix+nvim-treesitter"
 [language.fortran]
 git_url = "https://github.com/stadelmanma/tree-sitter-fortran"
 git_rev = "d738334e4a21866a1ab81fb3f27f9b0b2ad2e515"
-extensions = ["F", "F03", "F90", "F95", "f", "f03", "f90", "f95", "for", "fortran"]
+extensions = ["F", "F03", "F90", "F95", "f", "f03", "f90", "f95", "for", "fortran", "F08", "F77", "FOR", "FPP", "FTN", "f08", "f77", "fpp", "ftn"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -796,7 +796,7 @@ source = "helix+nvim-treesitter"
 [language.freebasic]
 git_url = "https://github.com/Ra77a3l3-jar/tree-sitter-freebasic"
 git_rev = "dbf696adb4c0b9c020074e75043c90592981ee7f"
-extensions = ["bas", "bi"]
+extensions = ["bas", "bi", "fb"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "helix"
 source = "helix"
@@ -821,7 +821,7 @@ source = "helix+nvim-treesitter"
 [language.func]
 git_url = "https://github.com/amaanq/tree-sitter-func"
 git_rev = "f780ca55e65e7d7360d0229331763e16c452fc98"
-extensions = ["func"]
+extensions = ["func", "fc"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -869,7 +869,7 @@ source = "helix+nvim-treesitter"
 [language.gdshader]
 git_url = "https://github.com/GodOfAvacyn/tree-sitter-gdshader"
 git_rev = "ffd9f958df13cae04593781d7d2562295a872455"
-extensions = ["gdshaderinc"]
+extensions = ["gdshaderinc", "gdshader", "shader"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -941,7 +941,7 @@ source = "nvim-treesitter"
 [language.gitignore]
 git_url = "https://github.com/shunsambongi/tree-sitter-gitignore"
 git_rev = "f4685bf11ac466dd278449bcfe5fd014e94aa504"
-extensions = ["gitignore"]
+extensions = ["gitignore", "prettierignore"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -989,7 +989,7 @@ source = "nvim-treesitter"
 [language.glsl]
 git_url = "https://github.com/theHamsta/tree-sitter-glsl"
 git_rev = "24a6c8ef698e4480fecf8340d771fbcb5de8fbb4"
-extensions = ["comp", "frag", "geom", "glsl", "tesc", "tese", "vert"]
+extensions = ["comp", "frag", "geom", "glsl", "tesc", "tese", "vert", "rahit", "rcall", "rchit", "rgen", "rint", "rmiss"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -1005,7 +1005,7 @@ source = "helix+nvim-treesitter"
 [language.gnuplot]
 git_url = "https://github.com/dpezto/tree-sitter-gnuplot"
 git_rev = "8923c1e38b9634a688a6c0dce7c18c8ffb823e79"
-extensions = ["gnuplot", "plot", "plt"]
+extensions = ["gnuplot", "plot", "plt", "gpi"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -1133,7 +1133,7 @@ source = "helix"
 [language.hack]
 git_url = "https://github.com/slackhq/tree-sitter-hack"
 git_rev = "bc5b3a10d6d27e8220a113a9a7fe9bec0a1574b0"
-extensions = ["hack"]
+extensions = ["hack", "hackpartial"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -1149,7 +1149,7 @@ source = "helix+nvim-treesitter"
 [language.haskell]
 git_url = "https://github.com/tree-sitter/tree-sitter-haskell"
 git_rev = "0975ef72fc3c47b530309ca93937d7d143523628"
-extensions = ["haskell", "hs", "hs-boot", "hsc"]
+extensions = ["haskell", "hs", "hs-boot", "hsc", "hsig"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -1238,7 +1238,7 @@ source = "nvim-treesitter"
 [language.hlsplaylist]
 git_url = "https://github.com/Freed-Wu/tree-sitter-hlsplaylist"
 git_rev = "3bfda9271e3adb08d35f47a2102fe957009e1c55"
-extensions = ["hlsplaylist"]
+extensions = ["hlsplaylist", "m3u", "m3u8"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -1390,7 +1390,7 @@ source = "nvim-treesitter"
 [language.java]
 git_url = "https://github.com/tree-sitter/tree-sitter-java"
 git_rev = "a7db5227ec40fcfe94489559d8c9bc7c8181e25a"
-extensions = ["jav", "java", "pde"]
+extensions = ["jav", "java", "pde", "jsh"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -1406,7 +1406,7 @@ source = "nvim-treesitter"
 [language.javascript]
 git_url = "https://github.com/tree-sitter/tree-sitter-javascript"
 git_rev = "6fbef40512dcd9f0a61ce03a4c9ae7597b36ab5c"
-extensions = ["cjs", "es6", "gs", "javascript", "js", "mjs", "pac", "rules"]
+extensions = ["cjs", "es6", "gs", "javascript", "js", "mjs", "pac", "rules", "es", "jsm"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -1464,7 +1464,7 @@ source = "helix+nvim-treesitter"
 [language.json]
 git_url = "https://github.com/tree-sitter/tree-sitter-json"
 git_rev = "46aa487b3ade14b7b05ef92507fdaa3915a662a3"
-extensions = ["arb", "avsc", "code-workspace", "css.map", "geojson", "gltf", "ipynb", "js.map", "json", "jsonl", "ldtk", "ldtkl", "sublime-build", "sublime-color-scheme", "sublime-commands", "sublime-completions", "sublime-keymap", "sublime-macro", "sublime-menu", "sublime-mousemap", "sublime-project", "sublime-settings", "sublime-theme", "sublime-workspace", "ts.map", "webmanifest"]
+extensions = ["arb", "avsc", "code-workspace", "css.map", "geojson", "gltf", "ipynb", "js.map", "json", "jsonl", "ldtk", "ldtkl", "sublime-build", "sublime-color-scheme", "sublime-commands", "sublime-completions", "sublime-keymap", "sublime-macro", "sublime-menu", "sublime-mousemap", "sublime-project", "sublime-settings", "sublime-theme", "sublime-workspace", "ts.map", "webmanifest", "bd", "bda", "cps", "json-patch", "jsonp", "jupyterlab-settings", "mcmeta", "slnf", "xci"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -1520,7 +1520,7 @@ source = "helix+nvim-treesitter"
 [language.just]
 git_url = "https://github.com/IndianBoy42/tree-sitter-just"
 git_rev = "bb0c898a80644de438e6efe5d88d30bf092935cd"
-extensions = ["just"]
+extensions = ["just", "JUST", "Just"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -1568,7 +1568,7 @@ source = "helix"
 [language.kotlin]
 git_url = "https://github.com/fwcd/tree-sitter-kotlin"
 git_rev = "c4ddea359a7ff4d92360b2efcd6cfce5dc25afe6"
-extensions = ["kotlin", "kt", "kts"]
+extensions = ["kotlin", "kt", "kts", "ktm"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -1672,7 +1672,7 @@ source = "nvim-treesitter"
 [language.liquidsoap]
 git_url = "https://github.com/savonet/tree-sitter-liquidsoap"
 git_rev = "8e51fa63ddb93ac179d4e34a311d3d3f03780b42"
-extensions = ["liquidsoap"]
+extensions = ["liquidsoap", "liq"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -1704,7 +1704,7 @@ source = "helix"
 [language.lua]
 git_url = "https://github.com/MunifTanjim/tree-sitter-lua"
 git_rev = "db16e76558122e834ee214c8dc755b4a3edc82a9"
-extensions = ["lua", "rockspec"]
+extensions = ["lua", "rockspec", "nse", "tlu"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -1802,7 +1802,7 @@ source = "nvim-treesitter"
 [language.mermaid]
 git_url = "https://github.com/monaqa/tree-sitter-mermaid"
 git_rev = "90ae195b31933ceb9d079abfa8a3ad0a36fee4cc"
-extensions = ["mermaid", "mmd"]
+extensions = ["mermaid", "mmd", "mmdc"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -1962,7 +1962,7 @@ source = "nvim-treesitter"
 [language.objdump]
 git_url = "https://github.com/ColinKennedy/tree-sitter-objdump"
 git_rev = "28d3b2e25a0b1881d1b47ed1924ca276c7003d45"
-extensions = ["objdump"]
+extensions = ["objdump", "cppobjdump"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -1971,7 +1971,7 @@ source = "nvim-treesitter"
 git_url = "https://github.com/tree-sitter/tree-sitter-ocaml"
 git_rev = "91708deb10cb4fe68ab3c50891426b9967dbf35a"
 subpath = "grammars/ocaml"
-extensions = ["ml", "ocaml"]
+extensions = ["ml", "ocaml", "mlip", "mll", "mlp", "mlt", "mly"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2029,7 +2029,7 @@ source = "helix"
 [language.org]
 git_url = "https://github.com/milisims/tree-sitter-org"
 git_rev = "698bb1a34331e68f83fc24bdd1b6f97016bb30de"
-extensions = ["org"]
+extensions = ["org", "org_archive"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "helix"
 source = "helix"
@@ -2037,7 +2037,7 @@ source = "helix"
 [language.pascal]
 git_url = "https://github.com/Isopod/tree-sitter-pascal"
 git_rev = "78426d96bde7114af979e314283e45d087603428"
-extensions = ["inc", "lfm", "lpr", "pas", "pascal", "pp"]
+extensions = ["inc", "lfm", "lpr", "pas", "pascal", "pp", "dpr"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2053,7 +2053,7 @@ source = "nvim-treesitter"
 [language.pem]
 git_url = "https://github.com/ObserverOfTime/tree-sitter-pem"
 git_rev = "1d16b8e063fdf4385e389096c4bc4999eaaef05f"
-extensions = ["cert", "crt", "pem"]
+extensions = ["cert", "crt", "pem", "cer", "csr"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2069,7 +2069,7 @@ source = "helix"
 [language.perl]
 git_url = "https://github.com/tree-sitter-perl/tree-sitter-perl"
 git_rev = "ecd90bd8b381bcc7219fed4fe351903630e761c6"
-extensions = ["nqp", "p6", "perl", "pl", "pl6", "pm", "pm6", "psgi", "raku", "rakudoc", "rakumod", "rakutest", "t"]
+extensions = ["nqp", "p6", "perl", "pl", "pl6", "pm", "pm6", "psgi", "raku", "rakudoc", "rakumod", "rakutest", "t", "al", "plx"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2086,7 +2086,7 @@ source = "helix"
 git_url = "https://github.com/tree-sitter/tree-sitter-php"
 git_rev = "576a56fa7f8b68c91524cdd211eb2ffc43e7bb11"
 subpath = "php"
-extensions = ["ctp", "inc", "php", "php4", "php5", "phtml"]
+extensions = ["ctp", "inc", "php", "php4", "php5", "phtml", "php0", "php1", "php2", "php3", "php6", "php7", "php8", "php9", "phpt", "theme"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2209,7 +2209,7 @@ source = "nvim-treesitter"
 git_url = "https://github.com/foxyseta/tree-sitter-prolog"
 git_rev = "d8d415f6a1cf80ca138524bcc395810b176d40fa"
 subpath = "grammars/prolog"
-extensions = ["pl", "prolog"]
+extensions = ["pl", "prolog", "pdb"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2330,7 +2330,7 @@ source = "nvim-treesitter"
 [language.qml]
 git_url = "https://github.com/yuja/tree-sitter-qmljs"
 git_rev = "0b2b25bcaa7d4925d5f0dda16f6a99c588a437f1"
-extensions = ["qml"]
+extensions = ["qml", "qbs"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "helix"
 source = "helix"
@@ -2403,7 +2403,7 @@ source = "nvim-treesitter"
 [language.rasi]
 git_url = "https://github.com/Fymyte/tree-sitter-rasi"
 git_rev = "6c9bbcfdf5f0f553d9ebc01750a3aa247a37b8aa"
-extensions = ["rasi"]
+extensions = ["rasi", "rasinc"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -2459,7 +2459,7 @@ source = "helix+nvim-treesitter"
 [language.requirements]
 git_url = "https://github.com/ObserverOfTime/tree-sitter-requirements"
 git_rev = "728910099ddea7f1f94ea95a35a70d1ea76a1639"
-extensions = ["requirements"]
+extensions = ["requirements", "pip"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -2467,7 +2467,7 @@ source = "nvim-treesitter"
 [language.rescript]
 git_url = "https://github.com/rescript-lang/tree-sitter-rescript"
 git_rev = "4606cd81c4c31d1d02390fee530858323410a74c"
-extensions = ["res", "rescript"]
+extensions = ["res", "rescript", "resi"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2493,7 +2493,7 @@ source = "helix"
 [language.rnoweb]
 git_url = "https://github.com/bamonroe/tree-sitter-rnoweb"
 git_rev = "1a74dc0ed731ad07db39f063e2c5a6fe528cae7f"
-extensions = ["rnoweb"]
+extensions = ["rnoweb", "Rnw", "Snw", "rnw", "snw"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -2549,7 +2549,7 @@ source = "helix+nvim-treesitter"
 [language.ruby]
 git_url = "https://github.com/tree-sitter/tree-sitter-ruby"
 git_rev = "89bd7a8e5450cb6a942418a619d30469f259e5d6"
-extensions = ["gemspec", "irb", "jb", "jbuilder", "podspec", "rabl", "rake", "rb", "rbi", "rbs", "rjs", "ruby"]
+extensions = ["gemspec", "irb", "jb", "jbuilder", "podspec", "rabl", "rake", "rb", "rbi", "rbs", "rjs", "ruby", "builder", "rant", "rbw", "ru", "rxml"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2581,7 +2581,7 @@ source = "helix"
 [language.scala]
 git_url = "https://github.com/tree-sitter/tree-sitter-scala"
 git_rev = "c1189954df854977c3a52003ca8a247c5f4729ba"
-extensions = ["sbt", "sc", "scala"]
+extensions = ["sbt", "sc", "scala", "mill"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2589,7 +2589,7 @@ source = "helix+nvim-treesitter"
 [language.scheme]
 git_url = "https://github.com/6cdh/tree-sitter-scheme"
 git_rev = "63e25a4a84142ae7ee0ee01fe3a32c985ca16745"
-extensions = ["scheme", "scm", "sld", "ss"]
+extensions = ["scheme", "scm", "sld", "ss", "stsg"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2720,7 +2720,7 @@ source = "helix"
 [language.sparql]
 git_url = "https://github.com/GordianDziwis/tree-sitter-sparql"
 git_rev = "d853661ca680d8ff7f8d800182d5782b61d0dd58"
-extensions = ["sparql"]
+extensions = ["sparql", "rq"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -2736,7 +2736,7 @@ source = "helix"
 [language.sql]
 git_url = "https://github.com/derekstride/tree-sitter-sql"
 git_rev = "b9d109588d5b5ed986c857464830c2f0bef53f18"
-extensions = ["dsql", "sql"]
+extensions = ["dsql", "sql", "pkb", "pks", "tyb", "tyc"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2744,7 +2744,7 @@ source = "helix+nvim-treesitter"
 [language.squirrel]
 git_url = "https://github.com/amaanq/tree-sitter-squirrel"
 git_rev = "072c969749e66f000dba35a33c387650e203e96e"
-extensions = ["squirrel"]
+extensions = ["squirrel", "nut"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -2760,7 +2760,7 @@ source = "nvim-treesitter"
 [language.starlark]
 git_url = "https://github.com/amaanq/tree-sitter-starlark"
 git_rev = "a453dbf3ba433db0e5ec621a38a7e59d72e4dc69"
-extensions = ["bazel", "bzl", "star"]
+extensions = ["bazel", "bzl", "star", "ipd", "sky", "starlark"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2914,7 +2914,7 @@ source = "helix"
 [language.tcl]
 git_url = "https://github.com/tree-sitter-grammars/tree-sitter-tcl"
 git_rev = "f15e711167661d1ba541d4f62b9dbfc4ce61ec56"
-extensions = ["tcl"]
+extensions = ["tcl", "itcl", "itk", "jacl", "tk", "tm"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -2979,7 +2979,7 @@ source = "helix+nvim-treesitter"
 [language.tiger]
 git_url = "https://github.com/ambroisie/tree-sitter-tiger"
 git_rev = "4a77b2d7a004587646bddc4e854779044b6db459"
-extensions = ["tiger"]
+extensions = ["tiger", "tig"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -3118,7 +3118,7 @@ source = "helix+nvim-treesitter"
 [language.unison]
 git_url = "https://github.com/kylegoetz/tree-sitter-unison"
 git_rev = "3c97db76d3cdbd002dfba493620c2d5df2fd6fa9"
-extensions = ["u"]
+extensions = ["u", "uu"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "helix"
 source = "helix"
@@ -3126,7 +3126,7 @@ source = "helix"
 [language.usd]
 git_url = "https://github.com/ColinKennedy/tree-sitter-usd"
 git_rev = "4e0875f724d94d0c2ff36f9b8cb0b12f8b20d216"
-extensions = ["usd"]
+extensions = ["usd", "usda"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
@@ -3175,7 +3175,7 @@ source = "helix+nvim-treesitter"
 [language.vhdl]
 git_url = "https://github.com/jpt13653903/tree-sitter-vhdl"
 git_rev = "35ed277d3e98836796bc764010dc3fb800d14ee4"
-extensions = ["vhd", "vhdl"]
+extensions = ["vhd", "vhdl", "vbe", "vho", "vst"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -3330,7 +3330,7 @@ source = "helix"
 git_url = "https://github.com/tree-sitter-grammars/tree-sitter-xml"
 git_rev = "0d9a8099c963ed53e183425c1b47fa2622c8eaf7"
 subpath = "xml"
-extensions = ["ascx", "atom", "axaml", "axml", "bpmn", "checkstyle", "cpt", "csl", "csproj.user", "dita", "ditamap", "dtml", "fods", "fodt", "fxml", "gir", "glif", "gml", "gpx", "iml", "isml", "itermcolors", "jmx", "kml", "launch", "menu", "mobileconfig", "mpd", "musicxml", "mxml", "ncx", "nuspec", "opml", "osc", "osm", "plist", "policy", "pt", "publishsettings", "pubxml", "pubxml.user", "rbxlx", "rbxmx", "resx", "rng", "rss", "shproj", "smil", "storyboard", "sublime-snippet", "svg", "terminal", "tld", "tmx", "ui", "vbproj.user", "vcxproj", "vcxproj.filters", "wixproj", "wsdl", "wxi", "wxs", "xaml", "xbl", "xib", "xlf", "xliff", "xml", "xmp", "xoml", "xpdl", "xrc", "xsd", "xsl", "xul"]
+extensions = ["ascx", "atom", "axaml", "axml", "bpmn", "checkstyle", "cpt", "csl", "csproj.user", "dita", "ditamap", "dtml", "fods", "fodt", "fxml", "gir", "glif", "gml", "gpx", "iml", "isml", "itermcolors", "jmx", "kml", "launch", "menu", "mobileconfig", "mpd", "musicxml", "mxml", "ncx", "nuspec", "opml", "osc", "osm", "plist", "policy", "pt", "publishsettings", "pubxml", "pubxml.user", "rbxlx", "rbxmx", "resx", "rng", "rss", "shproj", "smil", "storyboard", "sublime-snippet", "svg", "terminal", "tld", "tmx", "ui", "vbproj.user", "vcxproj", "vcxproj.filters", "wixproj", "wsdl", "wxi", "wxs", "xaml", "xbl", "xib", "xlf", "xliff", "xml", "xmp", "xoml", "xpdl", "xrc", "xsd", "xsl", "xul", "bxml", "cdxml", "mmi", "psc1", "slnx", "spfm", "tpm", "wpl", "xba", "xcu", "xlb", "xlc", "xmi", "xpfm", "xpr"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -3354,7 +3354,7 @@ source = "helix"
 [language.yaml]
 git_url = "https://github.com/tree-sitter-grammars/tree-sitter-yaml"
 git_rev = "1805917414a9a8ba2473717fd69447277a175fae"
-extensions = ["bu", "sublime-syntax", "yaml", "yml"]
+extensions = ["bu", "sublime-syntax", "yaml", "yml", "eyaml", "kyaml", "kyml", "mplstyle"]
 c_files = ["src/parser.c", "src/scanner.c"]
 query_source = "nvim_treesitter"
 source = "helix+nvim-treesitter"
@@ -3412,7 +3412,7 @@ source = "nvim-treesitter"
 git_url = "https://github.com/kristoff-it/ziggy"
 git_rev = "8a29017169f43dc2c3526817e98142eb9a335087"
 subpath = "tree-sitter-ziggy-schema"
-extensions = ["ziggy_schema"]
+extensions = ["ziggy_schema", "ziggy-schema"]
 c_files = ["src/parser.c"]
 query_source = "nvim_treesitter"
 source = "nvim-treesitter"
