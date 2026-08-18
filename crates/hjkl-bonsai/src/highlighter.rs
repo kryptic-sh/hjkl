@@ -268,19 +268,16 @@ pub mod parse_counter {
     }
 }
 
-/// Route tree-sitter's C-side `malloc/calloc/realloc/free` through mimalloc.
+/// Route tree-sitter's C-side `malloc/calloc/realloc/free` through mimalloc on
+/// non-wasm targets.
 ///
-/// `#[global_allocator]` only redirects Rust's `alloc::*`. Tree-sitter is a
-/// C library and calls the libc allocator directly via FFI; without this
-/// routing, every subtree node still lands in glibc's ptmalloc even when
-/// the host binary uses mimalloc as its Rust allocator. Tree-sitter parse
-/// is heavily allocation-bound (millions of short-lived subtree nodes per
-/// document), so routing the C-side calls through mimalloc compounds with
-/// the Rust-side switch.
+/// `#[global_allocator]` only redirects Rust's `alloc::*`. This installs
+/// tree-sitter callbacks that use mimalloc for its C-side allocations.
 ///
 /// Idempotent — runs at most once per process via `Once`. Called from
 /// every `Highlighter::with_registry` so consumers don't have to remember
 /// to call it; the cost after the first call is one atomic load.
+#[cfg(not(target_family = "wasm"))]
 fn ensure_mimalloc_allocator() {
     use std::ffi::c_void;
     use std::sync::Once;
@@ -314,6 +311,10 @@ fn ensure_mimalloc_allocator() {
         );
     });
 }
+
+/// Keep tree-sitter's default allocator callbacks on wasm targets.
+#[cfg(target_family = "wasm")]
+fn ensure_mimalloc_allocator() {}
 
 /// Stateful syntax highlighter for a single language.
 ///

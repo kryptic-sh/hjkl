@@ -1,9 +1,13 @@
-//! `dlopen`-loaded grammar bundle: parser library + queries.
+//! Runtime-loaded grammar bundle: parser library + queries.
 //!
-//! Combines a [`tree_sitter::Language`] (resolved from a runtime-loaded shared
-//! library) with the `.scm` query strings the highlighter needs. Field order
-//! matters: `tree_sitter::Language` references data inside `_lib`, so `_lib`
-//! must outlive it. Rust drops fields top-down, so `_lib` stays last.
+//! On non-Wasm targets this combines a [`tree_sitter::Language`] (resolved from
+//! a runtime-loaded shared library) with the `.scm` query strings the
+//! highlighter needs. Field order matters there: `tree_sitter::Language`
+//! references data inside `_lib`, so `_lib` must outlive it. Rust drops fields
+//! top-down, so `_lib` stays last.
+//!
+//! Runtime grammar loading is unsupported on Wasm: Wasm cannot `dlopen` the
+//! native shared libraries that provide `tree_sitter_<lang>()`.
 //!
 //! ⚠️ **Security:** loading a grammar `dlopen`s a shared library and calls its
 //! `tree_sitter_<lang>()` entry point — i.e. it runs **native code from a
@@ -11,9 +15,13 @@
 //! `.so` was just downloaded and compiled from a remote repo. Only load
 //! grammars you trust; see the crate-root docs for the full trust model.
 
-use anyhow::{Context, Result};
+#[cfg(not(target_family = "wasm"))]
+use anyhow::Context;
+use anyhow::Result;
+#[cfg(not(target_family = "wasm"))]
 use libloading::Library;
 use tree_sitter::Language;
+#[cfg(not(target_family = "wasm"))]
 use tree_sitter_language::LanguageFn;
 
 use super::loader::GrammarLoader;
@@ -36,6 +44,7 @@ pub struct Grammar {
     so_identity: String,
     /// Kept alive so `language`'s underlying pointer stays valid. Must be
     /// the LAST field so its `Drop` runs after `language`'s.
+    #[cfg(not(target_family = "wasm"))]
     _lib: Library,
 }
 
@@ -80,6 +89,7 @@ impl Grammar {
     /// `.so` in-process. Only call this for trusted grammar names. To load
     /// strictly from already-installed artifacts, resolve the path yourself
     /// via [`GrammarLoader::lookup_only`] and use [`Self::load_from_path`].
+    #[cfg(not(target_family = "wasm"))]
     pub fn load(
         name: &str,
         spec: &LangSpec,
@@ -140,6 +150,18 @@ impl Grammar {
         })
     }
 
+    /// Runtime grammar loading is unsupported on Wasm because Wasm cannot
+    /// dynamically load native grammar shared libraries.
+    #[cfg(target_family = "wasm")]
+    pub fn load(
+        name: &str,
+        _spec: &LangSpec,
+        _loader: &GrammarLoader,
+        _meta: &ManifestMeta,
+    ) -> Result<Self> {
+        anyhow::bail!("runtime grammar loading is unsupported on wasm targets ({name})")
+    }
+
     /// Load a grammar from an already-resolved shared library path.
     ///
     /// This is the fast path used by `complete_load` after the async loader
@@ -151,6 +173,7 @@ impl Grammar {
     /// ⚠️ **Security:** `dlopen`s and runs native code from `so` in-process.
     /// The caller is responsible for having obtained `so` from a trusted
     /// source (a vetted system dir, or a build of a trusted grammar).
+    #[cfg(not(target_family = "wasm"))]
     pub fn load_from_path(name: &str, so: &std::path::Path) -> Result<Self> {
         let lib =
             unsafe { Library::new(so) }.with_context(|| format!("dlopen {}", so.display()))?;
@@ -199,6 +222,13 @@ impl Grammar {
         })
     }
 
+    /// Runtime grammar loading is unsupported on Wasm because Wasm cannot
+    /// dynamically load native grammar shared libraries.
+    #[cfg(target_family = "wasm")]
+    pub fn load_from_path(name: &str, _so: &std::path::Path) -> Result<Self> {
+        anyhow::bail!("runtime grammar loading is unsupported on wasm targets ({name})")
+    }
+
     /// Construct a [`Grammar`] from already-resolved pieces. Useful for
     /// tests or callers that have a custom parser source.
     ///
@@ -214,6 +244,7 @@ impl Grammar {
     /// `lib`). `lib` must remain alive until this `Grammar` is dropped —
     /// the type enforces that internally, but the *caller* must guarantee
     /// the `language`/`lib` pairing is correct.
+    #[cfg(not(target_family = "wasm"))]
     pub unsafe fn from_parts(
         name: impl Into<String>,
         lib: Library,
@@ -238,6 +269,7 @@ impl Grammar {
 /// a different grammar. Falls back to the bare path when metadata is
 /// unavailable — still strictly better than nothing, since the path alone
 /// distinguishes same-named grammars installed in different directories.
+#[cfg(not(target_family = "wasm"))]
 fn so_identity_of(so: &std::path::Path) -> String {
     match std::fs::metadata(so) {
         Ok(md) => {
@@ -255,6 +287,7 @@ fn so_identity_of(so: &std::path::Path) -> String {
 /// tree-sitter's C symbols use underscores, never hyphens — hyphens are
 /// invalid C identifiers. The convention is `c_sharp` (manifest name)
 /// already matches, but defensive normalization handles future entries.
+#[cfg(not(target_family = "wasm"))]
 fn symbol_name(name: &str) -> String {
     name.replace('-', "_")
 }
@@ -264,6 +297,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(not(target_family = "wasm"))]
     fn symbol_name_normalizes_hyphens() {
         assert_eq!(symbol_name("rust"), "rust");
         assert_eq!(symbol_name("c-sharp"), "c_sharp");

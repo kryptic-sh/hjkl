@@ -643,6 +643,12 @@ with ripgrep installed are unaffected.
   discipline, input, keymap_motion, selection_shift, tag) modules, and every
   `tests/` directory.
 
+- **Wasm size budget is not active.** The weekly job now honestly gates
+  `hjkl-engine` compilation for `wasm32-unknown-unknown`; the old "bundle size"
+  step looked for a `.wasm` file that an `rlib` package does not emit and then
+  reported success when it was absent. Restoring a size budget requires a real
+  wasm artifact target (binary or `cdylib`) whose exported surface is the
+  product being measured; do not reinstate an existence-skipping check.
 - Stabilize flaky PTY e2e cases. Cache/CWD/color isolation landed in `ca3852b2`;
   the explorer `dd` tests that failed under `cargo test`'s thread pool are
   fixed. Unspecified PTY flakes may remain.
