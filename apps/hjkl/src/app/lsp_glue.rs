@@ -280,13 +280,14 @@ pub(super) fn language_id_for_ext(
 /// [`language_id_for_ext`]. The tree-sitter grammar name and the LSP id agree
 /// for almost every language; the exceptions mirror the extension overrides:
 /// `tsx` → `typescript`, `jsx` → `javascript`, and `cpp` → `c` (the grammar
-/// the manifest routes `.h` to, whose filetype wants the c server).
+/// the manifest routes `.h` to, whose filetype wants the c server). Shell
+/// filetypes use hjkl-lang's bundled `bash` grammar/server fallback.
 fn language_id_for_name(name: &str) -> String {
     match name {
         "tsx" => "typescript".to_string(),
         "jsx" => "javascript".to_string(),
         "cpp" => "c".to_string(),
-        other => other.to_string(),
+        other => hjkl_lang::canonical_grammar_name(other).to_string(),
     }
 }
 

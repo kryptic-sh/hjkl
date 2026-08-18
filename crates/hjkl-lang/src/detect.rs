@@ -23,12 +23,9 @@
 //! 5) lines. Callers that only have a path (no content yet) can pass an empty
 //! string and get steps 1–2.
 //!
-//! The tables map to **grammar names in the bonsai manifest** where one
-//! exists, and to the closest grammar otherwise (`sh`/`zsh` → `bash`, since
-//! hjkl ships no separate `sh`/`zsh` grammar — the bash grammar is the
-//! superset). Names that survive this module unvalidated (a modeline
-//! `ft=bogus`) are the caller's to honour or reject: `set_language_by_name`
-//! resolves unknown names to `Unknown` without attaching anything.
+//! Filetype detection returns Neovim-visible names. Grammar attachment resolves
+//! unsupported shell variants through [`crate::canonical_grammar_name`], which
+//! falls back to the bundled `bash` grammar without changing the filetype.
 
 use std::path::Path;
 
@@ -77,7 +74,8 @@ impl LanguageDirectory {
                 self.registry
                     .name_for_path(Path::new(&path))
                     .map(str::to_owned)
-            });
+            })
+            .map(|name| visible_shell_filetype(&path, name));
         // 3. Modeline `ft=` / `filetype=` — an explicit author-stated type
         // outranks every inferred type and a shebang, matching Neovim.
         if opts.modeline
@@ -98,7 +96,16 @@ impl LanguageDirectory {
     }
 }
 
-// ── Known filenames ───────────────────────────────────────────────────────────
+fn visible_shell_filetype(path: &str, grammar: String) -> String {
+    match (
+        Path::new(path).extension().and_then(|ext| ext.to_str()),
+        grammar.as_str(),
+    ) {
+        (Some("sh" | "bash" | "ksh"), "bash") => "sh".into(),
+        (Some("zsh"), "bash") => "zsh".into(),
+        _ => grammar,
+    }
+}
 
 // Literal `filename` entries from Neovim 0.12.4 whose target exactly names an
 // installed hjkl grammar. Keep this data separate from hjkl's intentional
@@ -315,12 +322,12 @@ pub fn known_filename_language(basename: &str) -> Option<&'static str> {
         "Jenkinsfile" => "groovy",
         "Justfile" | "justfile" => "just",
         ".gitmodules" => "git_config",
-        // vim maps these to `sh`; hjkl ships only the bash grammar.
+        // Neovim exposes these as `sh`; grammar fallback is resolved separately.
         ".bashrc" | ".bash_profile" | ".bash_login" | "bashrc" | "bash_profile" | ".profile" => {
-            "bash"
+            "sh"
         }
-        // vim maps these to `zsh`; no zsh grammar, bash is the superset.
-        ".zshrc" | ".zshenv" | ".zprofile" | ".zlogin" | "zshrc" => "bash",
+        // Neovim exposes these as `zsh`; grammar fallback is resolved separately.
+        ".zshrc" | ".zshenv" | ".zprofile" | ".zlogin" | "zshrc" => "zsh",
         ".vimrc" | "vimrc" | ".gvimrc" | "gvimrc" | ".exrc" => "vim",
         ".tmux.conf" => "tmux",
         ".Xresources" | ".Xdefaults" => "xresources",
@@ -399,9 +406,12 @@ fn interpreter_language(name: &str) -> Option<&'static str> {
 
 fn interpreter_language_exact(name: &str) -> Option<&'static str> {
     Some(match name {
-        // No separate `sh`/`zsh`/`ksh`/`dash` grammar — bash is the
-        // superset, and tree-sitter-bash handles their common syntax.
-        "sh" | "bash" | "dash" | "ksh" | "zsh" => "bash",
+        // Preserve Neovim's shell filetype identity. Grammar fallback is
+        // centralized in `canonical_grammar_name`.
+        "sh" | "bash" | "dash" | "ksh" => "sh",
+        "zsh" => "zsh",
+        "csh" => "csh",
+        "tcsh" => "tcsh",
         "just" => "just",
         "fennel" => "fennel",
         "gnuplot" => "gnuplot",
@@ -583,6 +593,21 @@ mod tests {
     }
 
     #[test]
+    fn shell_extensions_preserve_neovim_filetype_identity() {
+        for (path, want) in [
+            ("script.sh", "sh"),
+            ("script.bash", "sh"),
+            ("script.ksh", "sh"),
+            ("script.zsh", "zsh"),
+        ] {
+            assert_eq!(
+                detect(path, "", &DetectOptions::default()),
+                Some(want.into()),
+                "{path} should detect as {want}",
+            );
+        }
+    }
+    #[test]
     fn unknown_extension_is_not_a_signal() {
         // `.txt` has no grammar, so the filename/shebang/modeline steps run.
         let content = "#!/usr/bin/env python3\n";
@@ -704,7 +729,7 @@ mod tests {
     fn unknown_basename_falls_through_to_content() {
         assert_eq!(
             detect("script", "#!/bin/bash\n", &DetectOptions::default()),
-            Some("bash".into())
+            Some("sh".into())
         );
     }
 
@@ -743,19 +768,43 @@ mod tests {
     }
 
     #[test]
+    fn shell_shebangs_preserve_neovim_filetype_identity() {
+        for (interpreter, want) in [
+            ("bash", "sh"),
+            ("dash", "sh"),
+            ("ksh", "sh"),
+            ("sh", "sh"),
+            ("zsh", "zsh"),
+            ("csh", "csh"),
+            ("tcsh", "tcsh"),
+        ] {
+            assert_eq!(
+                shebang_language(&format!("#!/usr/bin/{interpreter}")),
+                Some(want),
+                "direct {interpreter}",
+            );
+            assert_eq!(
+                shebang_language(&format!("#!/usr/bin/env {interpreter}")),
+                Some(want),
+                "env {interpreter}",
+            );
+        }
+    }
+
+    #[test]
     fn shebang_direct_path() {
-        assert_eq!(shebang_language("#!/bin/bash"), Some("bash"));
+        assert_eq!(shebang_language("#!/bin/bash"), Some("sh"));
         assert_eq!(shebang_language("#!/usr/bin/python3"), Some("python"));
-        assert_eq!(shebang_language("#!/bin/sh"), Some("bash"));
+        assert_eq!(shebang_language("#!/bin/sh"), Some("sh"));
     }
 
     #[test]
     fn shebang_env_form() {
-        assert_eq!(shebang_language("#!/usr/bin/env bash"), Some("bash"));
+        assert_eq!(shebang_language("#!/usr/bin/env bash"), Some("sh"));
         assert_eq!(shebang_language("#!/usr/bin/env node"), Some("javascript"));
         assert_eq!(
             shebang_language("#!/usr/bin/env -S bash -euo pipefail"),
-            Some("bash")
+            Some("sh")
         );
         assert_eq!(
             shebang_language("#!/usr/bin/env -u FOO -S python3 -u"),
@@ -793,7 +842,7 @@ mod tests {
 
     #[test]
     fn shebang_requires_hashbang_at_byte_zero() {
-        assert_eq!(shebang_language("#!/bin/bash"), Some("bash"));
+        assert_eq!(shebang_language("#!/bin/bash"), Some("sh"));
         assert_eq!(shebang_language(" \t#!/bin/bash"), None);
         assert_eq!(shebang_language("\u{feff}#!/bin/bash"), None);
     }

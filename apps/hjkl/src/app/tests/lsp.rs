@@ -2549,7 +2549,22 @@ fn shutdown_is_idempotent() {
 
 // ── Language-id resolution (registry-backed) ─────────────────────────────
 
-/// Every extension the old hand-written inline table in `lsp_glue` knew must
+/// Shell filetypes retain their Neovim-visible names in settings, but attach
+/// through the configured bash server because hjkl bundles only bash grammar
+/// support for this shell family.
+#[test]
+fn slot_language_id_uses_bash_for_shell_filetypes() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    for filetype in ["sh", "zsh", "dash", "ksh", "csh", "tcsh"] {
+        app.active_mut().settings.filetype = filetype.into();
+        assert_eq!(
+            app.slot_language_id(0).as_deref(),
+            Some("bash"),
+            "{filetype} must use the bash server fallback",
+        );
+    }
+}
+
 /// keep resolving to the exact same LSP language id now that the lookup runs
 /// through the hjkl-lang registry plus the small override table. A drift here
 /// silently detaches a language from its configured server.

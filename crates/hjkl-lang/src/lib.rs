@@ -51,6 +51,18 @@ use hjkl_bonsai::runtime::{
     AsyncGrammarLoader, Grammar, GrammarLoader, GrammarRegistry, LoadHandle,
 };
 
+/// Map a Neovim-visible filetype to the bundled grammar that can parse it.
+///
+/// hjkl intentionally ships no dedicated grammars for these shell variants.
+/// Keep the buffer setting unchanged while syntax and LSP consumers use the
+/// bundled `bash` grammar/server fallback.
+pub fn canonical_grammar_name(name: &str) -> &str {
+    match name {
+        "sh" | "zsh" | "dash" | "ksh" | "csh" | "tcsh" => "bash",
+        other => other,
+    }
+}
+
 /// Result of an async-friendly grammar resolution request.
 #[non_exhaustive]
 pub enum GrammarRequest {
@@ -141,14 +153,15 @@ impl LanguageDirectory {
     /// on clone+compile. See module-level docs for the three fast paths.
     pub fn request_for_path(&self, path: &Path) -> GrammarRequest {
         let name = match self.registry.name_for_path(path) {
-            Some(n) => n.to_string(),
+            Some(n) => canonical_grammar_name(n),
             None => return GrammarRequest::Unknown,
         };
-        self.request_by_name(&name)
+        self.request_by_name(name)
     }
 
     /// Async-friendly resolution by language name. Returns immediately.
     pub fn request_by_name(&self, name: &str) -> GrammarRequest {
+        let name = canonical_grammar_name(name);
         // Fast path 1: cache hit.
         if let Some(g) = self.cache_get(name) {
             return GrammarRequest::Cached(g);
@@ -201,6 +214,7 @@ impl LanguageDirectory {
     /// `Some(Ok(lib_path))`. Constructs the `Grammar`, caches it, returns
     /// the `Arc`.
     pub fn complete_load(&self, name: &str, lib_path: &Path) -> Result<Arc<Grammar>> {
+        let name = canonical_grammar_name(name);
         let grammar = Grammar::load_from_path(name, lib_path)?;
         Ok(self.cache_insert(name, grammar))
     }
@@ -211,6 +225,7 @@ impl LanguageDirectory {
     /// grammar. May block on first use to clone + compile + install.
     /// Pickers run on their own background threads so blocking is fine.
     pub fn by_name(&self, name: &str) -> Option<Arc<Grammar>> {
+        let name = canonical_grammar_name(name);
         if let Some(g) = self.cache_get(name) {
             return Some(g);
         }
@@ -230,7 +245,7 @@ impl LanguageDirectory {
     /// highlight path or the async loader are already cached, so a buffer
     /// that has rendered once resolves here the same way `by_name` would.
     pub fn by_name_cached(&self, name: &str) -> Option<Arc<Grammar>> {
-        self.cache_get(name)
+        self.cache_get(canonical_grammar_name(name))
     }
 
     // ── Cache helpers ─────────────────────────────────────────────────────────
@@ -261,6 +276,14 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    #[test]
+    fn shell_filetypes_resolve_to_the_bash_grammar() {
+        for name in ["sh", "zsh", "dash", "ksh", "csh", "tcsh"] {
+            assert_eq!(canonical_grammar_name(name), "bash", "{name}");
+        }
+        assert_eq!(canonical_grammar_name("rust"), "rust");
+    }
 
     #[test]
     fn request_for_path_returns_unknown_for_unrecognized_extension() {

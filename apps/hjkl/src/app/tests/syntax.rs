@@ -149,6 +149,17 @@ fn extensionless_modeline_ft_sets_filetype() {
 }
 
 #[test]
+fn modeline_shell_filetypes_preserve_settings_identity() {
+    for filetype in ["sh", "zsh"] {
+        let slot = slot_with_file(&format!("# vim: ft={filetype}\necho hi\n"), "script", true);
+        assert_eq!(
+            slot.settings.filetype, filetype,
+            "a modeline ft={filetype} must preserve the Neovim filetype",
+        );
+    }
+}
+
+#[test]
 fn modeline_beats_shebang() {
     // vim parity: an explicit modeline ft= outranks the shebang heuristic,
     // even when the shebang contradicts it.
@@ -221,6 +232,20 @@ fn set_ft_updates_slot_template_and_editor() {
         "bogus_lang",
         ":set ft= must keep the focused window's editor in sync"
     );
+}
+
+#[test]
+fn set_shell_filetypes_preserves_settings_identity() {
+    let mut app = App::new(None, false, None, None).unwrap();
+
+    for filetype in ["sh", "zsh"] {
+        app.dispatch_ex(&format!("set ft={filetype}"));
+        assert_eq!(
+            app.active().settings.filetype,
+            filetype,
+            ":set ft={filetype} must preserve the Neovim filetype",
+        );
+    }
 }
 
 #[test]
