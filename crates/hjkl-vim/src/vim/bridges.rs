@@ -307,7 +307,11 @@ pub fn join_line_bridge<H: hjkl_engine::types::Host>(
 ) {
     // vim `[count]J` joins `count` lines together — i.e. `count - 1` joins.
     // Bare `J` (and `1J`) join the current line with the one below (1 join).
+    // One undo group for the whole counted command: nvim reverts `3J` with a
+    // single `u`, not one per join. A group that ends up mutating nothing
+    // (no line below) leaves zero undo entries, also matching nvim.
     let joins = count.max(2) - 1;
+    let _group = ed.undo_group();
     for _ in 0..joins {
         ed.push_undo();
         if !join_line(ed) {
@@ -324,6 +328,10 @@ pub fn toggle_case_at_cursor_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
+    // One undo group for the whole counted command: nvim reverts `5~` with a
+    // single `u`, not one per char. A group that ends up mutating nothing
+    // (cursor past EOL) leaves zero undo entries, also matching nvim.
+    let _group = ed.undo_group();
     for _ in 0..count.max(1) {
         ed.push_undo();
         if !toggle_case_at_cursor(ed) {

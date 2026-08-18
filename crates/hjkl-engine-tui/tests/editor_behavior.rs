@@ -2042,6 +2042,35 @@ fn join_line_count_3_merges_three_lines() {
 }
 
 #[test]
+fn counted_join_is_a_single_undo_step() {
+    // nvim reverts `3J` with one `u`, not one per join. The whole counted
+    // command must land as a single undo entry.
+    let mut e = normal_editor("a\nb\nc\nd");
+    e.join_line(3);
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "a b c");
+    e.undo();
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "a",
+        "one `u` after 3J must restore all three lines"
+    );
+}
+
+#[test]
+fn counted_toggle_case_is_a_single_undo_step() {
+    // nvim reverts `3~` with one `u`, not one per char.
+    let mut e = normal_editor("hello");
+    e.toggle_case_at_cursor(3);
+    assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "HELlo");
+    e.undo();
+    assert_eq!(
+        hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
+        "hello",
+        "one `u` after 3~ must restore all three chars"
+    );
+}
+
+#[test]
 fn join_line_noop_on_last_line() {
     let mut e = normal_editor("only");
     e.join_line(1);
