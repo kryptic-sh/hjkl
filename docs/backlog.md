@@ -2182,3 +2182,146 @@ line (message-frequency bounded). Note: buffer-tui render's per-row
 `conceals.iter().filter(|c| c.row == doc_row)` (`render.rs:803-808`) is O(rows ×
 conceals) per frame, but only bites while the explorer pane with a large tree is
 open and is dirty_gen-cached — low priority.
+
+## 13. 2026-08-18 code review — whole workspace
+
+Scope: clean tree, whole workspace. Split across two read-only reviewers (core
+vim crates: engine/vim/buffer/editor/oracle; periphery+app: clipboard, fs, ex,
+lsp, nvim_api, explorer reconcile). Every finding below was re-traced against
+the code by the orchestrator before being recorded. Overall: defensive,
+well-tested code; three verified findings, all LOW.
+
+### Findings — ranked
+
+1. **LOW — counted `J` / `gJ` / `~` produce N undo steps where nvim makes one**
+   (`crates/hjkl-vim/src/vim/bridges.rs:311-316` and `:327-332`).
+   `join_line_bridge` loops `ed.push_undo()` once per join and
+   `toggle_case_at_cursor_bridge` once per char, and `dispatch_input`
+   (`crates/hjkl-vim/src/lib.rs:90-123`) wraps nothing in an `undo_group` (the
+   only group is macro replay, `normal.rs:849`). So `3J` (2 joins) and `5~` (5
+   chars) each need `count` `u` presses to revert; nvim reverts each counted
+   command with a single `u`.
+
+   ```
+   Repro: "a\nb\nc", cursor row 0; `3J` then `u`
+   Expect: one `u` restores all three lines
+   Actual: `u` restores only "c" onto row 1 — needs 2 more presses
+   ```
+
+   Fix: wrap the loops in `ed.undo_group()` (re-entrant, already the macro
+   pattern) or push undo once before the loop.
+
+2. **LOW — `]]` / `][` land on the phantom trailing row after a trailing `\n`**
+   (`crates/hjkl-engine/src/motions.rs:365` and `:404`). Both use
+   `read_row_count(buf).saturating_sub(1)` as the clamp, which counts ropey's
+   synthesized empty final row; `move_bottom` (`:558`) uses `content_row_count`
+   for exactly this reason, and the doc comment on `content_row_count`
+   (`:81-110`) says every other vertical motion must use it. On `"{\nfoo\n"`
+   with no second `{`, `]]` lands on row 2 (the phantom empty row) instead of
+   staying on the last content row.
+
+   ```
+   Repro: "a\n{\nb\n" (trailing newline), cursor row 0, `]]`
+   Expect: cursor stays on last content row (row 2, "b")
+   Actual: cursor lands on row 3 — the phantom empty row
+   ```
+
+   Fix: clamp with `content_row_count(buf).saturating_sub(1)` like
+   `move_bottom`.
+
+3. **LOW — stale X11 `SELECTION_NOTIFY` from a timed-out `SAVE_TARGETS` is
+   misattributed to a later `do_get`, yielding an empty or garbage paste**
+   (`crates/hjkl-clipboard/src/backend/x11_thread.rs:510-519`). The
+   `DrainGoal::SelectionNotify` filter matches only `requestor == state.window`
+   and `property == *our_property` — never the notify's `target` or `time` — and
+   every op reuses the same private `hjkl_clipboard_get` property.
+   `do_save_targets` (`:1121-1137`) gives up after 5 s leaving any late manager
+   reply queued; the next `do_get` (`:1282-1294`) then consumes it: reads the
+   deleted property → `Ok(vec![])` (silent empty paste), or the atom-list bytes
+   as the payload (garbage), or a stale refusal makes the paste report
+   `UnsupportedMime`.
+   ```
+   Repro: set_clipboard against a manager that accepts after 5 s; then paste
+   Expect: paste returns the owner's bytes / correct UnsupportedMime
+   Actual: empty or atom-bytes paste, or spurious UnsupportedMime — timing only
+   ```
+   Fix: carry the expected `target` atom in `DrainGoal::SelectionNotify` and
+   require `notify.target == expected_target`.
+
+### Cleared
+
+- X11 INCR receive/self-loop sequencing (`x11_thread.rs:1333-1394`): the
+  `OwnPropertyDelete` drain stops at the delete so chunk 1's NEW_VALUE is never
+  consumed; cross-batch ordering keeps property write before notify.
+- `read_property` offset arithmetic (`x11_thread.rs:1243`): `offset += len/4` is
+  exact — replies with `bytes_after > 0` are 4-byte-aligned.
+- LSP position encoding: conservative UTF-16 default, `col_to_wire` /
+  `wire_to_col` the only conversion points, incremental-sync gate and
+  non-ascending-disjoint refusal in `build_text_changes`. No wide-char hole.
+- nvim_api byte/line arithmetic: `resolve_line_range` negatives, `i64::MIN`
+  clamps, `line_start_byte` trailing-`\n`, `byte_col_to_char_col` flooring.
+- Explorer reconcile/apply/revert: rename swaps (`a↔b` temp parking),
+  rename-onto-trashed, type-change `restore:false`, ancestor-before-child, and
+  the `parse_buffer` path-escape guard. All correct.
+- LSP codec: header `take(budget+1)` off-by-one only at the exact 64 KiB
+  boundary; EOF classification correct.
+- wayland fd lifecycle: write_fd closed once, read_fd on both paths,
+  stale-source fds closed not misattributed (regression-tested).
+- fs lock/atomic/identity/read/open: TOCTOU story coherent; lock depth
+  accounting correct.
+- Counted-`J` undo was suspected to be a single push_undo; it is not — the
+  per-iteration pushes are the actual defect above (finding 1).
+- Note: the core-crates reviewer's own Cleared/Hardening list for the engine
+  half was lost in transit (its reconciliation named only the two findings, both
+  re-verified here); its test-directory audit was explicitly skipped
+  (`hjkl-vim/tests/*`, `hjkl-engine` tests, `text_object_multibyte.rs` etc. were
+  not individually audited).
+
+### Hardening (correct today, fragile)
+
+- `wayland_thread.rs:869` — `is_send` is true for every opcode-0 event
+  (`wl_callback.done`, `wl_registry.global`, `offer.offer` all use opcode 0), so
+  `next_fd()` pops for non-send messages too. Correct only while every message
+  is ≪ 4096 B and arrives with its fd in the same `recvmsg`; a compositor that
+  splits a message while an fd is queued hands the fd to the wrong message.
+  Tighten `is_send` to also check the object id against live source ids.
+- `x11_thread.rs:732-739` — `start_incr_send` replaces the requestor's entire
+  event mask with PropertyChange-only and never restores it. Works with xclip
+  but mutates another client's window.
+- `wayland_thread.rs:1491` — self-paste short-circuit can serve the previous
+  payload if the compositor delivers `selection(offer_B)` and `source.cancelled`
+  in separate batches with a `Get` in between; harmless today if compositors
+  always flush both together.
+- `crates/hjkl-fs/src/lock.rs:110-119` — `release_in_process` decrements without
+  checking `h.thread == me`; moving a `FileLock` across threads then
+  re-acquiring in the original thread double-releases the claim. Shared→
+  exclusive upgrade is `debug_assert!`-only (release builds skip the OS lock).
+- `crates/hjkl-fs-watch/src/lib.rs:585-592` — `upsert` overwrites a pending
+  `Renamed{to}` with `Modified` if a touch on the old name arrives inside the
+  window; rename loss is within the documented best-effort contract.
+- `crates/hjkl-ex/src/builtins.rs:313-322` — `:wqall!` / `:wqa!` / `:xall!` /
+  `:xa!` return `force: false`; vim's `:wqall!` quits even when a save fails.
+  Documented divergence, tested as intentional.
+- `apps/hjkl/src/app/explorer_reconcile.rs:843-854` — `apply_applied`'s
+  `Created` arm has a dead duplicated if/else (both branches `File::create`)
+  with a stale "treat as dir" comment; harmless because `revert_ops` never emits
+  `Created` for dirs, but a directory journaled as `Created` would redo as a
+  file.
+
+### Coverage
+
+Read in full: x11_thread.rs, wayland_thread.rs, wayland_socket.rs, fs-watch
+lib.rs, hjkl-fs (atomic/lock/identity/read/open), builtins.rs, lsp
+(codec/manager/runtime/server), completion, fuzzy, lang detect,
+explorer_reconcile.rs 1-1260, nvim_api (dispatch ~30%, run_loop, helpers),
+quickfix nth, bridges.rs, editor_ext.rs, motions.rs (bodies + section tests).
+Substantial but partial: lsp_glue.rs, mouse.rs, nvim_api dispatch remainder,
+normal.rs dispatch tables, editor.rs undo surface.
+
+**GAP — not read in depth:** `apps/hjkl/src/render.rs` (4.5k, grep only),
+`app/mod.rs`, `app/explorer.rs` (4.9k), `app/event_loop.rs` (structure),
+`app/ex_dispatch.rs` (one section), `app/quickfix.rs` remainder,
+`bonsai/highlighter.rs`, the presentational crates (config, css, xdg, form,
+kitty, mangler, anvil, markdown, holler, layout, theme, keymap, icons, tabs,
+statusline, picker/menu/prompt/which-key/hover/info-popup/splash + `-tui`
+variants), and all test corpora. Bugs there are unverified, not cleared.
