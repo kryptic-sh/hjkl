@@ -359,10 +359,11 @@ pub fn move_section_backward<B: Cursor + Query>(buf: &mut B, count: usize) {
 }
 
 /// `]]` — forward to the next `{` at column 0 (C section header).
-/// Searches from the line below the cursor; clamps at last row. Charwise exclusive.
+/// Searches from the line below the cursor; clamps at the last content row
+/// (skipping the phantom trailing empty row, like `G`). Charwise exclusive.
 pub fn move_section_forward<B: Cursor + Query>(buf: &mut B, count: usize) {
     let cursor = read_cursor(buf);
-    let last = read_row_count(buf).saturating_sub(1);
+    let last = content_row_count(buf).saturating_sub(1);
     let mut row = cursor.row;
     let mut found = 0;
     let rope = Query::rope(buf);
@@ -398,10 +399,11 @@ pub fn move_section_end_backward<B: Cursor + Query>(buf: &mut B, count: usize) {
 }
 
 /// `][` — forward to the next `}` at column 0 (C section end).
-/// Searches from the line below the cursor; clamps at last row. Charwise exclusive.
+/// Searches from the line below the cursor; clamps at the last content row
+/// (skipping the phantom trailing empty row, like `G`). Charwise exclusive.
 pub fn move_section_end_forward<B: Cursor + Query>(buf: &mut B, count: usize) {
     let cursor = read_cursor(buf);
-    let last = read_row_count(buf).saturating_sub(1);
+    let last = content_row_count(buf).saturating_sub(1);
     let mut row = cursor.row;
     let mut found = 0;
     let rope = Query::rope(buf);
@@ -421,7 +423,7 @@ pub fn move_section_end_forward<B: Cursor + Query>(buf: &mut B, count: usize) {
 /// Linewise motion. On the last line, stays on the current line's first non-blank.
 pub fn move_first_non_blank_next_line<B: Cursor + Query>(buf: &mut B, count: usize) {
     let cursor = read_cursor(buf);
-    let last = read_row_count(buf).saturating_sub(1);
+    let last = content_row_count(buf).saturating_sub(1);
     let desired = cursor.row + count.max(1);
     // Vim: `+` on the last line is a no-op (no next line to move to).
     if desired > last {
@@ -449,7 +451,7 @@ pub fn move_first_non_blank_prev_line<B: Cursor + Query>(buf: &mut B, count: usi
 /// Linewise motion.
 pub fn move_first_non_blank_line<B: Cursor + Query>(buf: &mut B, count: usize) {
     let cursor = read_cursor(buf);
-    let last = read_row_count(buf).saturating_sub(1);
+    let last = content_row_count(buf).saturating_sub(1);
     let offset = count.max(1).saturating_sub(1);
     let desired = cursor.row + offset;
     // Vim: `_` with a count that overshoots the buffer is a no-op.
@@ -2471,6 +2473,29 @@ mod tests {
         // [] again → row 1.
         move_section_end_backward(&mut b, 1);
         assert_eq!(at(&b), Position::new(1, 0));
+    }
+
+    #[test]
+    fn section_forward_no_match_stays_off_phantom_row() {
+        // Trailing newline makes ropey synthesize a phantom empty final row.
+        // `]]` with no further `{` must clamp at the last CONTENT row (like
+        // `G`), not land on the phantom — nvim parity, verified 2026-08-18.
+        let mut b = View::from_str("{\nfoo\n");
+        b.set_cursor(Position::new(0, 0));
+        move_section_forward(&mut b, 1);
+        assert_eq!(at(&b), Position::new(1, 0), "]] clamps at last content row");
+        move_section_forward(&mut b, 1);
+        assert_eq!(at(&b), Position::new(1, 0), "]] stays at last content row");
+    }
+
+    #[test]
+    fn section_end_forward_no_match_stays_off_phantom_row() {
+        let mut b = View::from_str("{\nfoo\n");
+        b.set_cursor(Position::new(0, 0));
+        move_section_end_forward(&mut b, 1);
+        assert_eq!(at(&b), Position::new(1, 0), "][ clamps at last content row");
+        move_section_end_forward(&mut b, 1);
+        assert_eq!(at(&b), Position::new(1, 0), "][ stays at last content row");
     }
 
     // ── First-non-blank line motions (+/-/_) ────────────────────────────────
