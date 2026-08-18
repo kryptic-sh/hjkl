@@ -2325,3 +2325,212 @@ normal.rs dispatch tables, editor.rs undo surface.
 kitty, mangler, anvil, markdown, holler, layout, theme, keymap, icons, tabs,
 statusline, picker/menu/prompt/which-key/hover/info-popup/splash + `-tui`
 variants), and all test corpora. Bugs there are unverified, not cleared.
+
+## 14. 2026-08-18 security audit — whole workspace
+
+Scope: clean tree, whole workspace. Every finding below re-verified against the
+code. Overall risk: low — the two prior RPC escape hatches (§10.1/§10.2) are
+both properly closed. 0 critical / 0 high / 0 medium / 2 low.
+
+### Findings — ranked
+
+1. **LOW — X11 non-INCR clipboard read has no byte cap, unlike the INCR path**
+   (`crates/hjkl-clipboard/src/backend/x11_thread.rs:1162-1247`
+   `read_property` + `:1302-1307` `do_get`). `read_property` accumulates
+   `bytes.extend_from_slice(&chunk)` until `bytes_after == 0` with no total-size
+   bound, and `do_get` returns that buffer as-is when the reply type is not
+   INCR. The INCR path caps the same hostile data at `MAX_INCR_TOTAL_BYTES` (256
+   MiB) and the Wayland paste path at `MAX_PASTE_BYTES` (256 MiB); the non-INCR
+   path is the one route a selection owner controls that has no cap. The prior
+   §8.3 truncation is fixed (bytes_after now checked and looped) but the fix
+   removed truncation without adding a cap.
+
+   ```
+   Repro: hostile X client owns CLIPBOARD, answers ConvertSelection with an
+   N-byte property (N bounded only by X-server memory)
+   Expect: paste capped at 256 MiB like the INCR path
+   Actual: full N bytes allocated and returned
+   ```
+
+   Fix: apply `MAX_INCR_TOTAL_BYTES` (or a shared constant) inside
+   `read_property`'s loop; `Err` on overflow, matching the INCR arm.
+
+2. **LOW — vim `\zs` / `\ze` still mis-translate (backlog §8.10 sub-item, still
+   open)** (`crates/hjkl-engine/src/search.rs:351-357`). `\z` is in none of
+   `very_magic_special` / `magic_special` / `nomagic_special` (`:100-115`), so
+   `\zs` / `\ze` fall into the `Some(other)` passthrough arm and reach
+   rust-regex as `\z` (end-of-text anchor) + literal `s` / `e` — vim's
+   "start/end of match" semantics are not reproduced. The rest of §8.10 (`\Z`,
+   `\e`) is fixed. No memory-safety angle; pure match-semantics deviation.
+   Status note on a tracked item, not a re-report.
+
+### Cleared (suspected, disproved)
+
+- **§10.1 arbitrary file read via `nvim_buf_set_name` + bare `:e` / `:checktime`
+  — fixed.** `reload_current` (ex_dispatch.rs:2330-2344) and `checktime_slot`
+  (`:2433-2447`) route the slot filename through `resolve_read_path`
+  (`:2310-2327`), which applies `check_fs_path` + `resolve_under` when
+  `fs_restricted()`, reads capped (`read_to_string_capped`). Traced
+  `/home/user/.ssh/id_rsa` → rejected.
+- **§10.2 `:Anvil install/update/uninstall` from RPC with no gate — fixed.**
+  `AnvilCmd::run` returns `ExEffect::Error` when `shell_disabled()`
+  (ex_host_cmds.rs:1367-1371); `--nvim-api`/`--embed` call `disable_shell()`
+  unless `--allow-shell` and `restrict_fs()`.
+- Other RPC read seams gated: `:r <path>`, `:cfile`/`:caddfile`, `:DiffOrig`,
+  `:recover {path}`, `:cd` refused, `:saveas`/`:w other` via checked
+  `save_file_durable`. `:r !cmd`/`:!`/range-filter/`:make`/`:grep` all gate on
+  `shell_disabled()`; `:w !cmd` and `:source` do not exist.
+- Grammar auto-install from RPC: `set_allow_remote(false)` under
+  `fs_restricted()`; names via `is_safe_component`; compile files refuse
+  absolute/`..`; clone URL/rev reject leading dashes and separators; `dlopen`
+  target is a name-validated path inside fixed grammar dirs.
+- Anvil archive extraction: `safe_join` per entry, tar symlinks skipped, 2 GiB
+  extract + download caps, checksum before extract, `validate_name` rejects
+  `..`/absolute (regression-tested).
+- Wayland fd misattribution (§8.5): fixed — fd popped only for send opcodes,
+  stale ones closed; paste capped 256 MiB + 2 s idle timeout; `parse_string`
+  uses `checked_add` / `checked_next_multiple_of`.
+- X11 INCR truncation (§8.3): fixed — `bytes_after > 0 && chunk.is_empty()`
+  errors, offset advances until `bytes_after == 0`; INCR capped 256 MiB with 60
+  s total / 30 s chunk timeouts.
+- Regex §8.8/8.9/8.11: fixed — `\a`/`\A`, `\]` in class, `\d`/`\s`/`\w` ASCII
+  classes.
+- LSP: 16 MiB message / 64 KiB header caps with resync; `workspace/applyEdit`
+  answered `{applied:false}`; diag rows/cols bounds-guarded; unknown-id
+  responses dropped.
+- Modeline: whitelist via `set_by_name`; `makeprg`/`errorformat` rejected
+  (pinned CVE-2019-12735-class test); RPC-set content goes through the same
+  overlay.
+- RPC framing: 64 MiB msgpack budget with session close on exceed;
+  `resolve_line_range` / `byte_col_to_char_col` saturating and
+  char-boundary-snapped; `decode_macro` total on arbitrary input.
+- Secrets/crypto: no hardcoded secrets, tokens, or keys; no MD5/SHA1/RC4/DES;
+  unsafe confined to FFI sites, each reviewed.
+- Swap/undo deserialization caps intact.
+
+### Hardening (correct today, fragile — not vulnerabilities)
+
+- Config files read unbounded (`crates/hjkl-config/src/loader.rs:110,170` —
+  `read_to_string`). Only the user's own XDG file; a size cap would be cheap
+  insurance.
+- Wayland offer/mime vectors grow per event with no count cap — only a hostile
+  compositor can drive this, and one already owns the machine.
+- `resolve_read_path` accepts absolute paths that resolve inside the cwd —
+  intentional (canonicalized slot filenames); confinement is "cwd subtree", not
+  "cwd-relative spellings".
+- RPC has no auth — by design; stdin/stdout pipe ownership is the trust
+  boundary. Worth restating in `docs/embed-rpc.md` since fs policy is now the
+  only read control.
+- Anvil extraction budget is 2 GiB — a poisoned/MITM'd download can force up to
+  2 GiB of disk + decompression work before the checksum fails on later
+  installs. TOFU first-install (documented; gated behind `--allow-shell` in RPC
+  modes).
+- `nvim_set_keymap`/`nvim_del_keymap` build ex strings from client input —
+  commands hit the same gated dispatch; a `|`/newline in `lhs`/`rhs` cannot
+  reach an ungated surface.
+
+### Coverage
+
+Walked line-by-line: nvim_api.rs (full method surface, framing, helpers),
+embed.rs, main.rs policy wiring, ex_dispatch.rs (edit/write/saveas/recover/
+checktime/reload/difforig), ex builtins read/cd/file, ex_host_cmds.rs (Anvil),
+shell.rs, policy.rs, save.rs, hjkl-fs path/read, fs-watch lib.rs,
+explorer_reconcile parse/apply, hjkl-lsp codec/server + lsp_glue diagnostics,
+anvil installer/store, bonsai source/compile/loader/grammar, modeline, mangler
+formatter spawn, quickfix grepprg/cfile, search.rs translate_pattern, clipboard
+x11/wayland/wire, config loader, secrets/crypto/unsafe greps.
+
+**GAP — not audited:** the ~30 small TUI crates (checked for unsafe/spawns
+only); `windows.rs`/`macos.rs` clipboard backends and `hjkl-fs/src/identity.rs`
+(not compiled on this Linux host); swap/undofile internals beyond their caps
+(prior audit cleared, not re-walked); picker `rg.rs` grep-backend spawns
+(fixed-arg binaries, pattern passed as a single `-e` arg, no shell). The two
+prior functional findings (§8.1 confirm-substitute panic, §8.2 case-op clipboard
+clobber) are correctness issues, out of scope.
+
+## 15. 2026-08-18 tidy pass — whole workspace
+
+Scope: clean tree, whole workspace. All items below verified behavior-
+preserving; none touch pub API of published crates (all crate-internal or
+test-only).
+
+### Findings — ranked by value
+
+1. **`ch → TextObject` mapping table duplicated 3× in hjkl-vim** —
+   `crates/hjkl-vim/src/editor_ext.rs:1806-1818`,
+   `crates/hjkl-vim/src/vim/bridges.rs:504-516`,
+   `crates/hjkl-vim/src/vim/sneak.rs:198-210`. All three map `w W " ' \` ( ) b [
+   ] { } B < > p t
+   s`to the identical`TextObject`values (verified byte-identical; only the`\_`-arm fallback differs: `return`/`return
+   None`/`return
+   false`). Adding a text-object key currently requires touching three files, and the copies already drifted in fallback style. Action: extract a private `fn
+   text_object_from_char(ch) -> Option<TextObject>`in`vim/text_object.rs`; each
+   caller keeps its own fallback.
+
+2. **Dead empty shim `push_buffer_content_to_textarea` + 3 no-op call sites** —
+   `crates/hjkl-engine/src/editor.rs:2854`, called at `:2776`, `:4470`, `:4495`.
+   Empty body; the `textarea` field is gone (verified: `Editor` struct has no
+   textarea field, zero `self.textarea` references); every call is immediately
+   followed by `mark_content_dirty()`, which does the real work. Action: delete
+   the fn and the three calls.
+
+3. **`write_buffer` duplicated across the binary** —
+   `apps/hjkl/src/embed.rs:467-484` vs `apps/hjkl/src/headless.rs:287-305`. The
+   `Some(p)` arms are byte-identical (content_joined → trailing_newline →
+   save_file_durable, same error format); only the `None`-arm error text differs
+   (embed: bare `E32`; headless: prefixed). embed.rs:464 comment literally says
+   "mirrors headless.rs". Action: extract the shared serialize+save body into
+   one private helper both `Some`-arms call, keeping each file's `None` arm.
+
+4. **FoldIndex interval-merge + row-hidden query re-implemented in
+   hjkl-buffer-tui** — `crates/hjkl-buffer-tui/src/render.rs:500-541` vs
+   `crates/hjkl-buffer/src/folds.rs:102-136`. buffer-tui's private
+   `FoldIndex::new` merge loop (render.rs:504-522) and `hidden_at` (:534-541,
+   byte-identical to `hides_row`) duplicate `hjkl_buffer::FoldIndex::new` +
+   `hides_row` (folds.rs:110-123, 129-136; exported at
+   `hjkl-buffer/src/lib.rs:65`). Action: make render.rs's `FoldIndex` hold a
+   `hjkl_buffer::FoldIndex` for `hidden_at`, keep its own `closed_by_start` for
+   `marker_at`, and KEEP the existing pre-sort on `start_row` before
+   constructing it — the pre-sort preserves the current tolerance for unsorted
+   host-supplied `folds_override` (render.rs:146, 591-593), the one behavioral
+   difference from hjkl-buffer's debug-asserted sorted input.
+
+5. **Pinned-rev grammar test fixture duplicated in hjkl-bonsai** —
+   `crates/hjkl-bonsai/src/highlighter.rs:2146-2177` and
+   `runtime/grammar.rs:280-313` byte-identical (GrammarLoader + `ManifestMeta`
+   with pinned helix/nvim revs + C `LangSpec`); the same `ManifestMeta` literal
+   recurs at `comment_markers.rs:769-774` and the C `LangSpec` at
+   `runtime/source.rs:899-908`. Action: one `#[cfg(test)]`- gated fixture
+   builder (e.g. `test_support` module). Test-only; desync-proofs the pinned
+   revs.
+
+6. **CSS alias arms with identical bodies in `named_color`** —
+   `crates/hjkl-bonsai/src/hex_color.rs:510,528,532,534,550,551` etc. —
+   `"aqua"`/`"cyan"`, `"darkgray"`/`"darkgrey"`, `"dimgray"`/`"dimgrey"` (CSS
+   Level 3 exact aliases; verified identical bodies). Action: merge each pair
+   with a `|` pattern. Cosmetic, makes the alias explicit.
+
+7. **`_scan` field is used, not unused** —
+   `crates/hjkl-picker/src/picker.rs:100` — private field `_scan` read/written
+   at `:169,227,257`; the underscore prefix falsely signals unused. Action:
+   rename to `scan` (crate-internal).
+
+### Coverage
+
+Read in depth (full fn + callers): the 3 TextObject tables, FoldIndex in both
+crates (+ `folds_override` provenance), both write_buffers + all 8 call sites,
+push_buffer_content_to_textarea + 3 call sites + full Editor struct field list,
+bonsai fixtures in 4 files, hex_color named_color + alias semantics, picker
+`_scan`. Mechanical scans: copy-paste dedup over the whole tree (~150 hits
+triaged), every `#[allow(dead_code)]` inventoried (remaining ones are
+platform-gated clipboard backends + deliberate differential-test oracles), full
+clippy pedantic/perf/nursery run categorized (4115 warnings; the actionable
+categories traced to source — the 92 `needless_pass_by_value` are almost all
+thread-spawn/worker entry points or pub API, the `match_same_arms` merge would
+destroy documentation).
+
+**GAP — skimmed, not line-by-line:** `hjkl-ex/builtins.rs` (5.3k),
+`apps/hjkl/src/nvim_api.rs` (5.8k), `hjkl-buffer/src/undo.rs` and
+`hjkl-engine/src/editor.rs` beyond sampled regions, clipboard x11/wayland/
+windows backends, the small TUI crates beyond sampled render paths. Duplicated
+logic could exist inside those unread regions.
