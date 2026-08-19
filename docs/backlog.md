@@ -2895,3 +2895,123 @@ most of `apps/hjkl`, editor/buffer/vim/ex/engine implementations, the remaining
 clipboard backends, and the other workspace crates); all tests, examples,
 package metadata, CI, documentation, and non-Rust files. This report therefore
 does not claim whole-codebase coverage.
+
+## security/correctness audit 2026-08-19
+
+Scope: clean `main`; second slice of the full-codebase sweep. This is a
+report-only security/correctness pass, not a claim that the whole workspace was
+read line-by-line.
+
+### Attack surface mapped and inspected
+
+- **Local launch and files:** Clap CLI paths, `--config`, `-`, startup Ex
+  commands, config TOML, XDG roots, swap recovery, and confined filesystem
+  paths. `Cli` accepts file/config/command paths at
+  `apps/hjkl/src/main.rs:59-160`; stdin is capped before it enters a buffer at
+  `apps/hjkl/src/main.rs:677-684`; `resolve_under` canonicalizes the nearest
+  existing ancestor before component-wise confinement at
+  `crates/hjkl-fs/src/path.rs:159-180`.
+- **RPC and language tooling:** newline JSON-RPC (`--embed`), msgpack-RPC
+  (`--nvim-api`), LSP framing, externally spawned formatters/search tools, and
+  remote grammar clone/compile. Embed performs restricted RPC reads through
+  `check_fs_path`, `resolve_under`, and the cap at
+  `apps/hjkl/src/embed.rs:228-253`; the nvim API limits each decoded msgpack
+  value at `apps/hjkl/src/nvim_api.rs:2383-2463`; LSP headers and payloads are
+  bounded at `crates/hjkl-lsp/src/codec.rs:5-11,28-97`.
+- **Desktop IPC and installs:** X11 clipboard property reads, clipboard backend
+  selection, Anvil HTTPS downloads/extraction, and grammar compilation. X11 caps
+  accumulated property bytes before returning them at
+  `crates/hjkl-clipboard/src/backend/x11_thread.rs:1177-1271`; Anvil validates
+  path/URL components, serializes installs, caps downloads, and checks SHA-256
+  before extraction at `crates/hjkl-anvil/src/installer.rs:548-680`.
+
+### Findings — ranked
+
+**None confirmed.** No candidate reached a security or correctness impact after
+tracing its concrete input, validation, and return path.
+
+### Cleared
+
+- **Command/argument injection in live grep:** a query such as
+  `--files-from=/etc/passwd` is passed after `--`, as one argv element, to fixed
+  `rg`/`grep` binaries (`crates/hjkl-picker/src/source/rg.rs:400-416,491-506`);
+  it cannot become an option or shell syntax. Result collection is also capped
+  at 1,000 entries and cancellation kills/reaps the child
+  (`crates/hjkl-picker/src/source/rg.rs:439-487`).
+- **Unbounded clipboard allocation from an X11 owner:** `read_property` loops
+  over `bytes_after`, rejects an empty nonfinal chunk, and errors once the
+  accumulated payload exceeds `MAX_INCR_TOTAL_BYTES`
+  (`crates/hjkl-clipboard/src/backend/x11_thread.rs:1245-1268`). A hostile
+  property larger than the cap returns an error rather than exhausting memory.
+- **Swap-file allocation/deserialization attack:** attacker-controlled header,
+  undo, and body lengths are checked before allocation and `postcard` errors
+  return `InvalidData` (`crates/hjkl-app/src/swap.rs:442-517`). A 4 GiB prefix
+  is rejected before any matching allocation.
+- **LSP framing memory exhaustion:** a header has a cumulative 64 KiB budget and
+  `Content-Length` is parsed then capped before `vec![0; len]`
+  (`crates/hjkl-lsp/src/codec.rs:28-97`). An oversized or unterminated frame
+  returns an I/O error, not a panic or unbounded read.
+- **Path traversal through confined RPC paths:** relative paths are joined to
+  the canonical root, absolute paths are still compared against it, and escapes
+  return `PermissionDenied` (`crates/hjkl-fs/src/path.rs:159-179`). A request
+  for `nonexistent/../../outside` therefore resolves outside the root and is
+  rejected.
+- **Tree-sitter allocator integer overflow:** the C `calloc` callback uses
+  `checked_mul` and returns null on overflow
+  (`crates/hjkl-bonsai/src/highlighter.rs:286-312`), preserving `calloc`'s
+  failure contract rather than allocating a truncated size.
+- **Regex denial of service in picker highlighting:** the user query is compiled
+  by Rust's regex engine, then only iterated over a display-truncated match
+  string (`crates/hjkl-picker/src/source/rg.rs:315-364`); no backtracking regex
+  engine or shell interpolation is involved.
+
+### Hardening
+
+- **Config reads remain intentionally unbounded:** `--config` and XDG config
+  files flow through `std::fs::read_to_string` before TOML parsing
+  (`crates/hjkl-config/src/loader.rs:105-124,166-198`). This is a local,
+  user-selected trust boundary, not a remote/RPC path; a cap would reduce damage
+  from accidentally selecting a huge local file.
+- **Remote grammar compilation remains a supply-chain design risk, not command
+  injection:** clone arguments are validated before fixed `git` argv execution
+  (`crates/hjkl-bonsai/src/runtime/source.rs:480-536`), source file paths reject
+  absolute/traversal components before compiler argv construction
+  (`crates/hjkl-bonsai/src/runtime/compile.rs:100-151`), but fetched source is
+  compiled and loaded by design. No new bypass was found.
+- **Concurrency:** the reviewed global fold and artifact caches use `RwLock`,
+  and their `unsafe Send`/`Sync` declarations are narrowly tied to upstream
+  tree-sitter `Query` (`crates/hjkl-bonsai/src/folds.rs:76-157` and
+  `crates/hjkl-bonsai/src/highlighter.rs:351-400`). No new race/deadlock was
+  traced; platform-specific FFI remains a coverage gap below.
+
+### Coverage
+
+Inspected: production Rust inventory and all production occurrences of unsafe,
+process spawning, filesystem mutation/read, deserialization, panic/error
+patterns, locks, threads, environment reads, and crypto identifiers; then full
+reachable blocks in `apps/hjkl/src/{main.rs,embed.rs,nvim_api.rs}` (CLI and RPC
+framing/policy regions),
+`crates/hjkl-{fs,lsp,app,config,xdg}/src/{path.rs, read.rs,lock.rs,codec.rs,swap.rs,loader.rs,lib.rs}`,
+`crates/hjkl-clipboard/src/{lib.rs,backend/x11_thread.rs}`,
+`crates/hjkl-{anvil,bonsai,mangler,picker}/src/{installer.rs,runtime/source.rs, runtime/compile.rs,highlighter.rs,folds.rs,lib.rs,source/rg.rs}`.
+
+Class coverage: command/path/regex injection; unsafe/FFI, integer allocation,
+stdin/RPC/LSP/X11 resource limits; SHA-256 install verification and a scan for
+weak crypto/hardcoded secrets; RPC filesystem/shell policy; TOML/postcard/
+msgpack/JSON framing and deserialization; reachable production panic/error paths
+in inspected modules; locks, worker cancellation, and cache sharing.
+
+**GAP — not audited in depth:** the remaining production bodies across the
+workspace crates and `apps/hjkl`, including editor/buffer/vim/ex arithmetic and
+state machines; Wayland and Windows/macOS clipboard FFI; full LSP server/process
+lifecycle; all tests/examples/benches, package scripts, CI, documentation, and
+non-Rust package files. Platform-gated code was code-read only where named and
+not compiled on Linux.
+
+### Summary
+
+**0 critical / 0 high / 0 medium / 0 low confirmed findings.** Overall risk for
+the inspected slice is low: resource and traversal guards held under concrete
+hostile inputs, and no injection/auth/crypto/data-integrity/concurrency defect
+was traced to impact. Prioritize a bounded config reader and an explicit
+remote-grammar trust model as hardening; neither is a newly confirmed defect.
