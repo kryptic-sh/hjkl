@@ -2828,3 +2828,70 @@ Needs profiling to settle: actual per-cell span-sort cost on syntax-heavy rows
 (#4); incremental tree-sitter reparse on very large files (carried over from the
 2026-08-10 pass, still unresolved); whether the hover popup's repaint bursts
 make #3's parse visible in practice.
+
+## correctness review 2026-08-19
+
+Scope: clean `main`; requested scope was the repository. This is the first
+correctness slice, not a claim of whole-repository coverage.
+
+### Findings — ranked by severity
+
+1. **A one-row terminal panics during an active auto-indent flash**
+   (`apps/hjkl/src/render.rs:1619-1635`). The focused-window flash branch is
+   entered whenever `App::indent_flash_active()` returns a range. It copies
+   `area.height` into `screen_height` and unconditionally evaluates
+   `vp_top + screen_height as usize - 1`; no `area.height == 0` guard precedes
+   it. The top-level renderer always sends `buf_area` to the layout
+   (`apps/hjkl/src/render.rs:2119-2135`), and layout deliberately propagates a
+   zero-height rectangle to each child
+   (`crates/hjkl-layout/src/lib.rs:975-1003`). An active flash is retained until
+   its duration expires (`apps/hjkl/src/app/mod.rs:2050-2063`).
+
+   ```text
+   Repro: Start a flash-producing auto-indent action, then resize the terminal to one row before the flash expires (the top/status bars leave the buffer area with height 0).
+   Expect: The zero-height buffer pane is skipped; the editor remains running.
+   Actual: Debug builds panic on unsigned subtraction overflow at `apps/hjkl/src/render.rs:1634`; release builds wrap the visible-end bound, rather than correctly representing an empty viewport.
+   ```
+
+### Cleared
+
+- `RgSource`'s superseded worker cannot overwrite fresh results: each flush
+  checks the picker-owned cancellation flag
+  (`crates/hjkl-picker/src/source/rg.rs:474-487`), and picker drop sets that
+  flag (`crates/hjkl-picker/src/picker.rs:641-647`).
+- LSP initialization failures reap the child before returning the error
+  (`crates/hjkl-lsp/src/server.rs:95-112`); normal shutdown waits, then signals
+  force-kill and awaits the wait task (`crates/hjkl-lsp/src/server.rs:170-200`).
+- Cross-device trash moves retain the source until the staged copy is complete:
+  `move_atomic` dispatches `CrossesDevices` to `copy_then_delete`
+  (`crates/hjkl-fs/src/dir.rs:442-473`), which is the trash mover
+  (`crates/hjkl-app/src/trash.rs:167-195`).
+- Clipboard self-paste on Wayland returns the locally owned payload rather than
+  blocking the single background thread on its own pipe
+  (`crates/hjkl-clipboard/src/backend/wayland_thread.rs:1481-1514`).
+
+### Coverage
+
+Reviewed full reachable functions/branches in:
+
+- `apps/hjkl/src/render.rs:650-759,1580-1739,2090-2150` and
+  `apps/hjkl/src/app/mod.rs:2050-2063`;
+- `crates/hjkl-layout/src/lib.rs:940-1067`;
+- `crates/hjkl-picker/src/source/rg.rs:1-677`,
+  `crates/hjkl-picker/src/logic.rs:1-156`, and
+  `crates/hjkl-picker/src/picker.rs:500-647`;
+- `crates/hjkl-lsp/src/server.rs:1-697` and
+  `apps/hjkl/src/app/lsp_glue.rs:500-679`;
+- `crates/hjkl-fs/src/dir.rs:430-473` and `crates/hjkl-app/src/trash.rs:1-195`;
+- `apps/hjkl/src/save.rs:1-256`;
+- `crates/hjkl-clipboard/src/backend/x11_thread.rs:1-480,940-1449` and
+  `crates/hjkl-clipboard/src/backend/wayland_thread.rs:1-480,620-989,1240-1549`.
+
+Mechanical candidate scans covered production Rust sources for panic/TODO/error
+handling, filesystem calls, concurrency primitives, and arithmetic/casts.
+
+**GAP — not reviewed:** all production Rust outside the paths above (including
+most of `apps/hjkl`, editor/buffer/vim/ex/engine implementations, the remaining
+clipboard backends, and the other workspace crates); all tests, examples,
+package metadata, CI, documentation, and non-Rust files. This report therefore
+does not claim whole-codebase coverage.
