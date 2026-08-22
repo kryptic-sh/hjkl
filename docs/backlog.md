@@ -3015,3 +3015,75 @@ the inspected slice is low: resource and traversal guards held under concrete
 hostile inputs, and no injection/auth/crypto/data-integrity/concurrency defect
 was traced to impact. Prioritize a bounded config reader and an explicit
 remote-grammar trust model as hardening; neither is a newly confirmed defect.
+
+## full-codebase tidy review 2026-08-19
+
+Scope: clean `main`; third slice of the full-codebase sweep. Report-only review
+for behavior-preserving deduplication, dead code, unnecessary indirection, and
+needless allocations/clones.
+
+### Findings
+
+1. **Delete unused embed-notification test helper** —
+   `apps/hjkl/tests/embed.rs:67-81`: delete private `EmbedSession::notify` and
+   its `#[allow(dead_code)]`. The only workspace occurrence of `notify(` is its
+   definition, while every test in this module uses `EmbedSession::request` (for
+   example `apps/hjkl/tests/embed.rs:95-142`); removal changes no exercised or
+   reachable behavior.
+2. **Consolidate explorer trash-registry extraction** —
+   `apps/hjkl/src/app/explorer.rs:1164-1168`,
+   `apps/hjkl/src/app/explorer.rs:1426-1430`, and
+   `apps/hjkl/src/app/explorer.rs:1473-1477`: extract the identical `trashed`
+   take plus `trash_root` clone into one private `App` helper and call it from
+   reconcile, undo, and redo. Each caller needs the owned registry while it
+   invokes the filesystem transaction and then restores it
+   (`apps/hjkl/src/app/explorer.rs:1170-1192,1432-1439,1479-1488`), so the
+   helper preserves the same take/clone/default result and borrow boundary.
+3. **Consolidate explorer disk-refresh sequence** —
+   `apps/hjkl/src/app/explorer.rs:1445-1450` and
+   `apps/hjkl/src/app/explorer.rs:1494-1499`: extract the identical
+   tree-rebuild, buffer-rebuild, and git-color refresh into one private `App`
+   helper used by undo and redo. Both event-loop paths invoke their respective
+   operation (`apps/hjkl/src/app/event_loop.rs:734-775`), and both sequences
+   call the same existing helpers in the same order; consolidation leaves their
+   observable refresh behavior identical.
+
+### Cleared candidates
+
+- `crates/hjkl-bonsai/xtask/src/sync_bonsai.rs:147-154` retains the otherwise
+  unread `HelixFileType::Map` data to deserialize map-form Helix file-type
+  entries; deleting it would alter accepted input.
+- `crates/hjkl-bonsai/src/runtime/source.rs:226-235` is production-public and
+  tested in `crates/hjkl-bonsai/src/runtime/source.rs:572-581`; workspace
+  non-use cannot establish dead public API.
+- `crates/hjkl-clipboard/src/{reply.rs,oneshot.rs}` is platform-selected Linux
+  backend machinery, not dead code: `Reply::Async` delegates to
+  `Oneshot::resolve` at `crates/hjkl-clipboard/src/reply.rs:23-34`, and the
+  `Oneshot` state transitions are its concrete async mechanism at
+  `crates/hjkl-clipboard/src/oneshot.rs:25-64`.
+- The owned table working copies at
+  `crates/hjkl-markdown-tui/src/lib.rs:364-381` are mutated for truncation and
+  ellipsis insertion, so their allocations are required by the current API.
+
+### Coverage
+
+Inspected: static inventory of all 450 Rust files under `apps/` and `crates/`;
+all matches for function definitions, dead-code suppressions, clone/
+`to_owned`/collection allocation sites, `mem::{take,replace}`, aliases, traits,
+and structs. Read candidate context and callers/siblings in
+`apps/hjkl/tests/embed.rs`, `apps/hjkl/src/app/{explorer.rs,event_loop.rs}`,
+`crates/hjkl-bonsai/{xtask/src/sync_bonsai.rs,src/runtime/source.rs}`,
+`crates/hjkl-clipboard/src/{reply.rs,oneshot.rs,backend/wayland_wire.rs}`, and
+`crates/hjkl-markdown-tui/src/lib.rs`; checked existing backlog coverage in
+`docs/backlog.md`.
+
+**GAP — not read in depth:** the remaining Rust bodies and their call graphs
+outside those candidate paths, including the rest of `apps/hjkl`, workspace
+crates, tests, examples, benches, generated/package files, CI, and all non-Rust
+code. Scan-only inventory cannot prove a cleanup is behavior-preserving there,
+so no finding is claimed for it.
+
+### Summary
+
+**3 verified tidy cleanups:** one dead private test helper and two repeated
+explorer sequences. No allocation/clone cleanup survived context review.
