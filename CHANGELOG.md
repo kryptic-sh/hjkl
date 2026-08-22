@@ -10,6 +10,8 @@ patch bumps.
 
 ### Fixed
 
+- Same-start nested folds now preserve each exact range; single-fold fold
+  commands select the innermost containing range.
 - Visual `*` / `#` now search the selected charwise, linewise, or blockwise text
   and exit Visual mode like Neovim.
 - Active auto-indent flashes no longer underflow in one-row terminals with a

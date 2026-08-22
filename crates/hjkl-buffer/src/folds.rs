@@ -63,8 +63,8 @@ impl Fold {
     }
 }
 
-/// Sorted-by-`start_row` index over a fold slice for O(log F) "is this
-/// row hidden by a closed fold" queries.
+/// Sorted in canonical `(start_row ASC, end_row DESC)` order over a fold slice
+/// for O(log F) "is this row hidden by a closed fold" queries.
 ///
 /// The O(log F) twin of `folds.iter().any(|f| f.hides(row))`. Closed
 /// folds' `(start_row, end_row]` hidden ranges are merged into a disjoint
@@ -79,12 +79,12 @@ impl Fold {
 /// Mirrors the TUI renderer's `FoldIndex` (`hjkl-buffer-tui`
 /// render.rs) — the same merge, the same query, the same answers. That
 /// copy sorts its input defensively because its fold source is not
-/// guaranteed ordered; this one relies on the buffer's invariant that
-/// the fold list is kept sorted by `start_row` (see [`crate::View::add_fold`]
-/// and [`crate::View::set_auto_folds`]) and skips the sort so the build
-/// stays O(F) — it runs per keystroke / per frame on hot paths. Debug
-/// builds assert the invariant, so feeding unsorted folds fails loudly
-/// in tests rather than silently mis-answering in release.
+/// guaranteed ordered; this one relies on the buffer's canonical
+/// `(start_row ASC, end_row DESC)` ordering invariant (see
+/// [`crate::View::add_fold`] and [`crate::View::set_auto_folds`]) and skips the
+/// sort so the build stays O(F) — it runs per keystroke / per frame on hot
+/// paths. Debug builds assert the invariant, so feeding unsorted folds fails
+/// loudly in tests rather than silently mis-answering in release.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FoldIndex {
     /// Merged, disjoint half-open intervals `(start, end]` covering rows
@@ -95,14 +95,17 @@ pub struct FoldIndex {
 }
 
 impl FoldIndex {
-    /// Build the merged hidden-range index from a fold slice sorted by
-    /// `start_row` (the buffer's invariant — see the type docs).
+    /// Build the merged hidden-range index from a fold slice in canonical
+    /// `(start_row ASC, end_row DESC)` order (the buffer invariant — see the
+    /// type docs).
     ///
     /// O(F): one filter pass over the folds, then a single merge pass.
     pub fn new(folds: &[Fold]) -> Self {
         debug_assert!(
-            folds.windows(2).all(|w| w[0].start_row <= w[1].start_row),
-            "FoldIndex::new requires folds sorted by start_row"
+            folds
+                .windows(2)
+                .all(|window| compare_folds(&window[0], &window[1]).is_le()),
+            "FoldIndex::new requires folds in canonical order"
         );
         // Merge the closed folds' (start, end] intervals into a disjoint
         // union. `hides` membership is "in the union", so a single binary
@@ -134,6 +137,25 @@ impl FoldIndex {
         let (s, e) = self.hidden_ranges[idx - 1];
         row > s && row <= e
     }
+}
+
+/// Compare folds in canonical order: earliest start first, then widest range
+/// first when ranges share a start row.
+fn compare_folds(left: &Fold, right: &Fold) -> std::cmp::Ordering {
+    left.start_row
+        .cmp(&right.start_row)
+        .then_with(|| right.end_row.cmp(&left.end_row))
+}
+
+/// Index of the deepest fold containing `row`: latest start first, then the
+/// shortest range for folds that share a start row.
+fn innermost_containing_fold_index(folds: &[Fold], row: usize) -> Option<usize> {
+    folds
+        .iter()
+        .enumerate()
+        .filter(|(_, fold)| fold.contains(row))
+        .max_by_key(|(_, fold)| (fold.start_row, std::cmp::Reverse(fold.end_row)))
+        .map(|(index, _)| index)
 }
 
 impl crate::View {
@@ -187,9 +209,10 @@ impl crate::View {
         self.dirty_gen_bump();
     }
 
-    /// Register a new fold. If an existing fold has the same
-    /// `start_row`, it's replaced; otherwise the new one is inserted
-    /// in start-row order. Empty / inverted ranges are rejected.
+    /// Register a new fold. An existing fold with the exact same inclusive
+    /// range is replaced; distinct ranges sharing a start row are retained.
+    /// Folds stay in canonical `(start_row ASC, end_row DESC)` order. Empty /
+    /// inverted ranges are rejected.
     pub fn add_fold(&mut self, start_row: usize, end_row: usize, closed: bool) {
         if end_row < start_row {
             return;
@@ -207,14 +230,16 @@ impl crate::View {
         };
         {
             let mut c = self.content_lock_mut();
-            if let Some(idx) = c.folds.iter().position(|f| f.start_row == start_row) {
+            if let Some(idx) = c
+                .folds
+                .iter()
+                .position(|f| (f.start_row, f.end_row) == (start_row, end_row))
+            {
                 c.folds[idx] = fold;
             } else {
                 let pos = c
                     .folds
-                    .iter()
-                    .position(|f| f.start_row > start_row)
-                    .unwrap_or(c.folds.len());
+                    .partition_point(|existing| compare_folds(existing, &fold).is_lt());
                 c.folds.insert(pos, fold);
             }
         }
@@ -262,43 +287,41 @@ impl crate::View {
     ///
     /// ## Algorithm (O(N log N) — bounded by `ranges.len()`, no unbounded growth)
     ///
-    /// 1. Snapshot `start_row → closed` for every existing auto fold so
-    ///    open/closed state survives a reparse.
+    /// 1. Snapshot `(start_row, end_row) → closed` for every existing auto fold
+    ///    so each range's open/closed state survives a reparse.
     /// 2. Retain only manual folds (`auto_generated == false`).
     /// 3. Normalise `ranges` into the set that will actually become folds.
     /// 4. Assign each of those a nesting level by a containment sweep.
     /// 5. Insert one new `Fold` per surviving range, re-using the snapshotted
-    ///    closed state when the start_row existed before, else
+    ///    closed state when its exact range existed before, else
     ///    `level > foldlevelstart`.
     ///
     /// Invariants preserved:
-    /// - Folds stay sorted by `start_row` (same ordering as `add_fold`).
-    /// - Duplicate start_rows: the last range in `ranges` wins (consistent
-    ///   with `add_fold`'s replace-on-same-start-row semantics). In practice
-    ///   TS query ranges are already deduplicated.
+    /// - Folds stay in canonical `(start_row ASC, end_row DESC)` order.
+    /// - Duplicate exact ranges are deduplicated deterministically. Distinct
+    ///   ranges sharing a start row are retained.
     /// - Empty / inverted ranges (end_row < start_row) are silently skipped.
     /// - `end_row` is clamped to the last valid row, same as `add_fold`.
     /// - A MANUAL fold's start_row is never taken over: the auto range for
     ///   that row is dropped instead. `zf` is an explicit choice of extent,
     ///   and converting it to an auto fold both changed it and handed it to
     ///   the auto engine to overwrite on the next reparse.
-    /// - An auto fold at a start_row that already had one keeps its open /
-    ///   closed state: `foldlevelstart` decides how a fold *starts*, so it
-    ///   applies to newly-appearing rows only and never re-closes a fold the
-    ///   user opened.
+    /// - An auto fold with an existing exact range keeps its open / closed
+    ///   state: `foldlevelstart` decides how a fold *starts*, so it applies to
+    ///   newly-appearing ranges only and never re-closes a fold the user opened.
     /// - When the resulting fold set is identical to the current one, nothing
     ///   is written and NO generation bumps — [`Self::fold_gen`] promises to
     ///   move only on a real change, and `dirty_gen` moving every pass made
     ///   the caller's "recompute once per edit" guard fire every frame (and
     ///   with it a full re-highlight, since `dirty_gen` keys that cache).
     pub fn set_auto_folds(&mut self, ranges: &[(usize, usize)], foldlevelstart: u32) {
-        // 1. Snapshot closed state of existing auto folds by start_row.
-        let prev_closed: std::collections::HashMap<usize, bool> = self
+        // 1. Snapshot closed state of existing auto folds by exact range.
+        let prev_closed: std::collections::HashMap<(usize, usize), bool> = self
             .content_lock()
             .folds
             .iter()
             .filter(|f| f.auto_generated)
-            .map(|f| (f.start_row, f.closed))
+            .map(|f| ((f.start_row, f.end_row), f.closed))
             .collect();
 
         // 2. Start from the manual folds — they survive untouched, and their
@@ -313,8 +336,8 @@ impl crate::View {
         let manual_starts: std::collections::HashSet<usize> =
             next.iter().map(|f| f.start_row).collect();
 
-        // 3. Normalise: drop what will never become a fold, so the level
-        //    sweep below counts only real folds. Start rows end up unique.
+        // 3. Normalise: drop what will never become a fold, then sort and
+        //    deduplicate exact ranges so the level sweep counts only real folds.
         let last = self.row_count().saturating_sub(1);
         let mut accepted: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
         for &(start_row, end_row) in ranges {
@@ -324,65 +347,48 @@ impl crate::View {
             }
             let end_row = end_row.min(last);
             // Only folds spanning more than one row are meaningful.
-            if end_row == start_row {
+            if end_row == start_row || manual_starts.contains(&start_row) {
                 continue;
             }
-            // A manual fold owns this row — leave it alone.
-            if manual_starts.contains(&start_row) {
-                continue;
-            }
-            match accepted.iter().position(|r| r.0 == start_row) {
-                Some(idx) => accepted[idx] = (start_row, end_row),
-                None => accepted.push((start_row, end_row)),
-            }
+            accepted.push((start_row, end_row));
         }
+        accepted
+            .sort_unstable_by_key(|&(start_row, end_row)| (start_row, std::cmp::Reverse(end_row)));
+        accepted.dedup();
 
         // 4. Nesting level per accepted range, by a single containment sweep.
-        //    Visiting outermost-first (start ascending, end descending) makes
-        //    `stack` the chain of enclosing folds: pop everything that ends
-        //    before this range does — that covers both a sibling that already
-        //    closed and a partial overlap, neither of which encloses it — and
-        //    what is left is exactly the enclosing chain.
-        let levels = {
-            let mut order: Vec<usize> = (0..accepted.len()).collect();
-            order.sort_by_key(|&i| (accepted[i].0, std::cmp::Reverse(accepted[i].1)));
-            let mut levels = vec![0u32; accepted.len()];
-            let mut stack: Vec<usize> = Vec::new();
-            for i in order {
-                let end_row = accepted[i].1;
-                while stack.last().is_some_and(|&open_end| open_end < end_row) {
-                    stack.pop();
-                }
-                // 1-based, matching vim: an unnested fold is level 1.
-                levels[i] = stack.len() as u32 + 1;
-                stack.push(end_row);
+        //    Visiting outermost-first makes `stack` the chain of enclosing
+        //    folds: pop everything that ends before this range does — that
+        //    covers both a sibling that already closed and a partial overlap,
+        //    neither of which encloses it — and what is left is exactly the
+        //    enclosing chain.
+        let mut levels = Vec::with_capacity(accepted.len());
+        let mut stack: Vec<usize> = Vec::new();
+        for &(_, end_row) in &accepted {
+            while stack.last().is_some_and(|&open_end| open_end < end_row) {
+                stack.pop();
             }
-            levels
-        };
-
-        // 5. Insert new auto folds in sorted order.
-        for (i, &(start_row, end_row)) in accepted.iter().enumerate() {
-            let closed = prev_closed
-                .get(&start_row)
-                .copied()
-                .unwrap_or(levels[i] > foldlevelstart);
-            let fold = Fold {
-                start_row,
-                end_row,
-                closed,
-                auto_generated: true,
-            };
-            match next.iter().position(|f| f.start_row == start_row) {
-                Some(idx) => next[idx] = fold,
-                None => {
-                    let pos = next
-                        .iter()
-                        .position(|f| f.start_row > start_row)
-                        .unwrap_or(next.len());
-                    next.insert(pos, fold);
-                }
-            }
+            // 1-based, matching vim: an unnested fold is level 1.
+            levels.push(stack.len() as u32 + 1);
+            stack.push(end_row);
         }
+
+        // 5. Insert the new auto folds, then restore canonical ordering.
+        next.extend(
+            accepted
+                .iter()
+                .zip(levels)
+                .map(|(&(start_row, end_row), level)| Fold {
+                    start_row,
+                    end_row,
+                    closed: prev_closed
+                        .get(&(start_row, end_row))
+                        .copied()
+                        .unwrap_or(level > foldlevelstart),
+                    auto_generated: true,
+                }),
+        );
+        next.sort_by(compare_folds);
 
         // 6. No-op when nothing actually changed — see the invariant above.
         if self.content_lock().folds == next {
@@ -395,16 +401,9 @@ impl crate::View {
     /// Drop the fold whose range covers `row`. Returns `true` when a
     /// fold was actually removed.
     pub fn remove_fold_at(&mut self, row: usize) -> bool {
-        // Remove the INNERMOST fold containing `row` (largest start_row), so
-        // `zd` on a nested fold drops the inner one, not the enclosing block.
-        let idx = self
-            .content_lock()
-            .folds
-            .iter()
-            .enumerate()
-            .filter(|(_, f)| f.contains(row))
-            .max_by_key(|(_, f)| f.start_row)
-            .map(|(i, _)| i);
+        // Remove the innermost fold containing `row`, so `zd` on a nested
+        // fold drops the inner one, not the enclosing block.
+        let idx = innermost_containing_fold_index(&self.content_lock().folds, row);
         let Some(idx) = idx else {
             return false;
         };
@@ -415,16 +414,12 @@ impl crate::View {
 
     /// Open the fold at `row` (no-op if already open or no fold).
     pub fn open_fold_at(&mut self, row: usize) -> bool {
+        let Some(idx) = innermost_containing_fold_index(&self.content_lock().folds, row) else {
+            return false;
+        };
         let changed = {
             let mut c = self.content_lock_mut();
-            let Some(f) = c
-                .folds
-                .iter_mut()
-                .filter(|f| f.contains(row))
-                .max_by_key(|f| f.start_row)
-            else {
-                return false;
-            };
+            let f = &mut c.folds[idx];
             if !f.closed {
                 return false;
             }
@@ -439,16 +434,12 @@ impl crate::View {
 
     /// Close the fold at `row` (no-op if already closed or no fold).
     pub fn close_fold_at(&mut self, row: usize) -> bool {
+        let Some(idx) = innermost_containing_fold_index(&self.content_lock().folds, row) else {
+            return false;
+        };
         let changed = {
             let mut c = self.content_lock_mut();
-            let Some(f) = c
-                .folds
-                .iter_mut()
-                .filter(|f| f.contains(row))
-                .max_by_key(|f| f.start_row)
-            else {
-                return false;
-            };
+            let f = &mut c.folds[idx];
             if f.closed {
                 return false;
             }
@@ -463,16 +454,12 @@ impl crate::View {
 
     /// Flip the closed/open state of the fold containing `row`.
     pub fn toggle_fold_at(&mut self, row: usize) -> bool {
+        let Some(idx) = innermost_containing_fold_index(&self.content_lock().folds, row) else {
+            return false;
+        };
         let changed = {
             let mut c = self.content_lock_mut();
-            let Some(f) = c
-                .folds
-                .iter_mut()
-                .filter(|f| f.contains(row))
-                .max_by_key(|f| f.start_row)
-            else {
-                return false;
-            };
+            let f = &mut c.folds[idx];
             f.closed = !f.closed;
             true
         };
@@ -527,19 +514,12 @@ impl crate::View {
         }
     }
 
-    /// First fold whose range contains `row`. Useful for the host's
-    /// `za`/`zo`/`zc` handlers.
+    /// Deepest fold whose range contains `row`. Useful for the host's
+    /// `za`/`zo`/`zc` handlers. Ranges sharing a start row select the shortest
+    /// one.
     pub fn fold_at_row(&self, row: usize) -> Option<Fold> {
-        // Innermost fold containing `row`: with nested folds, the one with the
-        // largest `start_row` is the most-deeply-nested. Folds are stored in
-        // start-row order, so a plain `.find` would return the OUTERMOST fold
-        // and `zc`/`za`/`zo` would act on the wrong level.
-        self.content_lock()
-            .folds
-            .iter()
-            .filter(|f| f.contains(row))
-            .max_by_key(|f| f.start_row)
-            .copied()
+        let folds = self.content_lock();
+        innermost_containing_fold_index(&folds.folds, row).map(|idx| folds.folds[idx])
     }
 
     /// True iff `row` is hidden by a closed fold (any fold).
@@ -676,14 +656,19 @@ impl crate::View {
     /// Replace the entire fold set wholesale. Used to install a per-window fold
     /// snapshot into the shared buffer on focus change (window-level folds): the
     /// app keeps each window's open/closed state and swaps it in before dispatch,
-    /// so motions/render/`z`-ops operate on the focused window's folds.
+    /// so motions/render/`z`-ops operate on the focused window's folds. Input
+    /// is normalized to canonical `(start_row ASC, end_row DESC)` order, with
+    /// exact-range duplicates collapsed.
     pub fn set_folds(&mut self, folds: &[Fold]) {
+        let mut next = folds.to_vec();
+        next.sort_by(compare_folds);
+        next.dedup_by_key(|fold| (fold.start_row, fold.end_row));
         {
             let mut c = self.content_lock_mut();
-            if c.folds.as_slice() == folds {
+            if c.folds == next {
                 return; // no-op — avoid a spurious dirty_gen bump
             }
-            c.folds = folds.to_vec();
+            c.folds = next;
         }
         self.folds_changed();
     }
@@ -775,7 +760,9 @@ pub fn shift_fold(
 
 /// Shift every fold in `folds` by an edit's row-delta band, in place.
 /// Folds the edit's deleted band fully consumes are dropped (mirrors
-/// [`invalidate_folds`] for the folds that DO survive but move).
+/// [`invalidate_folds`] for the folds that DO survive but move). The surviving
+/// folds are normalized to canonical `(start_row ASC, end_row DESC)` order and
+/// exact-range collisions retain the first stable canonical fold.
 ///
 /// Shared by [`crate::View::rebase_folds`] (engine-side, the buffer's own
 /// fold storage) and the app's sibling-window fold snapshot shift, so both
@@ -799,6 +786,8 @@ pub fn shift_folds_after_edit(
             None => false,
         },
     );
+    folds.sort_by(compare_folds);
+    folds.dedup_by_key(|fold| (fold.start_row, fold.end_row));
 }
 
 #[cfg(test)]
@@ -853,13 +842,19 @@ mod tests {
     }
 
     #[test]
-    fn add_replaces_existing_with_same_start_row() {
+    fn add_fold_retains_same_start_ranges_and_replaces_exact_duplicate() {
         let mut buf = b();
-        buf.add_fold(1, 2, true);
         buf.add_fold(1, 4, false);
-        assert_eq!(buf.folds().len(), 1);
-        assert_eq!(buf.folds()[0].end_row, 4);
-        assert!(!buf.folds()[0].closed);
+        buf.add_fold(1, 2, false);
+        buf.add_fold(1, 2, true);
+
+        assert_eq!(
+            buf.folds()
+                .iter()
+                .map(|f| (f.start_row, f.end_row, f.closed))
+                .collect::<Vec<_>>(),
+            vec![(1, 4, false), (1, 2, true)]
+        );
     }
 
     #[test]
@@ -885,6 +880,31 @@ mod tests {
         assert!(buf.folds()[0].closed);
         assert!(buf.toggle_fold_at(2));
         assert!(!buf.folds()[0].closed);
+    }
+
+    #[test]
+    fn same_start_selectors_target_the_innermost_fold() {
+        let mut buf = b();
+        buf.add_fold(0, 4, false);
+        buf.add_fold(0, 2, true);
+        assert!(buf.open_fold_at(1));
+        assert!(!buf.is_row_hidden(1));
+        assert!(!buf.is_row_hidden(2));
+        assert!(!buf.is_row_hidden(3));
+        assert!(!buf.is_row_hidden(4));
+
+        assert!(buf.toggle_fold_at(1));
+        assert!(buf.is_row_hidden(1));
+        assert!(buf.is_row_hidden(2));
+        assert!(!buf.is_row_hidden(3));
+        assert!(!buf.is_row_hidden(4));
+        assert_eq!(buf.fold_at_row(1).map(|fold| fold.end_row), Some(2));
+
+        assert!(buf.remove_fold_at(1));
+        assert!(!buf.is_row_hidden(1));
+        assert!(!buf.is_row_hidden(2));
+        assert!(!buf.is_row_hidden(3));
+        assert!(!buf.is_row_hidden(4));
     }
 
     #[test]
@@ -933,7 +953,7 @@ mod tests {
     #[test]
     fn fold_index_agrees_with_buffer_folds_across_nested_and_open_mixes() {
         // Same guarantee through the real buffer API: `add_fold` keeps the
-        // list sorted by start_row regardless of insertion order, and the
+        // list in canonical order regardless of insertion order, and the
         // index must answer identically to the buffer's linear scan for a
         // nesting of closed/open/degenerate folds.
         let mut buf = View::from_str(&"x\n".repeat(60));
@@ -985,6 +1005,39 @@ mod tests {
     }
 
     #[test]
+    fn set_auto_folds_retains_same_start_nested_ranges() {
+        let mut buf = b();
+        buf.set_auto_folds(&[(0, 4), (0, 2)], 99);
+
+        assert_eq!(
+            buf.folds()
+                .iter()
+                .map(|f| (f.start_row, f.end_row))
+                .collect::<Vec<_>>(),
+            vec![(0, 4), (0, 2)]
+        );
+        assert!(buf.close_fold_at(1));
+        assert!(buf.is_row_hidden(1));
+        assert!(buf.is_row_hidden(2));
+        assert!(!buf.is_row_hidden(3));
+        assert!(!buf.is_row_hidden(4));
+        assert_eq!(buf.next_visible_row(0), Some(3));
+    }
+
+    #[test]
+    fn set_auto_folds_deduplicates_same_start_exact_ranges() {
+        let mut buf = b();
+        buf.set_auto_folds(&[(0, 4), (0, 2), (0, 4)], 99);
+        assert_eq!(
+            buf.folds()
+                .iter()
+                .map(|fold| (fold.start_row, fold.end_row))
+                .collect::<Vec<_>>(),
+            vec![(0, 4), (0, 2)]
+        );
+    }
+
+    #[test]
     fn set_auto_folds_adds_auto_folds() {
         let mut buf = b();
         buf.set_auto_folds(&[(0, 2), (3, 4)], 99);
@@ -1025,7 +1078,23 @@ mod tests {
     }
 
     #[test]
-    fn set_auto_folds_preserves_open_closed_state_by_start_row() {
+    fn set_auto_folds_preserves_same_start_range_states_after_reordering() {
+        let mut buf = b();
+        buf.set_auto_folds(&[(0, 4), (0, 2)], 99);
+        assert!(buf.close_fold_at(1));
+
+        buf.set_auto_folds(&[(0, 2), (0, 4)], 99);
+        assert_eq!(
+            buf.folds()
+                .iter()
+                .map(|fold| (fold.start_row, fold.end_row, fold.closed))
+                .collect::<Vec<_>>(),
+            vec![(0, 4, false), (0, 2, true)]
+        );
+    }
+
+    #[test]
+    fn set_auto_folds_preserves_open_closed_state_by_exact_range() {
         let mut buf = b();
         // First auto-fold pass: create a closed fold at row 0.
         buf.set_auto_folds(&[(0, 2)], 0); // foldlevelstart=0 → starts closed
@@ -1035,7 +1104,7 @@ mod tests {
         buf.toggle_fold_at(0);
         assert!(!buf.folds()[0].closed, "fold must now be open");
 
-        // Second auto-fold pass with same start_row — must preserve open state.
+        // Second auto-fold pass with the same exact range preserves open state.
         buf.set_auto_folds(&[(0, 2)], 0); // foldlevelstart=0 but prev was open
         assert!(
             !buf.folds()[0].closed,
@@ -1062,7 +1131,7 @@ mod tests {
             "new auto fold must start closed at foldlevelstart=0"
         );
 
-        // Re-running the same start_row at foldlevelstart=99 must NOT reopen
+        // Re-running the same exact range at foldlevelstart=99 must NOT reopen
         // it: the snapshot preserves the state the fold already has, and
         // `foldlevelstart` only decides how a fold *starts*.
         buf.set_auto_folds(&[(0, 4)], 99);
@@ -1304,7 +1373,54 @@ mod tests {
         // Insert one row at row 0: both folds shift down.
         super::shift_folds_after_edit(&mut folds, 0, 0, 1, 1);
         let ranges: Vec<(usize, usize)> = folds.iter().map(|f| (f.start_row, f.end_row)).collect();
-        assert_eq!(ranges, vec![(5, 7), (2, 3)]);
+        assert_eq!(ranges, vec![(2, 3), (5, 7)]);
+    }
+
+    #[test]
+    fn shift_folds_after_edit_restores_canonical_order_after_start_collapse() {
+        let mut folds = vec![fold(0, 3), fold(1, 5)];
+
+        super::shift_folds_after_edit(&mut folds, 0, 2, 2, -2);
+
+        assert_eq!(
+            folds
+                .iter()
+                .map(|fold| (fold.start_row, fold.end_row))
+                .collect::<Vec<_>>(),
+            vec![(0, 3), (0, 1)]
+        );
+        let index = super::FoldIndex::new(&folds);
+        assert!(index.hides_row(2));
+    }
+
+    #[test]
+    fn shift_folds_after_edit_deduplicates_exact_range_collisions() {
+        let mut folds = vec![
+            super::Fold {
+                start_row: 0,
+                end_row: 3,
+                closed: false,
+                auto_generated: false,
+            },
+            super::Fold {
+                start_row: 1,
+                end_row: 3,
+                closed: true,
+                auto_generated: true,
+            },
+        ];
+
+        super::shift_folds_after_edit(&mut folds, 0, 2, 2, -2);
+
+        assert_eq!(
+            folds,
+            vec![super::Fold {
+                start_row: 0,
+                end_row: 1,
+                closed: false,
+                auto_generated: false,
+            }]
+        );
     }
 
     #[test]
