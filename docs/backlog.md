@@ -325,12 +325,16 @@ work, and two of its rows did not reproduce at the positions probed:
   buffer-edge walk FAILs (no-op) — both match nvim. 9 corpus cases pinned in
   `tier2_block_textobj.toml`.
 
-Open per-object routing for paragraph / sentence; each needs its measured corpus
-cases first. The word-object code documents this in the NOTE comment at
-`visual_text_obj_extend`. Still open: the sentence objects with the anchor BELOW
-the cursor (`<C-v>` then `k`/`H`, then `is`/`as`) — nvim's landing there follows
-a `findsent` backtrack (`<C-v>kisy` on `"aaa. bbb.\nccc. ddd.\neee.\n"` lands
-(0,5), hjkl (1,3)).
+**Visual text-object counts are ignored (2026-08-22).** Separately from the
+completed uncounted P5 fix, `handle_visual_text_obj` calls
+`visual_text_obj_extend(ch, inner)` without consuming or passing the count, and
+`visual_text_obj_extend` hardcodes `text_object_range(..., 1)`. Counts are thus
+dropped in charwise, linewise, and VisualBlock selections. For anchor-below
+VisualBlock sentences on `aaa. bbb. ccc.`, nvim alternates sentence-body and
+separator-whitespace units: `is` counts 1–3 land at columns 10, 9, 5; `as`
+counts 1–3 land at columns 9, 4, 0. Future work: plumb Visual counts generally
+and add reusable reverse sentence body/separator traversal with cross-line
+corpus cases.
 
 **`H` / `L` / `gE` in blockwise visual — fixed 2026-08-12.** The `g`-prefixed
 horizontal motions (`gE`/`ge`/`g_`/`gM`/`gm`/`g#`) now sync `block_vcol` like

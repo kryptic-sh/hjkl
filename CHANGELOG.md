@@ -34,6 +34,11 @@ patch bumps.
   matching neovim 0.12.4), so `<C-v>jip~` flips both paragraphs' first column
   instead of silently switching to a line/charwise selection. Pinned by 9 new
   oracle corpus cases.
+- **Blockwise visual sentence objects backtrack from an anchor below the
+  cursor.** `<C-v>k`/`H` then `is` now lands at the current sentence start; `as`
+  also includes the preceding separator whitespace, matching Neovim's reverse
+  `findsent` selection. The block stays active and yanking produces the matching
+  rectangle. Pinned by eight new oracle corpus cases.
 - **Counted `J` / `gJ` / `~` revert as a single undo step.** `3J` and `5~`
   previously created one undo entry per join/char, so a single `u` only reverted
   part of the command; the counted command is now one undo unit, matching nvim.

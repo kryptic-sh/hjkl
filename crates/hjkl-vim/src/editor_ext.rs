@@ -1806,7 +1806,27 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         let Some(obj) = crate::vim::text_object_from_char(ch) else {
             return;
         };
-        let Some((start, end, kind)) = crate::vim::text_object_range(self, obj, inner, 1) else {
+        let reverse_block_sentence = obj == TextObject::Sentence
+            && crate::vim_state::vim(self).mode == FsmMode::VisualBlock
+            && self.cursor().0 < crate::vim_state::vim(self).block_anchor.0;
+        let range = if reverse_block_sentence {
+            let (cur_row, _) = self.cursor();
+            let block_vcol = crate::vim_state::vim(self).block_vcol;
+            let probe_col = self.line(cur_row).map_or(0, |line| {
+                block_vcol.min(line.chars().count().saturating_sub(1))
+            });
+            let saved_cursor = self.cursor();
+            // `H` moves the viewport head to its first nonblank while the
+            // block retains its logical column. Probe that column for vim's
+            // reverse sentence lookup, then restore even when it finds none.
+            self.jump_cursor(cur_row, probe_col);
+            let range = crate::vim::text_object_range(self, obj, inner, 1);
+            self.jump_cursor(saved_cursor.0, saved_cursor.1);
+            range
+        } else {
+            crate::vim::text_object_range(self, obj, inner, 1)
+        };
+        let Some((start, end, kind)) = range else {
             return;
         };
         // B6: `:h v_ip` — when the selection ALREADY exactly equals this
@@ -1887,12 +1907,11 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         //   - `i"` does nothing at all (the object is not found from a block
         //     at the measured position).
         //
-        // The remaining mismatch — the sentence objects with the anchor
-        // BELOW the cursor (`<C-v>` then `k`/`H`, then `is`/`as`), whose
-        // landing follows vim's `findsent` backtrack — stays tracked in
-        // docs/backlog.md §1.5b. Quotes already no-op in hjkl too. The word
-        // objects additionally write `block_vcol` so `block_bounds` sees
-        // the new column.
+        // Sentence objects with the anchor below the cursor use vim's reverse
+        // `findsent` landing: `is` returns to the current sentence start and
+        // `as` includes only its immediately preceding same-line separator.
+        // Quotes already no-op in hjkl too. The word objects additionally
+        // write `block_vcol` so `block_bounds` sees the new column.
         if crate::vim_state::vim(self).mode == FsmMode::VisualBlock {
             // Word objects keep the selection blockwise: the block spans
             // anchor-column..object-end-column, matching nvim.
@@ -1936,6 +1955,24 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 let (cur_row, _) = self.cursor();
                 let anchor_row = crate::vim_state::vim(self).block_anchor.0;
                 if cur_row != anchor_row {
+                    if cur_row < anchor_row {
+                        let landing = if inner || start.1 == 0 {
+                            start
+                        } else {
+                            self.line(start.0).map_or(start, |line| {
+                                let chars: Vec<char> = line.chars().collect();
+                                let mut col = start.1;
+                                while col > 0 && chars[col - 1].is_whitespace() {
+                                    col -= 1;
+                                }
+                                (start.0, col)
+                            })
+                        };
+                        self.jump_cursor(landing.0, landing.1);
+                        crate::vim_state::vim_mut(self).block_vcol = landing.1;
+                        crate::vim_state::vim_mut(self).block_to_eol = false;
+                        return;
+                    }
                     let (er, ec) = crate::vim::retreat_one(self, end);
                     self.jump_cursor(er, ec);
                     crate::vim_state::vim_mut(self).block_vcol = ec;

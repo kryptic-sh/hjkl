@@ -487,3 +487,84 @@ expected_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
 expected_register = ['"', "aaa. \nccc. "]
 expected_cursor = [0, 0]
 expected_mode = "normal"
+
+# With the anchor below the head, sentence objects use vim's reverse
+# `findsent` landing. `as` includes only the separator whitespace immediately
+# before the sentence, rather than its normal forward trailing whitespace.
+[[cases]]
+name = "blockwise_is_anchor_below_keeps_block_mode"
+initial_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+initial_cursor = [1, 6]
+keys = "<C-v>kis"
+expected_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+expected_cursor = [0, 5]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_as_anchor_below_keeps_block_mode"
+initial_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+initial_cursor = [1, 6]
+keys = "<C-v>kas"
+expected_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+expected_cursor = [0, 4]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_as_anchor_below_includes_separator_whitespace_run"
+initial_buffer = "aaa.   bbb.\nccc.   ddd.\n"
+initial_cursor = [1, 8]
+keys = "<C-v>kas"
+expected_buffer = "aaa.   bbb.\nccc.   ddd.\n"
+expected_cursor = [0, 4]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_as_yank_anchor_below_includes_separator_whitespace_run"
+initial_buffer = "aaa.   bbb.\nccc.   ddd.\n"
+initial_cursor = [1, 8]
+keys = "<C-v>kasy"
+expected_buffer = "aaa.   bbb.\nccc.   ddd.\n"
+expected_register = ['"', "   bb\n   dd"]
+expected_cursor = [0, 4]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_is_yank_anchor_below"
+initial_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+initial_cursor = [1, 6]
+keys = "<C-v>kisy"
+expected_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+expected_register = ['"', "bb\ndd"]
+expected_cursor = [0, 5]
+expected_mode = "normal"
+
+[[cases]]
+name = "blockwise_as_yank_anchor_below"
+initial_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+initial_cursor = [1, 6]
+keys = "<C-v>kasy"
+expected_buffer = "aaa. bbb.\nccc. ddd.\neee.\n"
+expected_register = ['"', " bb\n dd"]
+expected_cursor = [0, 4]
+expected_mode = "normal"
+
+# `H` moves the head to row 4 in the oracle's pinned 22-row viewport while
+# leaving the anchor on row 25. The reverse sentence path must preserve the
+# block and land at the current sentence's start.
+[[cases]]
+name = "blockwise_is_anchor_below_via_H_keeps_block_mode"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [25, 6]
+keys = "<C-v>His"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [4, 5]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_as_anchor_below_via_H_keeps_block_mode"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [25, 6]
+keys = "<C-v>Has"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [4, 4]
+expected_mode = "visual_block"
