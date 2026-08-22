@@ -3010,13 +3010,7 @@ needless allocations/clones.
 
 ### Findings
 
-1. **Delete unused embed-notification test helper** —
-   `apps/hjkl/tests/embed.rs:67-81`: delete private `EmbedSession::notify` and
-   its `#[allow(dead_code)]`. The only workspace occurrence of `notify(` is its
-   definition, while every test in this module uses `EmbedSession::request` (for
-   example `apps/hjkl/tests/embed.rs:95-142`); removal changes no exercised or
-   reachable behavior.
-2. **Consolidate explorer trash-registry extraction** —
+1. **Consolidate explorer trash-registry extraction** —
    `apps/hjkl/src/app/explorer.rs:1164-1168`,
    `apps/hjkl/src/app/explorer.rs:1426-1430`, and
    `apps/hjkl/src/app/explorer.rs:1473-1477`: extract the identical `trashed`
@@ -3025,7 +3019,7 @@ needless allocations/clones.
    invokes the filesystem transaction and then restores it
    (`apps/hjkl/src/app/explorer.rs:1170-1192,1432-1439,1479-1488`), so the
    helper preserves the same take/clone/default result and borrow boundary.
-3. **Consolidate explorer disk-refresh sequence** —
+2. **Consolidate explorer disk-refresh sequence** —
    `apps/hjkl/src/app/explorer.rs:1445-1450` and
    `apps/hjkl/src/app/explorer.rs:1494-1499`: extract the identical
    tree-rebuild, buffer-rebuild, and git-color refresh into one private `App`
@@ -3071,8 +3065,8 @@ so no finding is claimed for it.
 
 ### Summary
 
-**3 verified tidy cleanups:** one dead private test helper and two repeated
-explorer sequences. No allocation/clone cleanup survived context review.
+**2 verified tidy cleanups:** two repeated explorer sequences. No
+allocation/clone cleanup survived context review.
 
 ## full-codebase performance review 2026-08-22
 

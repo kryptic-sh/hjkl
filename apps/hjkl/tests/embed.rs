@@ -63,22 +63,6 @@ impl EmbedSession {
             .expect("read response");
         serde_json::from_str(resp_line.trim()).expect("parse response JSON")
     }
-
-    /// Send a notification (no id — no response expected).
-    #[allow(dead_code)]
-    fn notify(&mut self, method: &str, params: Value) {
-        let req = json!({
-            "jsonrpc": "2.0",
-            "method": method,
-            "params": params,
-        });
-        let mut line = serde_json::to_string(&req).expect("serialize");
-        line.push('\n');
-        self.stdin
-            .write_all(line.as_bytes())
-            .expect("write notification");
-        self.stdin.flush().expect("flush");
-    }
 }
 
 impl Drop for EmbedSession {
