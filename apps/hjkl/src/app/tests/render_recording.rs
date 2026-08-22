@@ -1,4 +1,5 @@
 use super::*;
+use ratatui::{Terminal, backend::TestBackend};
 
 // ── Fix 1: recording-register full-line takeover (v0.21.8) ──────────────────
 //
@@ -79,5 +80,43 @@ fn recording_stopped_falls_through_to_normal_bar() {
         width as usize,
         "normal bar must fill full width {width}, got {}: {text:?}",
         text.chars().count()
+    );
+}
+
+#[test]
+fn active_indent_flash_renders_in_zero_height_buffer_viewport() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.start_screen = None;
+    app.dispatch_ex("sp");
+    assert_eq!(
+        app.windows.iter().filter(|window| window.is_some()).count(),
+        2,
+        "prerequisite: a split must allocate a zero-height child in a one-row buffer pane"
+    );
+    app.focus_below();
+    seed_buffer(&mut app, "{\nbody\n}");
+    app.active_editor_mut().jump_cursor(1, 0);
+    app.sync_viewport_from_editor();
+    app.route_chord_key(key(KeyCode::Char('=')));
+    app.route_chord_key(key(KeyCode::Char('=')));
+    assert!(
+        app.indent_flash.is_some(),
+        "prerequisite: auto-indent must arm the flash"
+    );
+
+    let mut terminal = Terminal::new(TestBackend::new(80, 1)).unwrap();
+    let completed = terminal.draw(|frame| crate::render::frame(frame, &mut app));
+
+    assert!(
+        completed.is_ok(),
+        "a one-row terminal must render an active indent flash without an invalid draw"
+    );
+    assert_eq!(
+        app.windows[app.focused_window()]
+            .as_ref()
+            .and_then(|window| window.last_rect)
+            .map(|rect| rect.h),
+        Some(0),
+        "the focused buffer viewport must receive the zero-height pane"
     );
 }

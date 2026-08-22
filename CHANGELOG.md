@@ -10,6 +10,8 @@ patch bumps.
 
 ### Fixed
 
+- Active auto-indent flashes no longer underflow in one-row terminals with a
+  zero-height buffer viewport.
 - **Filetype detection now follows Neovim 0.12.4 for supported grammars.**
   Modelines override inferred path types, scan the complete selected lines, and
   distinguish colon-separated options from terminating `set` forms; hashbangs

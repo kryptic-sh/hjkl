@@ -2836,22 +2836,8 @@ correctness slice, not a claim of whole-repository coverage.
 
 ### Findings — ranked by severity
 
-1. **A one-row terminal panics during an active auto-indent flash**
-   (`apps/hjkl/src/render.rs:1619-1635`). The focused-window flash branch is
-   entered whenever `App::indent_flash_active()` returns a range. It copies
-   `area.height` into `screen_height` and unconditionally evaluates
-   `vp_top + screen_height as usize - 1`; no `area.height == 0` guard precedes
-   it. The top-level renderer always sends `buf_area` to the layout
-   (`apps/hjkl/src/render.rs:2119-2135`), and layout deliberately propagates a
-   zero-height rectangle to each child
-   (`crates/hjkl-layout/src/lib.rs:975-1003`). An active flash is retained until
-   its duration expires (`apps/hjkl/src/app/mod.rs:2050-2063`).
-
-   ```text
-   Repro: Start a flash-producing auto-indent action, then resize the terminal to one row before the flash expires (the top/status bars leave the buffer area with height 0).
-   Expect: The zero-height buffer pane is skipped; the editor remains running.
-   Actual: Debug builds panic on unsigned subtraction overflow at `apps/hjkl/src/render.rs:1634`; release builds wrap the visible-end bound, rather than correctly representing an empty viewport.
-   ```
+**None remaining.** The one-row terminal auto-indent flash underflow was fixed
+2026-08-22 in `apps/hjkl/src/render.rs`.
 
 ### Cleared
 
