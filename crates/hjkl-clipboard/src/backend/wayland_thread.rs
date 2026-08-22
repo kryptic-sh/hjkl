@@ -2331,7 +2331,7 @@ mod tests {
     fn dispatch_pending_receives(server: &mut MockServer) {
         let work: Vec<(u32, String, c_int)> = {
             let mut st = server.state.lock().unwrap();
-            st.pending_receives.drain(..).collect()
+            std::mem::take(&mut st.pending_receives)
         };
 
         for (offer_id, mime, write_fd) in work {
