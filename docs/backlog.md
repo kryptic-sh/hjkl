@@ -3080,26 +3080,6 @@ Scope: clean `main`; fourth slice of the full-codebase sweep. This is a
 report-only static performance review. Existing performance findings were
 checked as prior work, not treated as proof.
 
-### Findings — ranked by impact
-
-1. **Autoreload re-canonicalizes every open path and rebuilds both watch sets on
-   every event-loop tick** (`apps/hjkl/src/app/fs_watch.rs:95-125,131-145`).
-   `drain_fs_watch_events` calls `fs_watch_sync` before it even observes whether
-   the nonblocking event channel is empty. `fs_watch_sync` iterates every slot,
-   calls `canon_for_match` for every named buffer, builds fresh `files` and
-   `dirs` `HashSet`s, and replaces the filter set under its mutex. The caller is
-   `drain_async_polls` (`apps/hjkl/src/app/event_loop.rs:354-388`), which runs
-   once per event-loop tick before every terminal poll; the idle timeout is at
-   most 120 ms and falls to 16 ms during scroll animation
-   (`apps/hjkl/src/app/event_loop.rs:391-434`). Therefore this performs O(open
-   buffers) filesystem canonicalization and allocation on an otherwise idle UI
-   path, not only when files open or close; many splits/buffers and an animated
-   frame multiply it. Fix: track an fs-watch topology-dirty bit (set by every
-   slot open/close/rename path) and call `fs_watch_sync` only when it is set;
-   retain the event drain every tick. Trade: every slot mutation must mark the
-   bit, or a newly opened buffer waits until the next explicit sync to receive
-   autoreload.
-
 ### Coverage
 
 Inspected static production-Rust inventory across `apps/` and `crates/`, then

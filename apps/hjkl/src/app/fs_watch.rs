@@ -34,6 +34,12 @@ pub struct FsWatch {
     /// Directories currently registered with notify (parents of open files).
     /// Diffed against the desired set each sync so we only add/remove the delta.
     dirs: HashSet<PathBuf>,
+    /// Raw filenames from the most recent reconciliation. Comparing this against
+    /// slots lets the hot event drain skip allocation and canonicalization while
+    /// still catching direct slot mutations.
+    topology: Vec<Option<PathBuf>>,
+    #[cfg(test)]
+    sync_count: usize,
 }
 
 impl App {
@@ -74,6 +80,9 @@ impl App {
                     watcher,
                     watched,
                     dirs: HashSet::new(),
+                    topology: Vec::new(),
+                    #[cfg(test)]
+                    sync_count: 0,
                 });
                 // Register watches for the files already open at startup.
                 self.fs_watch_sync();
@@ -87,11 +96,8 @@ impl App {
 
     /// Reconcile the notify watches and the filter set with the currently-open
     /// file slots: watch any new parent directory, unwatch directories with no
-    /// open file left, and refresh the open-file filter set. Cheap (a handful of
-    /// `canonicalize` calls + a set diff) and idempotent. Call after any buffer
-    /// open/close, and once per tick from the drain as a catch-all for the
-    /// less-common open paths (`:e`, picker, explorer, splits). No-op when
-    /// fs-watch isn't enabled.
+    /// open file left, and refresh the open-file filter set. Call after any
+    /// buffer open, close, or rename. No-op when fs-watch isn't enabled.
     pub(crate) fn fs_watch_sync(&mut self) {
         if self.fs_watch.is_none() {
             return;
@@ -99,7 +105,9 @@ impl App {
         // Desired state derived from open file slots.
         let mut files: HashSet<PathBuf> = HashSet::new();
         let mut dirs: HashSet<PathBuf> = HashSet::new();
+        let mut topology = Vec::with_capacity(self.slots.len());
         for s in &self.slots {
+            topology.push(s.filename.clone());
             if let Some(p) = s.filename.as_deref() {
                 let cf = canon_for_match(p);
                 if let Some(parent) = cf.parent() {
@@ -109,6 +117,10 @@ impl App {
             }
         }
         let fw = self.fs_watch.as_mut().expect("checked is_some above");
+        #[cfg(test)]
+        {
+            fw.sync_count += 1;
+        }
         // Refresh the filter set (events for non-open files get dropped).
         if let Ok(mut set) = fw.watched.lock() {
             *set = files;
@@ -123,6 +135,19 @@ impl App {
             let _ = fw.watcher.unwatch_path(d);
         }
         fw.dirs = dirs;
+        fw.topology = topology;
+    }
+
+    fn fs_watch_topology_changed(&self) -> bool {
+        let Some(fs_watch) = &self.fs_watch else {
+            return false;
+        };
+        self.slots.len() != fs_watch.topology.len()
+            || self
+                .slots
+                .iter()
+                .zip(&fs_watch.topology)
+                .any(|(slot, filename)| slot.filename.as_ref() != filename.as_ref())
     }
 
     /// Drain queued fs-watch events and reconcile each against open slots.
@@ -132,10 +157,12 @@ impl App {
         if self.fs_watch.is_none() {
             return false;
         }
-        // Catch-all: keep the watches + filter set current with the open slots.
-        // The hot open/close paths sync eagerly, but less-common opens (`:e`,
-        // picker, explorer, splits) don't — a cheap per-tick resync covers them.
-        self.fs_watch_sync();
+        // Direct slot mutations are possible outside the eager open/close/rename
+        // paths. Compare raw filenames so unchanged ticks avoid allocation and
+        // filesystem canonicalization while those mutations still reconcile.
+        if self.fs_watch_topology_changed() {
+            self.fs_watch_sync();
+        }
         // Collect first so the &mut borrow on the watcher ends before we touch
         // slots in `checktime_slot`.
         let events: Vec<FsEvent> = match &mut self.fs_watch {
@@ -143,6 +170,28 @@ impl App {
             None => return false,
         };
         self.apply_fs_events(events)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fs_watch_sync_count(&self) -> usize {
+        self.fs_watch
+            .as_ref()
+            .map_or(0, |fs_watch| fs_watch.sync_count)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fs_watch_watched_files(&self) -> HashSet<PathBuf> {
+        self.fs_watch
+            .as_ref()
+            .and_then(|fs_watch| fs_watch.watched.lock().ok().map(|watched| watched.clone()))
+            .unwrap_or_default()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fs_watch_watched_dirs(&self) -> HashSet<PathBuf> {
+        self.fs_watch
+            .as_ref()
+            .map_or_else(HashSet::new, |fs_watch| fs_watch.dirs.clone())
     }
 
     /// Reconcile a batch of [`FsEvent`]s against open slots. Split out from

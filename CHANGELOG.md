@@ -47,6 +47,9 @@ patch bumps.
 
 ### Performance
 
+- **Autoreload synchronization is driven by open-buffer topology.** Idle event
+  drains compare cached raw filenames and skip watch/filter reconciliation until
+  an open, closed, or renamed buffer changes the topology.
 - **Buffer-word completion is harvested once per buffer change, not per
   keystroke.** `open_buffer_word_completion` re-scanned up to 1 MB of every open
   buffer (a `String` clone per unique word) on each identifier keystroke and

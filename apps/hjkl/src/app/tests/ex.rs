@@ -1471,6 +1471,104 @@ fn fs_watch_helpers_noop_without_watcher() {
     app.fs_watch_sync();
 }
 
+/// Idle fs-watch drains do not reconcile unchanged slot topology.
+#[test]
+fn fs_watch_idle_drains_do_not_reconcile() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("idle.txt");
+    std::fs::write(&path, "idle\n").unwrap();
+    let mut app = App::new(Some(path), false, None, None).unwrap();
+    app.enable_fs_watch();
+    let sync_count = app.fs_watch_sync_count();
+
+    for _ in 0..3 {
+        assert!(!app.drain_fs_watch_events());
+    }
+
+    assert_eq!(app.fs_watch_sync_count(), sync_count);
+}
+
+/// Open, close, and rename topology changes update watched files and directories.
+#[test]
+fn fs_watch_topology_changes_update_watched_files_and_directories() {
+    let dir = tempfile::tempdir().unwrap();
+    let a_dir = dir.path().join("a");
+    let b_dir = dir.path().join("b");
+    let c_dir = dir.path().join("c");
+    std::fs::create_dir_all(&a_dir).unwrap();
+    std::fs::create_dir_all(&b_dir).unwrap();
+    std::fs::create_dir_all(&c_dir).unwrap();
+    let a = a_dir.join("a.txt");
+    let b = b_dir.join("b.txt");
+    let c = c_dir.join("c.txt");
+    std::fs::write(&a, "a\n").unwrap();
+    std::fs::write(&b, "b\n").unwrap();
+    let mut app = App::new(Some(a.clone()), false, None, None).unwrap();
+    app.enable_fs_watch();
+    let b_idx = app.open_new_slot(b.clone()).unwrap();
+    let (a, b) = (canon_for_match(&a), canon_for_match(&b));
+
+    let watched = app.fs_watch_watched_files();
+    let dirs = app.fs_watch_watched_dirs();
+    assert!(watched.contains(&a));
+    assert!(watched.contains(&b));
+    assert!(dirs.contains(a.parent().unwrap()));
+    assert!(dirs.contains(b.parent().unwrap()));
+
+    std::fs::rename(&a, &c).unwrap();
+    app.active_mut().filename = Some(c.clone());
+    assert!(!app.drain_fs_watch_events());
+    let c = canon_for_match(&c);
+    let watched = app.fs_watch_watched_files();
+    let dirs = app.fs_watch_watched_dirs();
+    assert!(!watched.contains(&a));
+    assert!(watched.contains(&b));
+    assert!(watched.contains(&c));
+    assert!(!dirs.contains(a.parent().unwrap()));
+    assert!(dirs.contains(c.parent().unwrap()));
+
+    app.switch_to(b_idx);
+    app.buffer_delete(true);
+    let watched = app.fs_watch_watched_files();
+    let dirs = app.fs_watch_watched_dirs();
+    assert_eq!(watched.len(), 1);
+    assert!(watched.contains(&c));
+    assert_eq!(dirs.len(), 1);
+    assert!(dirs.contains(c.parent().unwrap()));
+}
+
+/// Changing cwd through `:cd` re-resolves relative filenames without a slot
+/// mutation, so fs-watch must refresh its filter and parent-directory watches.
+#[test]
+fn fs_watch_cd_reresolves_relative_slot_filename() {
+    let root = tempfile::tempdir().unwrap();
+    let old_cwd = root.path().join("old");
+    let new_cwd = root.path().join("new");
+    std::fs::create_dir_all(&old_cwd).unwrap();
+    std::fs::create_dir_all(&new_cwd).unwrap();
+    std::fs::write(old_cwd.join("relative.txt"), "old\n").unwrap();
+    std::fs::write(new_cwd.join("relative.txt"), "new\n").unwrap();
+    let _cwd = crate::test_cwd::CwdGuard::enter(&old_cwd);
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    app.dispatch_ex("file relative.txt");
+    app.enable_fs_watch();
+    assert!(
+        app.fs_watch_watched_files()
+            .contains(&old_cwd.join("relative.txt"))
+    );
+    assert!(app.fs_watch_watched_dirs().contains(&old_cwd));
+
+    app.dispatch_ex(&format!("cd {}", new_cwd.display()));
+
+    let watched = app.fs_watch_watched_files();
+    let dirs = app.fs_watch_watched_dirs();
+    assert!(watched.contains(&new_cwd.join("relative.txt")));
+    assert!(!watched.contains(&old_cwd.join("relative.txt")));
+    assert!(dirs.contains(&new_cwd));
+    assert!(!dirs.contains(&old_cwd));
+}
+
 /// A `Removed` event flags DeletedOnDisk; a later `Created` event for a
 /// recreated file reloads the new content (the delete→reappear branch reached
 /// over the event channel, not just via `:checktime`).

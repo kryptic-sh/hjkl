@@ -746,7 +746,9 @@ impl App {
                 self.bus.info(format!("\"{}\" [Not edited]", p.display()));
             }
             ExEffect::Cwd(new_cwd) => {
-                // `:cd` already applied std::env::set_current_dir; show new path.
+                // `:cd` already applied std::env::set_current_dir; relative slot
+                // filenames now resolve differently, so refresh their watches.
+                self.fs_watch_sync();
                 self.bus.info(new_cwd);
             }
             ExEffect::Redraw { clear } => {
