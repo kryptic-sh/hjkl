@@ -860,12 +860,14 @@ compatibility decision:
    bc, sed, WML, CFEngine, RouterOS, Icon, Rexx, execline, and bpftrace remain
    unsupported. Each requires selecting and pinning a new external grammar;
    mapping them to an unrelated existing grammar would be misleading.
-5. **Additional modeline syntax found during review.** Neovim's documented
-   second form accepts `Vim:` and abbreviated `se`, while hjkl currently handles
-   lowercase `vi:`/`vim:`/`ex:` and `set` only. Marker-boundary and
-   repeated-marker error behavior also need a focused differential pass before
-   extending the parser; this was outside the delegated findings and was not
-   changed.
+5. **Additional modeline syntax — NEEDS DEPENDENCY APPROVAL.** Differential
+   probes against Neovim 0.12.4 pinned `Vim:`, abbreviated `se`, exact Space/Tab
+   marker boundaries, command-form colon termination, and `nomodeline` stopping
+   later overlays. `hjkl-lang` and `hjkl-app` currently duplicate divergent
+   scanners. The clean implementation puts one dependency-free scanner in
+   `hjkl-lang`, which requires adding the internal workspace edge
+   `hjkl-app -> hjkl-lang`; awaiting user approval rather than retaining two
+   parsers that can drift.
 
 ## 2. Blocked on platform access
 
