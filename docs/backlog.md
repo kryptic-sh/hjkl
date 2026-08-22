@@ -3008,26 +3008,6 @@ Scope: clean `main`; third slice of the full-codebase sweep. Report-only review
 for behavior-preserving deduplication, dead code, unnecessary indirection, and
 needless allocations/clones.
 
-### Findings
-
-1. **Consolidate explorer trash-registry extraction** —
-   `apps/hjkl/src/app/explorer.rs:1164-1168`,
-   `apps/hjkl/src/app/explorer.rs:1426-1430`, and
-   `apps/hjkl/src/app/explorer.rs:1473-1477`: extract the identical `trashed`
-   take plus `trash_root` clone into one private `App` helper and call it from
-   reconcile, undo, and redo. Each caller needs the owned registry while it
-   invokes the filesystem transaction and then restores it
-   (`apps/hjkl/src/app/explorer.rs:1170-1192,1432-1439,1479-1488`), so the
-   helper preserves the same take/clone/default result and borrow boundary.
-2. **Consolidate explorer disk-refresh sequence** —
-   `apps/hjkl/src/app/explorer.rs:1445-1450` and
-   `apps/hjkl/src/app/explorer.rs:1494-1499`: extract the identical
-   tree-rebuild, buffer-rebuild, and git-color refresh into one private `App`
-   helper used by undo and redo. Both event-loop paths invoke their respective
-   operation (`apps/hjkl/src/app/event_loop.rs:734-775`), and both sequences
-   call the same existing helpers in the same order; consolidation leaves their
-   observable refresh behavior identical.
-
 ### Cleared candidates
 
 - `crates/hjkl-bonsai/xtask/src/sync_bonsai.rs:147-154` retains the otherwise
@@ -3062,11 +3042,6 @@ outside those candidate paths, including the rest of `apps/hjkl`, workspace
 crates, tests, examples, benches, generated/package files, CI, and all non-Rust
 code. Scan-only inventory cannot prove a cleanup is behavior-preserving there,
 so no finding is claimed for it.
-
-### Summary
-
-**2 verified tidy cleanups:** two repeated explorer sequences. No
-allocation/clone cleanup survived context review.
 
 ## full-codebase performance review 2026-08-22
 

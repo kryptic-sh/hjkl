@@ -1075,6 +1075,14 @@ impl super::App {
         self.set_explorer_window_cursor(clamped, 0, None);
     }
 
+    fn take_explorer_trash(&mut self) -> (Vec<(String, PathBuf)>, hjkl_app::trash::TrashRoot) {
+        self.tabs[self.active_tab]
+            .explorer
+            .as_mut()
+            .map(|ep| (std::mem::take(&mut ep.trashed), ep.trash_root.clone()))
+            .unwrap_or_default()
+    }
+
     /// When the explorer is open and in Normal mode and the buffer has changed
     /// since the last reconcile, diff the buffer against the pane's explicit
     /// `baseline` and apply the resulting filesystem ops.
@@ -1161,11 +1169,7 @@ impl super::App {
 
         // Take the trashed registry out of the pane so we can mutate it, and
         // copy the trash root out with it (the pane is borrowed again below).
-        let (mut trashed, trash_root) = self.tabs[self.active_tab]
-            .explorer
-            .as_mut()
-            .map(|ep| (std::mem::take(&mut ep.trashed), ep.trash_root.clone()))
-            .unwrap_or_default();
+        let (mut trashed, trash_root) = self.take_explorer_trash();
 
         let (newly_created, applied, errors) =
             super::explorer_reconcile::apply_ops(&ops, &mut trashed, &trash_root);
@@ -1401,6 +1405,14 @@ impl super::App {
         self.arm_swap_on_open(idx);
     }
 
+    fn rebuild_explorer_after_transaction(&mut self) {
+        if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
+            ep.tree.rebuild();
+        }
+        self.explorer_rebuild_buffer();
+        self.recompute_explorer_git_base();
+    }
+
     /// Undo the last explorer filesystem transaction.
     ///
     /// Pops one entry from `undo_stack`, reverses it on disk via
@@ -1423,11 +1435,7 @@ impl super::App {
         };
 
         // Take the trashed registry (and the trash root alongside it).
-        let (mut trashed, trash_root) = self.tabs[self.active_tab]
-            .explorer
-            .as_mut()
-            .map(|ep| (std::mem::take(&mut ep.trashed), ep.trash_root.clone()))
-            .unwrap_or_default();
+        let (mut trashed, trash_root) = self.take_explorer_trash();
 
         let (redo_journal, errors) =
             super::explorer_reconcile::revert_ops(&txn, &mut trashed, &trash_root);
@@ -1443,11 +1451,7 @@ impl super::App {
         }
 
         // Rebuild tree + buffer from disk + git.
-        if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
-            ep.tree.rebuild();
-        }
-        self.explorer_rebuild_buffer();
-        self.recompute_explorer_git_base();
+        self.rebuild_explorer_after_transaction();
 
         true
     }
@@ -1470,11 +1474,7 @@ impl super::App {
         };
 
         // Take the trashed registry (and the trash root alongside it).
-        let (mut trashed, trash_root) = self.tabs[self.active_tab]
-            .explorer
-            .as_mut()
-            .map(|ep| (std::mem::take(&mut ep.trashed), ep.trash_root.clone()))
-            .unwrap_or_default();
+        let (mut trashed, trash_root) = self.take_explorer_trash();
 
         let (_newly_created, new_applied, errors) =
             super::explorer_reconcile::apply_applied(&redo_txn, &mut trashed, &trash_root);
@@ -1492,11 +1492,7 @@ impl super::App {
         }
 
         // Rebuild tree + buffer from disk + git.
-        if let Some(ep) = self.tabs[self.active_tab].explorer.as_mut() {
-            ep.tree.rebuild();
-        }
-        self.explorer_rebuild_buffer();
-        self.recompute_explorer_git_base();
+        self.rebuild_explorer_after_transaction();
     }
 
     /// Copy the explorer buffer's CURRENT fold state into its per-window
