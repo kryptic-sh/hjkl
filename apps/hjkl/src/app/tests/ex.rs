@@ -1546,27 +1546,29 @@ fn fs_watch_cd_reresolves_relative_slot_filename() {
     let new_cwd = root.path().join("new");
     std::fs::create_dir_all(&old_cwd).unwrap();
     std::fs::create_dir_all(&new_cwd).unwrap();
-    std::fs::write(old_cwd.join("relative.txt"), "old\n").unwrap();
-    std::fs::write(new_cwd.join("relative.txt"), "new\n").unwrap();
+    let old_file = old_cwd.join("relative.txt");
+    let new_file = new_cwd.join("relative.txt");
+    std::fs::write(&old_file, "old\n").unwrap();
+    std::fs::write(&new_file, "new\n").unwrap();
+    let (old_file, new_file) = (canon_for_match(&old_file), canon_for_match(&new_file));
+    let old_dir = old_file.parent().unwrap().to_path_buf();
+    let new_dir = new_file.parent().unwrap().to_path_buf();
     let _cwd = crate::test_cwd::CwdGuard::enter(&old_cwd);
 
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("file relative.txt");
     app.enable_fs_watch();
-    assert!(
-        app.fs_watch_watched_files()
-            .contains(&old_cwd.join("relative.txt"))
-    );
-    assert!(app.fs_watch_watched_dirs().contains(&old_cwd));
+    assert!(app.fs_watch_watched_files().contains(&old_file));
+    assert!(app.fs_watch_watched_dirs().contains(&old_dir));
 
     app.dispatch_ex(&format!("cd {}", new_cwd.display()));
 
     let watched = app.fs_watch_watched_files();
     let dirs = app.fs_watch_watched_dirs();
-    assert!(watched.contains(&new_cwd.join("relative.txt")));
-    assert!(!watched.contains(&old_cwd.join("relative.txt")));
-    assert!(dirs.contains(&new_cwd));
-    assert!(!dirs.contains(&old_cwd));
+    assert!(watched.contains(&new_file));
+    assert!(!watched.contains(&old_file));
+    assert!(dirs.contains(&new_dir));
+    assert!(!dirs.contains(&old_dir));
 }
 
 /// A `Removed` event flags DeletedOnDisk; a later `Created` event for a
