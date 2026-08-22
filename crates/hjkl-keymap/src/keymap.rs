@@ -240,13 +240,7 @@ impl<A: Clone, M: Mode> Keymap<A, M> {
 
         let Some(tree) = self.trees.get(&mode) else {
             // No bindings for this mode at all — unbound.
-            let drained: Vec<KeyEvent> = self
-                .state
-                .entry(mode)
-                .or_default()
-                .buffer
-                .drain(..)
-                .collect();
+            let drained = std::mem::take(&mut self.state.entry(mode).or_default().buffer);
             return KeyResolve::Unbound(drained);
         };
 
@@ -270,13 +264,7 @@ impl<A: Clone, M: Mode> Keymap<A, M> {
             }
             (None, false) => {
                 // Dead end — no match, no prefix.
-                let drained: Vec<KeyEvent> = self
-                    .state
-                    .entry(mode)
-                    .or_default()
-                    .buffer
-                    .drain(..)
-                    .collect();
+                let drained = std::mem::take(&mut self.state.entry(mode).or_default().buffer);
                 KeyResolve::Unbound(drained)
             }
         }
@@ -303,13 +291,7 @@ impl<A: Clone, M: Mode> Keymap<A, M> {
         };
 
         let Some(tree) = self.trees.get(&mode) else {
-            let drained: Vec<KeyEvent> = self
-                .state
-                .entry(mode)
-                .or_default()
-                .buffer
-                .drain(..)
-                .collect();
+            let drained = std::mem::take(&mut self.state.entry(mode).or_default().buffer);
             return KeyResolve::Unbound(drained);
         };
 
@@ -321,13 +303,7 @@ impl<A: Clone, M: Mode> Keymap<A, M> {
             // Pure-Pending: user is mid-chord. Keep the buffer alive.
             KeyResolve::Unbound(vec![])
         } else {
-            let drained: Vec<KeyEvent> = self
-                .state
-                .entry(mode)
-                .or_default()
-                .buffer
-                .drain(..)
-                .collect();
+            let drained = std::mem::take(&mut self.state.entry(mode).or_default().buffer);
             KeyResolve::Unbound(drained)
         }
     }
