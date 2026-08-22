@@ -5360,6 +5360,98 @@ fn after_z_zo_opens_fold_at_cursor() {
 }
 
 #[test]
+fn z_recursive_fold_commands_queue_and_change_visibility() {
+    let mut e = editor_with("a\nb\nc\nd\ne\nf");
+    e.buffer_mut().add_fold(0, 4, false);
+    e.buffer_mut().add_fold(0, 2, false);
+    e.jump_cursor(0, 0);
+
+    run_keys(&mut e, "zA");
+    assert_eq!(e.cursor(), (0, 0));
+    assert_eq!(
+        e.buffer()
+            .folds()
+            .iter()
+            .map(|fold| (fold.start_row, fold.end_row, fold.closed))
+            .collect::<Vec<_>>(),
+        vec![(0, 4, true), (0, 2, true)]
+    );
+    assert_eq!(e.buffer().next_visible_row(0), Some(5));
+    assert_eq!(
+        e.take_fold_ops(),
+        vec![hjkl_engine::FoldOp::ToggleRecursivelyAt(0)]
+    );
+
+    run_keys(&mut e, "zA");
+    assert_eq!(
+        e.buffer()
+            .folds()
+            .iter()
+            .map(|fold| (fold.start_row, fold.end_row, fold.closed))
+            .collect::<Vec<_>>(),
+        vec![(0, 4, false), (0, 2, false)]
+    );
+    assert!((0..5).all(|row| !e.buffer().is_row_hidden(row)));
+    assert_eq!(
+        e.take_fold_ops(),
+        vec![hjkl_engine::FoldOp::ToggleRecursivelyAt(0)]
+    );
+
+    run_keys(&mut e, "zC");
+    assert_eq!(e.cursor(), (0, 0));
+    assert_eq!(
+        e.buffer()
+            .folds()
+            .iter()
+            .map(|fold| (fold.start_row, fold.end_row, fold.closed))
+            .collect::<Vec<_>>(),
+        vec![(0, 4, true), (0, 2, true)]
+    );
+    assert!(!e.buffer().is_row_hidden(0));
+    assert!((1..5).all(|row| e.buffer().is_row_hidden(row)));
+    assert_eq!(e.buffer().next_visible_row(0), Some(5));
+    assert_eq!(
+        e.take_fold_ops(),
+        vec![hjkl_engine::FoldOp::CloseRecursivelyAt(0)]
+    );
+
+    run_keys(&mut e, "zO");
+    assert_eq!(e.cursor(), (0, 0));
+    assert_eq!(
+        e.buffer()
+            .folds()
+            .iter()
+            .map(|fold| (fold.start_row, fold.end_row, fold.closed))
+            .collect::<Vec<_>>(),
+        vec![(0, 4, false), (0, 2, false)]
+    );
+    assert!((0..5).all(|row| !e.buffer().is_row_hidden(row)));
+    assert_eq!(
+        e.take_fold_ops(),
+        vec![hjkl_engine::FoldOp::OpenRecursivelyAt(0)]
+    );
+
+    run_keys(&mut e, "zczA");
+    assert_eq!(e.cursor(), (0, 0));
+    assert_eq!(
+        e.buffer()
+            .folds()
+            .iter()
+            .map(|fold| (fold.start_row, fold.end_row, fold.closed))
+            .collect::<Vec<_>>(),
+        vec![(0, 4, false), (0, 2, false)]
+    );
+    assert!((0..5).all(|row| !e.buffer().is_row_hidden(row)));
+    assert_eq!(
+        e.take_fold_ops(),
+        vec![
+            hjkl_engine::FoldOp::CloseAt(0),
+            hjkl_engine::FoldOp::ToggleRecursivelyAt(0)
+        ]
+    );
+}
+
+#[test]
 fn after_z_zm_closes_all_folds() {
     let mut e = editor_with("a\nb\nc\nd\ne\nf");
     e.buffer_mut().add_fold(0, 1, false);

@@ -158,6 +158,18 @@ fn innermost_containing_fold_index(folds: &[Fold], row: usize) -> Option<usize> 
         .map(|(index, _)| index)
 }
 
+/// Index of the recursive fold target at `row`. A fold that starts on the
+/// cursor row takes precedence; among same-start folds, that is the widest
+/// range so `zC` / `zO` / `zA` include the complete same-start nesting.
+/// Otherwise, use the innermost containing fold, matching the single-fold
+/// commands' target selection.
+fn recursive_fold_target_index(folds: &[Fold], row: usize) -> Option<usize> {
+    folds
+        .iter()
+        .position(|fold| fold.start_row == row)
+        .or_else(|| innermost_containing_fold_index(folds, row))
+}
+
 impl crate::View {
     /// Returns a snapshot of all folds as an owned `Vec<Fold>`.
     ///
@@ -461,6 +473,86 @@ impl crate::View {
             let mut c = self.content_lock_mut();
             let f = &mut c.folds[idx];
             f.closed = !f.closed;
+            true
+        };
+        if changed {
+            self.folds_changed();
+        }
+        changed
+    }
+
+    /// `zC` — close the fold subtree at `row`. Folds that start on `row`
+    /// select their widest range, so same-start nested folds close together;
+    /// otherwise the innermost containing fold and its descendants close.
+    pub fn close_folds_recursively_at(&mut self, row: usize) -> bool {
+        let changed = {
+            let mut c = self.content_lock_mut();
+            let Some(target) = recursive_fold_target_index(&c.folds, row).map(|idx| c.folds[idx])
+            else {
+                return false;
+            };
+            let mut any = false;
+            for fold in &mut c.folds {
+                if fold.start_row >= target.start_row
+                    && fold.end_row <= target.end_row
+                    && !fold.closed
+                {
+                    fold.closed = true;
+                    any = true;
+                }
+            }
+            any
+        };
+        if changed {
+            self.folds_changed();
+        }
+        changed
+    }
+
+    /// `zO` — open the fold subtree at `row`. Target selection matches
+    /// [`Self::close_folds_recursively_at`].
+    pub fn open_folds_recursively_at(&mut self, row: usize) -> bool {
+        let changed = {
+            let mut c = self.content_lock_mut();
+            let Some(target) = recursive_fold_target_index(&c.folds, row).map(|idx| c.folds[idx])
+            else {
+                return false;
+            };
+            let mut any = false;
+            for fold in &mut c.folds {
+                if fold.start_row >= target.start_row
+                    && fold.end_row <= target.end_row
+                    && fold.closed
+                {
+                    fold.closed = false;
+                    any = true;
+                }
+            }
+            any
+        };
+        if changed {
+            self.folds_changed();
+        }
+        changed
+    }
+
+    /// `zA` — toggle the fold subtree at `row`. If every fold in the subtree
+    /// is open, close it; otherwise open the entire subtree.
+    pub fn toggle_folds_recursively_at(&mut self, row: usize) -> bool {
+        let changed = {
+            let mut c = self.content_lock_mut();
+            let Some(target) = recursive_fold_target_index(&c.folds, row).map(|idx| c.folds[idx])
+            else {
+                return false;
+            };
+            let closed = !c.folds.iter().any(|fold| {
+                fold.start_row >= target.start_row && fold.end_row <= target.end_row && fold.closed
+            });
+            for fold in &mut c.folds {
+                if fold.start_row >= target.start_row && fold.end_row <= target.end_row {
+                    fold.closed = closed;
+                }
+            }
             true
         };
         if changed {
@@ -905,6 +997,80 @@ mod tests {
         assert!(!buf.is_row_hidden(2));
         assert!(!buf.is_row_hidden(3));
         assert!(!buf.is_row_hidden(4));
+    }
+
+    #[test]
+    fn recursive_fold_commands_apply_to_only_the_target_subtree() {
+        let mut buf = View::from_str("0\n1\n2\n3\n4\n5\n6\n7\n8");
+        buf.add_fold(0, 6, false);
+        buf.add_fold(2, 4, false);
+        buf.add_fold(3, 3, false);
+        buf.add_fold(5, 6, false);
+
+        assert!(buf.close_folds_recursively_at(2));
+        assert_eq!(
+            buf.folds()
+                .iter()
+                .map(|fold| (fold.start_row, fold.end_row, fold.closed))
+                .collect::<Vec<_>>(),
+            vec![(0, 6, false), (2, 4, true), (3, 3, true), (5, 6, false)]
+        );
+        assert_eq!(buf.next_visible_row(2), Some(5));
+
+        assert!(buf.open_folds_recursively_at(2));
+        assert!(buf.folds().iter().all(|fold| !fold.closed));
+    }
+
+    #[test]
+    fn recursive_toggle_uses_the_same_start_subtree_state() {
+        let mut buf = View::from_str("a\nb\nc\nd\ne\nf");
+        buf.add_fold(0, 4, false);
+        buf.add_fold(0, 2, false);
+
+        assert!(buf.toggle_folds_recursively_at(0));
+        assert_eq!(
+            buf.folds()
+                .iter()
+                .map(|fold| (fold.start_row, fold.end_row, fold.closed))
+                .collect::<Vec<_>>(),
+            vec![(0, 4, true), (0, 2, true)]
+        );
+        assert!((1..=4).all(|row| buf.is_row_hidden(row)));
+        assert_eq!(buf.next_visible_row(0), Some(5));
+
+        assert!(buf.toggle_folds_recursively_at(0));
+        assert_eq!(
+            buf.folds()
+                .iter()
+                .map(|fold| (fold.start_row, fold.end_row, fold.closed))
+                .collect::<Vec<_>>(),
+            vec![(0, 4, false), (0, 2, false)]
+        );
+        assert!((0..5).all(|row| !buf.is_row_hidden(row)));
+
+        assert!(buf.close_fold_at(0));
+        assert_eq!(
+            buf.folds()
+                .iter()
+                .map(|fold| (fold.start_row, fold.end_row, fold.closed))
+                .collect::<Vec<_>>(),
+            vec![(0, 4, false), (0, 2, true)]
+        );
+        assert!(buf.is_row_hidden(1));
+        assert!(buf.is_row_hidden(2));
+        assert!(!buf.is_row_hidden(3));
+        assert!(!buf.is_row_hidden(4));
+        assert_eq!(buf.next_visible_row(0), Some(3));
+
+        assert!(buf.toggle_folds_recursively_at(0));
+        assert_eq!(
+            buf.folds()
+                .iter()
+                .map(|fold| (fold.start_row, fold.end_row, fold.closed))
+                .collect::<Vec<_>>(),
+            vec![(0, 4, false), (0, 2, false)]
+        );
+        assert!((0..5).all(|row| !buf.is_row_hidden(row)));
     }
 
     #[test]

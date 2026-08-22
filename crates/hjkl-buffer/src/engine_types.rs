@@ -122,6 +122,12 @@ pub enum FoldOp {
     CloseAt(usize),
     /// `za` — flip the fold under `row` between open / closed.
     ToggleAt(usize),
+    /// `zO` — open the fold subtree under `row` recursively.
+    OpenRecursivelyAt(usize),
+    /// `zC` — close the fold subtree under `row` recursively.
+    CloseRecursivelyAt(usize),
+    /// `zA` — toggle the fold subtree under `row` recursively.
+    ToggleRecursivelyAt(usize),
     /// `zR` — open every fold in the buffer.
     OpenAll,
     /// `zM` — close every fold in the buffer.

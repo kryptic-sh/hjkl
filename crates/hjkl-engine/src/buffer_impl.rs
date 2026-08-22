@@ -517,6 +517,15 @@ impl FoldProvider for BufferFoldProviderMut<'_> {
             FoldOp::ToggleAt(row) => {
                 self.buffer.toggle_fold_at(row);
             }
+            FoldOp::OpenRecursivelyAt(row) => {
+                self.buffer.open_folds_recursively_at(row);
+            }
+            FoldOp::CloseRecursivelyAt(row) => {
+                self.buffer.close_folds_recursively_at(row);
+            }
+            FoldOp::ToggleRecursivelyAt(row) => {
+                self.buffer.toggle_folds_recursively_at(row);
+            }
             FoldOp::OpenAll => {
                 self.buffer.open_all_folds();
             }
@@ -973,6 +982,24 @@ mod tests {
             assert_eq!(p.fold_at_row(2), Some((1, 3, false)));
         }
         assert_eq!(buf.folds().len(), 1);
+    }
+
+    #[test]
+    fn fold_provider_mut_apply_recursive_operations() {
+        let mut buf = RopeBuffer::from_str("a\nb\nc\nd\ne");
+        buf.add_fold(0, 4, false);
+        buf.add_fold(0, 2, false);
+        {
+            let mut p = BufferFoldProviderMut::new(&mut buf);
+            p.apply(FoldOp::CloseRecursivelyAt(0));
+        }
+        assert!(buf.folds().iter().all(|fold| fold.closed));
+        {
+            let mut p = BufferFoldProviderMut::new(&mut buf);
+            p.apply(FoldOp::OpenRecursivelyAt(0));
+            p.apply(FoldOp::ToggleRecursivelyAt(0));
+        }
+        assert!(buf.folds().iter().all(|fold| fold.closed));
     }
 
     #[test]

@@ -581,6 +581,15 @@ pub fn apply_after_z<H: hjkl_engine::types::Host>(
         'a' => {
             ed.apply_fold_op(hjkl_engine::types::FoldOp::ToggleAt(row));
         }
+        'O' => {
+            ed.apply_fold_op(hjkl_engine::types::FoldOp::OpenRecursivelyAt(row));
+        }
+        'C' => {
+            ed.apply_fold_op(hjkl_engine::types::FoldOp::CloseRecursivelyAt(row));
+        }
+        'A' => {
+            ed.apply_fold_op(hjkl_engine::types::FoldOp::ToggleRecursivelyAt(row));
+        }
         'R' => {
             ed.apply_fold_op(hjkl_engine::types::FoldOp::OpenAll);
         }
