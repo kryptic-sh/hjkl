@@ -134,16 +134,6 @@ What neovim still has that hjkl does not:
      injection matches (`#eq?`, `#any-of?`, `#match?`) is the prerequisite.
   3. Or keep taking injections from grammar repos and accept the gap.
 
-- **One fold per start row.** `View::add_fold` / `set_auto_folds` key folds by
-  `start_row`, so where two nested folds legitimately share one (markdown's
-  `(list)` and the `(list_item (list))` inside it), hjkl keeps the outer and
-  drops the inner — one nesting level fewer than vim. Changing this touches the
-  fold model, `remove_fold_at`, and every toggle path, so it was left alone. Now
-  also a `foldlevelstart` divergence: `set_auto_folds` derives each fold's
-  nesting level by containment over the folds it actually keeps, so wherever a
-  start-row collision drops an inner fold, everything below it is one level
-  shallower than vim thinks it is and `foldlevelstart=N` opens one level too
-  much there. Same fix, same blast radius.
 - **Language fold queries are hjkl's own, not neovim's.** They fold a subset
   (e.g. rust also folds bare blocks that neovim leaves alone; toml folds
   tables). This is deliberate, and the ranges are correct — noted so the next

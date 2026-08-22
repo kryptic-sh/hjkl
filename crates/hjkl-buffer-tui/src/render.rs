@@ -461,15 +461,24 @@ fn mix_colors(a: ratatui::style::Color, b: ratatui::style::Color) -> ratatui::st
 /// still reads as a start (`▾`), matching vim's foldcolumn precedence.
 fn fold_column_glyph(folds: &[hjkl_buffer::Fold], doc_row: usize) -> char {
     let mut inside_open = false;
+    let mut starts_here = false;
+    let mut closed_starts_here = false;
     for f in folds {
         if f.start_row == doc_row {
-            return if f.closed { '▸' } else { '▾' };
+            starts_here = true;
+            closed_starts_here |= f.closed;
         }
         if !f.closed && doc_row > f.start_row && doc_row <= f.end_row {
             inside_open = true;
         }
     }
-    if inside_open { '│' } else { ' ' }
+    if starts_here {
+        if closed_starts_here { '▸' } else { '▾' }
+    } else if inside_open {
+        '│'
+    } else {
+        ' '
+    }
 }
 
 /// Per-frame fold lookup index. The render loop used to scan the whole fold
@@ -482,26 +491,24 @@ fn fold_column_glyph(folds: &[hjkl_buffer::Fold], doc_row: usize) -> char {
 ///   ranges, so "is this row hidden" is a single binary search. Merging (not
 ///   just sorting) matters: nested folds would otherwise hide a row that a
 ///   later, shorter interval no longer covers.
-/// * `marker_at` — closed folds sorted by `start_row` (stable, so equal
-///   starts keep buffer order, matching the original `.find()`), giving the
-///   first closed fold whose `start_row == row`.
+/// * `marker_at` — the widest closed fold for each start row, so the marker's
+///   skip extent matches the full same-start masking interval.
 struct FoldIndex {
     /// Merged, disjoint half-open intervals `(start, end]` covering rows
     /// hidden by at least one closed fold, sorted by `start`.
     hidden: hjkl_buffer::FoldIndex,
-    /// Closed folds sorted by `start_row`; stable sort keeps the buffer
-    /// order among equal starts so `marker_at` matches
-    /// `folds.iter().find(|f| f.closed && f.start_row == row)`.
+    /// Closed folds in canonical `(start_row ASC, end_row DESC)` order;
+    /// `marker_at` selects the widest same-start fold.
     closed_by_start: Vec<hjkl_buffer::Fold>,
 }
 
 impl FoldIndex {
     fn new(folds: &[hjkl_buffer::Fold]) -> Self {
-        // Pre-sort (stable) before handing off to the shared FoldIndex, which
-        // debug-asserts sorted input — the pre-sort preserves this crate's
-        // tolerance for unsorted host-supplied `folds_override`.
+        // Canonicalize before handing off to the shared FoldIndex, which
+        // debug-asserts `(start_row ASC, end_row DESC)` order. This preserves
+        // tolerance for arbitrarily ordered host-supplied `folds_override`.
         let mut sorted = folds.to_vec();
-        sorted.sort_by_key(|f| f.start_row);
+        sorted.sort_by_key(|f| (f.start_row, std::cmp::Reverse(f.end_row)));
         let closed_by_start: Vec<hjkl_buffer::Fold> =
             sorted.iter().copied().filter(|f| f.closed).collect();
         Self {
@@ -515,13 +522,15 @@ impl FoldIndex {
     fn hidden_at(&self, row: usize) -> bool {
         self.hidden.hides_row(row)
     }
-    /// The first closed fold whose `start_row == row`, in buffer order —
-    /// the O(log F) twin of
-    /// `folds.iter().find(|f| f.closed && f.start_row == row).copied()`.
+    /// The widest closed fold whose `start_row == row`, so its marker skips the
+    /// complete same-start masking interval.
     fn marker_at(&self, row: usize) -> Option<hjkl_buffer::Fold> {
-        let idx = self.closed_by_start.partition_point(|f| f.start_row < row);
-        let f = self.closed_by_start.get(idx)?;
-        (f.start_row == row).then_some(*f)
+        let start = self.closed_by_start.partition_point(|f| f.start_row < row);
+        let end = self.closed_by_start.partition_point(|f| f.start_row <= row);
+        self.closed_by_start[start..end]
+            .iter()
+            .copied()
+            .max_by_key(|f| f.end_row)
     }
 }
 
@@ -5253,6 +5262,109 @@ mod tests {
         assert!(
             row_text.contains("BLAME"),
             "expected 'BLAME' to appear in row 0, got: {row_text:?}"
+        );
+    }
+
+    #[test]
+    fn same_start_nested_folds_render_closed_widest_extent() {
+        use hjkl_buffer::Fold;
+
+        let b = View::from_str("one\ntwo\nthree\nfour\nfive\nsix");
+        let v = vp(20, 6);
+        let gutter = Gutter {
+            fold_column_width: 1,
+            ..Default::default()
+        };
+        let row_text = |term: &TermBuffer, y| {
+            (1..20)
+                .map(|x| term.cell((x, y)).unwrap().symbol())
+                .collect::<String>()
+                .trim_end()
+                .to_owned()
+        };
+
+        // The inner closed fold masks rows 1-2 although its outer peer is open.
+        // Host-supplied overrides can arrive inner-first.
+        let outer_open_inner_closed = [
+            Fold {
+                start_row: 0,
+                end_row: 2,
+                closed: true,
+                auto_generated: false,
+            },
+            Fold {
+                start_row: 0,
+                end_row: 4,
+                closed: false,
+                auto_generated: false,
+            },
+        ];
+        let view = BufferView {
+            gutter: Some(gutter),
+            folds_override: Some(&outer_open_inner_closed),
+            ..base_view(&b, &v)
+        };
+        let term = run_render(view, 20, 6);
+        assert_eq!(term.cell((0, 0)).unwrap().symbol(), "▸");
+        assert_eq!(
+            (0..4).map(|y| row_text(&term, y)).collect::<Vec<_>>(),
+            ["one", "four", "five", "six"]
+        );
+
+        // A closed outer fold masks through its own end regardless of its inner
+        // peer's state.
+        for inner_closed in [false, true] {
+            let outer_closed = [
+                Fold {
+                    start_row: 0,
+                    end_row: 4,
+                    closed: true,
+                    auto_generated: false,
+                },
+                Fold {
+                    start_row: 0,
+                    end_row: 2,
+                    closed: inner_closed,
+                    auto_generated: false,
+                },
+            ];
+            let view = BufferView {
+                gutter: Some(gutter),
+                folds_override: Some(&outer_closed),
+                ..base_view(&b, &v)
+            };
+            let term = run_render(view, 20, 6);
+            assert_eq!(term.cell((0, 0)).unwrap().symbol(), "▸");
+            assert_eq!(
+                (0..2).map(|y| row_text(&term, y)).collect::<Vec<_>>(),
+                ["one", "six"]
+            );
+        }
+
+        let both_open = [
+            Fold {
+                start_row: 0,
+                end_row: 4,
+                closed: false,
+                auto_generated: false,
+            },
+            Fold {
+                start_row: 0,
+                end_row: 2,
+                closed: false,
+                auto_generated: false,
+            },
+        ];
+        let view = BufferView {
+            gutter: Some(gutter),
+            folds_override: Some(&both_open),
+            ..base_view(&b, &v)
+        };
+        let term = run_render(view, 20, 6);
+        assert_eq!(term.cell((0, 0)).unwrap().symbol(), "▾");
+        assert_eq!(
+            (0..6).map(|y| row_text(&term, y)).collect::<Vec<_>>(),
+            ["one", "two", "three", "four", "five", "six"]
         );
     }
 

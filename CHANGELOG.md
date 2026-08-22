@@ -12,7 +12,8 @@ patch bumps.
 
 - Same-start nested folds now preserve each exact range; single-fold fold
   commands select the innermost containing range. Recursive `zC` / `zO` / `zA`
-  commands operate on the selected fold subtree.
+  commands operate on the selected fold subtree. The renderer shows a closed
+  indicator and uses the widest closed same-start extent for the folded summary.
 - Visual `*` / `#` now search the selected charwise, linewise, or blockwise text
   and exit Visual mode like Neovim.
 - Active auto-indent flashes no longer underflow in one-row terminals with a
