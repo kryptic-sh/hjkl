@@ -304,6 +304,101 @@ fn insert_ctrl_r_pastes_register() {
     );
 }
 
+// ── visual `*` / `#` search dispatch tests ───────────────────────────────────
+
+/// `<C-v>j*` searches the block text (`f\nf`) and exits VisualBlock instead of
+/// treating `*` as a block-extending motion. Pinned against nvim 0.12.4.
+#[test]
+fn visual_block_star_searches_selected_text() {
+    let mut e = editor_with("foo bar\nfoo baz\nqux foo\n");
+    dispatch_keys(&mut e, "<C-v>j*");
+
+    assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Normal);
+    assert_eq!(e.cursor(), (1, 0));
+    assert_eq!(e.last_search(), Some(r"\Vf\nf".to_owned()));
+    assert!(e.last_search_forward());
+    assert_eq!(e.search_history(), vec![r"\Vf\nf".to_owned()]);
+}
+
+#[test]
+fn visual_block_star_and_hash_repeat_literal_selection() {
+    let mut e = editor_with("abc abc abc\n");
+    dispatch_keys(&mut e, "<C-v>ll*");
+    assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Normal);
+    assert_eq!(e.last_search(), Some(r"\Vabc".to_owned()));
+    assert!(e.last_search_forward());
+    assert_eq!(e.cursor(), (0, 4));
+    dispatch_keys(&mut e, "n");
+    assert_eq!(e.cursor(), (0, 8));
+
+    let mut e = editor_with("abc abc abc\n");
+    e.jump_cursor(0, 4);
+    dispatch_keys(&mut e, "<C-v>ll#");
+    assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Normal);
+    assert_eq!(e.last_search(), Some(r"\Vabc".to_owned()));
+    assert!(!e.last_search_forward());
+    assert_eq!(e.cursor(), (0, 0));
+    dispatch_keys(&mut e, "N");
+    assert_eq!(e.cursor(), (0, 4));
+}
+
+#[test]
+fn visual_star_treats_punctuation_as_literal() {
+    let mut e = editor_with("a.b axb a.b\n");
+    dispatch_keys(&mut e, "vll*");
+
+    assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Normal);
+    assert_eq!(e.last_search(), Some(r"\Va.b".to_owned()));
+    assert_eq!(e.cursor(), (0, 8));
+}
+
+#[test]
+fn visual_star_escapes_literal_backslashes() {
+    let mut e = editor_with("a\\b axb a\\b\n");
+    dispatch_keys(&mut e, "vll*");
+
+    assert_eq!(e.last_search(), Some(r"\Va\\b".to_owned()));
+    assert_eq!(e.cursor(), (0, 8));
+}
+
+#[test]
+fn visual_line_star_preserves_multiline_pattern_and_head_on_no_match() {
+    let mut e = editor_with("one\ntwo\n");
+    dispatch_keys(&mut e, "Vj*");
+
+    assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Normal);
+    assert_eq!(e.last_search(), Some("\\Vone\\ntwo".to_owned()));
+    assert_eq!(e.cursor(), (1, 0));
+}
+
+#[test]
+fn visual_line_star_on_empty_line_preserves_prior_search() {
+    let mut e = editor_with("needle\n\nneedle\n");
+    dispatch_keys(&mut e, "/needle<CR>");
+    e.jump_cursor(1, 0);
+    let head = e.cursor();
+    let prior_pattern = e.last_search();
+    let prior_forward = e.last_search_forward();
+    let prior_history = e.search_history();
+
+    dispatch_keys(&mut e, "V*");
+
+    assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Normal);
+    assert_eq!(e.cursor(), head);
+    assert_eq!(e.last_search(), prior_pattern);
+    assert_eq!(e.last_search_forward(), prior_forward);
+    assert_eq!(e.search_history(), prior_history);
+}
+
+#[test]
+fn visual_search_gv_restores_completed_selection() {
+    let mut e = editor_with("foo bar\nfoo baz\nqux foo\n");
+    dispatch_keys(&mut e, "<C-v>j*gv");
+
+    assert_eq!(e.vim_mode(), hjkl_engine::VimMode::VisualBlock);
+    assert_eq!(e.cursor(), (1, 0));
+}
+
 // ── search-prompt dispatch tests ──────────────────────────────────────────────
 
 #[test]

@@ -2,7 +2,7 @@
 //!
 //! Dispatched by [`crate::dispatch_input`] for all non-insert,
 //! non-search-prompt modes (Normal, Visual, VisualLine, VisualBlock).
-use crate::vim::{op_is_change, parse_motion};
+use crate::vim::{op_is_change, parse_motion, search_selected_text, visual_selection_for_search};
 use hjkl_engine::{
     FsmMode, Host, Input, Key, LastChange, Motion, Operator, Pending, ScrollDir, VimMode,
 };
@@ -430,6 +430,23 @@ pub fn step_normal<H: Host>(
     // count, `%` is the match-pair motion (handled by `parse_motion` below).
     if !input.ctrl && input.key == Key::Char('%') && had_explicit_count {
         ed.goto_percent(count);
+        return true;
+    }
+
+    // Visual `*` / `#` search the selected text rather than dispatching the
+    // normal-mode word-under-cursor motion.
+    if ed.is_visual()
+        && !input.ctrl
+        && !input.alt
+        && let Key::Char(ch @ ('*' | '#')) = input.key
+    {
+        let head = ed.cursor();
+        let (start, selected) = visual_selection_for_search(ed);
+        ed.jump_cursor(start.0, start.1);
+        if !search_selected_text(ed, &selected, ch == '*', count) {
+            ed.jump_cursor(head.0, head.1);
+        }
+        ed.set_mode(VimMode::Normal);
         return true;
     }
 

@@ -10,6 +10,8 @@ patch bumps.
 
 ### Fixed
 
+- Visual `*` / `#` now search the selected charwise, linewise, or blockwise text
+  and exit Visual mode like Neovim.
 - Active auto-indent flashes no longer underflow in one-row terminals with a
   zero-height buffer viewport.
 - **Filetype detection now follows Neovim 0.12.4 for supported grammars.**

@@ -983,20 +983,49 @@ pub fn word_at_cursor_search<H: hjkl_engine::types::Host>(
     } else {
         escaped
     };
+    search_pattern_and_advance(ed, pattern, forward, count);
+}
+
+pub fn search_selected_text<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    selected: &str,
+    forward: bool,
+    count: usize,
+) -> bool {
+    if selected.is_empty() {
+        return false;
+    }
+    let selected = selected.replace('\\', r"\\").replace('\n', r"\n");
+    let pattern = format!(r"\V{selected}");
+    let (installed, found) = search_pattern_and_advance(ed, pattern.clone(), forward, count);
+    if installed {
+        ed.record_search_history(&pattern);
+    }
+    found
+}
+
+fn search_pattern_and_advance<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    pattern: String,
+    forward: bool,
+    count: usize,
+) -> (bool, bool) {
     ed.push_search_pattern(&pattern);
     if ed.search_state().pattern.is_none() {
-        return;
+        return (false, false);
     }
     // Remember the query so `n` / `N` keep working after the jump.
     ed.set_last_search_pattern_only(Some(pattern));
     ed.set_last_search_forward_only(forward);
+    let mut found = false;
     for _ in 0..count.max(1) {
-        if forward {
-            ed.search_advance_forward(true);
+        found |= if forward {
+            ed.search_advance_forward(true)
         } else {
-            ed.search_advance_backward(true);
-        }
+            ed.search_advance_backward(true)
+        };
     }
+    (true, found)
 }
 pub fn regex_escape(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

@@ -58,6 +58,26 @@ keys = "#"
 expected_buffer = "foo bar foo baz\n"
 expected_cursor = [0, 0]
 
+# Visual `*` searches the selected block text and exits to Normal.
+[[cases]]
+name = "visual_block_star_searches_selection_forward"
+initial_buffer = "abc abc abc\n"
+initial_cursor = [0, 0]
+keys = "<C-v>ll*"
+expected_buffer = "abc abc abc\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+
+# Visual `#` searches the selected block text backward and exits to Normal.
+[[cases]]
+name = "visual_block_hash_searches_selection_backward"
+initial_buffer = "abc abc abc\n"
+initial_cursor = [0, 4]
+keys = "<C-v>ll#"
+expected_buffer = "abc abc abc\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
 # `F` finds char backward on line.
 [[cases]]
 name = "find_F_backward"

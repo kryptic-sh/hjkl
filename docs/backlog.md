@@ -349,12 +349,6 @@ statusline + cmdline — not 24), pins `scrolloff=0` (hjkl's default 5 vs
 tall-buffer `H`/`M`/`L` and `<C-v>H>` now agree, pinned by 4 cases in
 `tier2_viewport_bounds.toml`.
 
-**`*`/`#` in visual mode still diverge (2026-08-12).** `*` in blockwise visual
-is a search in nvim (it exits visual; `<C-v>j*` on
-`"foo bar\nfoo baz\nqux foo\n"` leaves nvim normal at (1,0)) but a
-block-extending motion in hjkl (visual_block at (2,4)). Separate from the
-text-object work; not pinned.
-
 **Every edit used to clone its payload for the change log — closed 2026-08-07
 (`1f062fe0`), but not the way the note below proposed.** The `Vec<EngineEdit>`
 built per edit had NO consumer anywhere in hjkl or its checked-out siblings

@@ -383,6 +383,34 @@ pub fn update_block_vcol<H: hjkl_engine::types::Host>(
         _ => {}
     }
 }
+pub fn visual_selection_for_search<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+) -> ((usize, usize), String) {
+    match vim(ed).mode {
+        Mode::Visual => {
+            let (top, bot) = order(vim(ed).visual_anchor, ed.cursor());
+            (top, read_vim_range(ed, top, bot, RangeKind::Inclusive))
+        }
+        Mode::VisualLine => {
+            let top = vim(ed).visual_line_anchor.min(ed.cursor().0);
+            let bot = vim(ed).visual_line_anchor.max(ed.cursor().0);
+            let text = read_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
+            (
+                (top, 0),
+                text.strip_suffix('\n').unwrap_or(&text).to_owned(),
+            )
+        }
+        Mode::VisualBlock => {
+            let (top, bot, left, right) = block_bounds(ed);
+            (
+                (top, left),
+                block_yank(ed, top, bot, left, right, vim(ed).block_to_eol),
+            )
+        }
+        Mode::Normal | Mode::Insert => (ed.cursor(), String::new()),
+    }
+}
+
 /// Yank / delete / change / replace a rectangular selection. Yanked text
 /// is stored as one string per row joined with `\n`, but the register is
 /// flagged BLOCKWISE (with the block's column width) so `p`/`P` re-insert
