@@ -3087,3 +3087,51 @@ so no finding is claimed for it.
 
 **3 verified tidy cleanups:** one dead private test helper and two repeated
 explorer sequences. No allocation/clone cleanup survived context review.
+
+## full-codebase performance review 2026-08-22
+
+Scope: clean `main`; fourth slice of the full-codebase sweep. This is a
+report-only static performance review. Existing performance findings were
+checked as prior work, not treated as proof.
+
+### Findings — ranked by impact
+
+1. **Autoreload re-canonicalizes every open path and rebuilds both watch sets on
+   every event-loop tick** (`apps/hjkl/src/app/fs_watch.rs:95-125,131-145`).
+   `drain_fs_watch_events` calls `fs_watch_sync` before it even observes whether
+   the nonblocking event channel is empty. `fs_watch_sync` iterates every slot,
+   calls `canon_for_match` for every named buffer, builds fresh `files` and
+   `dirs` `HashSet`s, and replaces the filter set under its mutex. The caller is
+   `drain_async_polls` (`apps/hjkl/src/app/event_loop.rs:354-388`), which runs
+   once per event-loop tick before every terminal poll; the idle timeout is at
+   most 120 ms and falls to 16 ms during scroll animation
+   (`apps/hjkl/src/app/event_loop.rs:391-434`). Therefore this performs O(open
+   buffers) filesystem canonicalization and allocation on an otherwise idle UI
+   path, not only when files open or close; many splits/buffers and an animated
+   frame multiply it. Fix: track an fs-watch topology-dirty bit (set by every
+   slot open/close/rename path) and call `fs_watch_sync` only when it is set;
+   retain the event drain every tick. Trade: every slot mutation must mark the
+   bit, or a newly opened buffer waits until the next explicit sync to receive
+   autoreload.
+
+### Coverage
+
+Inspected static production-Rust inventory across `apps/` and `crates/`, then
+traced high-cost candidates through the event-loop and render callers:
+`apps/hjkl/src/app/{event_loop.rs,fs_watch.rs}`, `apps/hjkl/src/render.rs`,
+`crates/hjkl-{fs-watch,lsp,lang,bonsai,anvil,statusline}/src`, and production
+clipboard/filesystem call sites. Candidate scans covered sorting and nested
+iteration, collection/string allocation, filesystem I/O, and mutex/RwLock use.
+The existing performance reports were read to avoid repeating their still-open
+items.
+
+**GAP — not read in depth:** most production bodies in the workspace, including
+large editor/vim/explorer/nvim-api/clipboard/engine/buffer/render modules, plus
+tests, examples, benches, package files, CI, documentation, and non-Rust code.
+Static scanning establishes candidates only; it cannot establish hot callers for
+those untraced paths.
+
+Needs profiling: the confirmed idle-path cost across realistic open-buffer
+counts and network filesystems; previously reported span sorting, completion
+ranking, hover parsing, and directory-completion I/O remain unmeasured here and
+are not duplicated.
