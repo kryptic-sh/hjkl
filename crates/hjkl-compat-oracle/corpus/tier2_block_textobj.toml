@@ -568,3 +568,248 @@ keys = "<C-v>Has"
 expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
 expected_cursor = [4, 4]
 expected_mode = "visual_block"
+
+# ── counted Visual text objects ──────────────────────────────────────────────
+# Probed against neovim 0.12.4. Counts typed in Visual mode are handed through
+# the pending `i` / `a` chord; reverse block sentences alternate body and
+# separator landings on one row, but never expose a newline as a separator.
+
+# Characterwise and linewise Visual selections retain the object range's
+# register type when yanked.
+[[cases]]
+name = "counted_visual_inner_word_yank"
+initial_buffer = "one two three four\n"
+initial_cursor = [0, 0]
+keys = "v2iwy"
+expected_buffer = "one two three four\n"
+expected_register = ['"', "one "]
+expected_mode = "normal"
+
+[[cases]]
+name = "counted_visual_around_word_yank"
+initial_buffer = "one two three four\n"
+initial_cursor = [0, 0]
+keys = "v3awy"
+expected_buffer = "one two three four\n"
+expected_register = ['"', "one two three "]
+expected_mode = "normal"
+
+[[cases]]
+name = "counted_visual_inner_paragraph_yank_linewise"
+initial_buffer = "one\ntwo\n\nthree\nfour\n\nfive\n"
+initial_cursor = [0, 0]
+keys = "v2ipy"
+expected_buffer = "one\ntwo\n\nthree\nfour\n\nfive\n"
+expected_register = ['"', "one\ntwo\n\n"]
+expected_mode = "normal"
+
+[[cases]]
+name = "counted_visual_around_paragraph_yank_linewise"
+initial_buffer = "one\ntwo\n\nthree\nfour\n\nfive\n"
+initial_cursor = [0, 0]
+keys = "v3apy"
+expected_buffer = "one\ntwo\n\nthree\nfour\n\nfive\n"
+expected_register = ['"', "one\ntwo\n\nthree\nfour\n\nfive\n"]
+expected_mode = "normal"
+
+[[cases]]
+name = "counted_visual_inner_sentence_yank"
+initial_buffer = "aaa. bbb. ccc. ddd.\n"
+initial_cursor = [0, 0]
+keys = "v2isy"
+expected_buffer = "aaa. bbb. ccc. ddd.\n"
+expected_register = ['"', "aaa. "]
+expected_mode = "normal"
+
+[[cases]]
+name = "counted_visual_around_sentence_yank"
+initial_buffer = "aaa. bbb. ccc. ddd.\n"
+initial_cursor = [0, 0]
+keys = "v3asy"
+expected_buffer = "aaa. bbb. ccc. ddd.\n"
+expected_register = ['"', "aaa. bbb. ccc. "]
+expected_mode = "normal"
+
+[[cases]]
+name = "counted_visual_inner_bracket_yank"
+initial_buffer = "x (one (two) three) y\n"
+initial_cursor = [0, 8]
+keys = "v2iby"
+expected_buffer = "x (one (two) three) y\n"
+expected_register = ['"', "one (two) three"]
+expected_mode = "normal"
+
+[[cases]]
+name = "counted_visual_inner_bracket_overflow_yank"
+initial_buffer = "x (one (two) three) y\n"
+initial_cursor = [0, 8]
+keys = "v3iby"
+expected_buffer = "x (one (two) three) y\n"
+expected_register = ['"', "t"]
+expected_mode = "normal"
+
+# Forward VisualBlock sentence counts extend the active end by sentence.
+[[cases]]
+name = "counted_block_sentence_forward_1"
+initial_buffer = "aaa. bbb. ccc.\nxxx. yyy. zzz.\n"
+initial_cursor = [0, 0]
+keys = "<C-v>j1is"
+expected_buffer = "aaa. bbb. ccc.\nxxx. yyy. zzz.\n"
+expected_cursor = [1, 3]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_forward_2"
+initial_buffer = "aaa. bbb. ccc.\nxxx. yyy. zzz.\n"
+initial_cursor = [0, 0]
+keys = "<C-v>j2is"
+expected_buffer = "aaa. bbb. ccc.\nxxx. yyy. zzz.\n"
+expected_cursor = [1, 4]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_forward_3"
+initial_buffer = "aaa. bbb. ccc.\nxxx. yyy. zzz.\n"
+initial_cursor = [0, 0]
+keys = "<C-v>j3is"
+expected_buffer = "aaa. bbb. ccc.\nxxx. yyy. zzz.\n"
+expected_cursor = [1, 8]
+expected_mode = "visual_block"
+
+# Reverse same-line counts alternate sentence-body and separator landings.
+[[cases]]
+name = "counted_block_sentence_reverse_inner_1"
+initial_buffer = "aaa. bbb. ccc.\naaa. bbb. ccc.\n"
+initial_cursor = [1, 11]
+keys = "<C-v>k1is"
+expected_buffer = "aaa. bbb. ccc.\naaa. bbb. ccc.\n"
+expected_cursor = [0, 10]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_reverse_inner_2"
+initial_buffer = "aaa. bbb. ccc.\naaa. bbb. ccc.\n"
+initial_cursor = [1, 11]
+keys = "<C-v>k2is"
+expected_buffer = "aaa. bbb. ccc.\naaa. bbb. ccc.\n"
+expected_cursor = [0, 9]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_reverse_inner_3"
+initial_buffer = "aaa. bbb. ccc.\naaa. bbb. ccc.\n"
+initial_cursor = [1, 11]
+keys = "<C-v>k3is"
+expected_buffer = "aaa. bbb. ccc.\naaa. bbb. ccc.\n"
+expected_cursor = [0, 5]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_reverse_around_1"
+initial_buffer = "aaa. bbb. ccc.\naaa. bbb. ccc.\n"
+initial_cursor = [1, 11]
+keys = "<C-v>k1as"
+expected_buffer = "aaa. bbb. ccc.\naaa. bbb. ccc.\n"
+expected_cursor = [0, 9]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_reverse_around_2"
+initial_buffer = "aaa. bbb. ccc.\naaa. bbb. ccc.\n"
+initial_cursor = [1, 11]
+keys = "<C-v>k2as"
+expected_buffer = "aaa. bbb. ccc.\naaa. bbb. ccc.\n"
+expected_cursor = [0, 4]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_reverse_around_3"
+initial_buffer = "aaa. bbb. ccc.\naaa. bbb. ccc.\n"
+initial_cursor = [1, 11]
+keys = "<C-v>k3as"
+expected_buffer = "aaa. bbb. ccc.\naaa. bbb. ccc.\n"
+expected_cursor = [0, 0]
+expected_mode = "visual_block"
+
+# Across line breaks, reverse counts advance only through sentence bodies.
+[[cases]]
+name = "counted_block_sentence_reverse_cross_line_1"
+initial_buffer = "aaa.\nbbb.\nccc.\nxxx.\n"
+initial_cursor = [3, 0]
+keys = "<C-v>k1is"
+expected_buffer = "aaa.\nbbb.\nccc.\nxxx.\n"
+expected_cursor = [1, 0]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_reverse_cross_line_2"
+initial_buffer = "aaa.\nbbb.\nccc.\nxxx.\n"
+initial_cursor = [3, 0]
+keys = "<C-v>k2is"
+expected_buffer = "aaa.\nbbb.\nccc.\nxxx.\n"
+expected_cursor = [0, 0]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_reverse_cross_line_3"
+initial_buffer = "aaa.\nbbb.\nccc.\nxxx.\n"
+initial_cursor = [3, 0]
+keys = "<C-v>k3is"
+expected_buffer = "aaa.\nbbb.\nccc.\nxxx.\n"
+expected_cursor = [0, 0]
+expected_mode = "visual_block"
+
+# Whitespace-only rows are skipped and count overflow clamps at the first body.
+[[cases]]
+name = "counted_block_sentence_reverse_whitespace_inner_1"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
+initial_cursor = [4, 0]
+keys = "<C-v>k1is"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
+expected_cursor = [2, 0]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_reverse_whitespace_inner_2"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
+initial_cursor = [4, 0]
+keys = "<C-v>k2is"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
+expected_cursor = [0, 0]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_reverse_whitespace_inner_3"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
+initial_cursor = [4, 0]
+keys = "<C-v>k3is"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
+expected_cursor = [0, 0]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_reverse_whitespace_around_1"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
+initial_cursor = [4, 0]
+keys = "<C-v>k1as"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
+expected_cursor = [2, 0]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_reverse_whitespace_around_2"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
+initial_cursor = [4, 0]
+keys = "<C-v>k2as"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
+expected_cursor = [0, 0]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "counted_block_sentence_reverse_whitespace_around_3"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
+initial_cursor = [4, 0]
+keys = "<C-v>k3as"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
+expected_cursor = [0, 0]
+expected_mode = "visual_block"

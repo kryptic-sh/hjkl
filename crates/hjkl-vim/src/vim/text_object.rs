@@ -342,6 +342,109 @@ fn scan_row_boundaries(r: usize, line: &[char]) -> (Vec<(usize, usize)>, bool) {
     (mid, has_eol)
 }
 
+/// Resolve the reverse landing used by a multi-row VisualBlock `is` / `as`.
+///
+/// Vim walks sentence bodies and same-line separator whitespace as separate
+/// units while moving left on a row. Across a line break it advances directly
+/// between sentence bodies: the newline is not a selectable separator unit.
+pub fn reverse_visual_block_sentence_landing<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    inner: bool,
+    count: usize,
+) -> Option<Pos> {
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let raw_n_lines = rope.len_lines();
+    if raw_n_lines == 0 {
+        return None;
+    }
+    let mut lines: Vec<Vec<char>> = (0..raw_n_lines)
+        .map(|row| rope_line_to_str(&rope, row).chars().collect())
+        .collect();
+    if lines.len() > 1 && lines.last().is_some_and(Vec::is_empty) {
+        lines.pop();
+    }
+    let n_lines = lines.len();
+    if n_lines == 0 {
+        return None;
+    }
+    let cursor = (ed.cursor().0.min(n_lines - 1), ed.cursor().1);
+    let mut starts: Vec<Pos> = sentence_boundaries(&lines, n_lines)
+        .into_iter()
+        .filter(|&(row, col)| lines[row].get(col).is_some_and(|ch| !ch.is_whitespace()))
+        .collect();
+    for row in 1..n_lines {
+        let Some(col) = lines[row].iter().position(|ch| !ch.is_whitespace()) else {
+            continue;
+        };
+        let mut previous = row - 1;
+        while previous > 0 && row_skippable(&lines[previous]) {
+            previous -= 1;
+        }
+        let mut tail = &lines[previous][..];
+        while tail
+            .last()
+            .is_some_and(|ch| ch.is_whitespace() || is_sentence_closing(*ch))
+        {
+            tail = &tail[..tail.len() - 1];
+        }
+        if lines[previous].is_empty() || tail.last().is_some_and(|ch| is_sentence_terminator(*ch)) {
+            starts.push((row, col));
+        }
+    }
+    starts.sort_unstable();
+    starts.dedup();
+    let mut index = starts.iter().rposition(|&start| start <= cursor)?;
+    // A reverse block first moves onto the row above its anchor. When that row
+    // starts a sentence at the active cursor, Vim's first text-object count
+    // resolves the preceding body instead; crossing a line break never exposes
+    // the active row as a separator unit.
+    if starts[index] == cursor && index > 0 && starts[index - 1].0 < cursor.0 {
+        index -= 1;
+    }
+    let current = starts[index];
+    let separator_start = |(row, col): Pos| {
+        let line = &lines[row];
+        let mut start = col;
+        while start > 0 && line[start - 1].is_whitespace() {
+            start -= 1;
+        }
+        (start < col).then_some((row, start))
+    };
+
+    let mut landings = Vec::new();
+    if inner {
+        landings.push(current);
+    } else {
+        landings.push(separator_start(current).unwrap_or(current));
+    }
+    let mut last = current;
+    while index > 0 && starts[index - 1].0 == current.0 {
+        index -= 1;
+        if inner {
+            if let Some(separator) = separator_start(last) {
+                landings.push(separator);
+            }
+            landings.push(starts[index]);
+        } else if let Some(separator) = separator_start(starts[index]) {
+            landings.push(separator);
+        } else {
+            landings.push(starts[index]);
+        }
+        last = starts[index];
+    }
+    let count = count.max(1);
+    if let Some(&landing) = landings.get(count - 1) {
+        return Some(landing);
+    }
+
+    let mut remaining = count - landings.len();
+    while remaining > 0 && index > 0 {
+        index -= 1;
+        remaining -= 1;
+    }
+    starts.get(index).copied()
+}
+
 /// Every valid sentence-boundary landing position within `lines[..n_lines]`,
 /// in ascending order (deduplicated). Always includes `(0, 0)`. Kept as the
 /// full-buffer reference for the differential tests (`old_sentence_boundary`
@@ -1590,8 +1693,8 @@ pub fn bracket_text_object<H: hjkl_engine::types::Host>(
         (open_pos, close_pos)
     };
     // Count: `2i{` / `2a{` target the Nth enclosing pair. Expand outward from
-    // the innermost pair, re-anchoring to each enclosing bracket in turn. Stop
-    // early (and use the outermost found) if there aren't `count` levels.
+    // the innermost pair, re-anchoring to each enclosing bracket in turn. An
+    // unavailable enclosing level makes the Visual text object a no-op.
     let (open_pos, close_pos) = {
         let (mut op, mut cp) = (open_pos, close_pos);
         for _ in 1..count.max(1) {
@@ -1604,10 +1707,8 @@ pub fn bracket_text_object<H: hjkl_engine::types::Host>(
             } else {
                 None
             };
-            let Some(oo) = outer else { break };
-            let Some(oc) = find_close_bracket(lines, oo.0, oo.1 + 1, open, close) else {
-                break;
-            };
+            let oo = outer?;
+            let oc = find_close_bracket(lines, oo.0, oo.1 + 1, open, close)?;
             op = oo;
             cp = oc;
         }

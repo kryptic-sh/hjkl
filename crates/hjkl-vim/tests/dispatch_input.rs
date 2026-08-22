@@ -558,6 +558,70 @@ fn cancelled_replace_drops_count() {
     );
 }
 
+#[test]
+fn visual_text_object_count_extends_and_does_not_leak() {
+    let mut e = editor_with("aaa. bbb. ccc.");
+    dispatch_keys(&mut e, "v2is");
+    assert_eq!(e.cursor(), (0, 4));
+    assert_eq!(e.char_highlight(), Some(((0, 0), (0, 4))));
+
+    let mut invalid = editor_with("abcdef");
+    dispatch_keys(&mut invalid, "v2iz");
+    assert_eq!(
+        invalid.count(),
+        0,
+        "invalid Visual text object must consume count"
+    );
+}
+
+#[test]
+fn reverse_block_sentence_counts_land_on_bodies_and_separators() {
+    for (keys, expected) in [
+        ("<C-v>k1is", (0, 10)),
+        ("<C-v>k2is", (0, 9)),
+        ("<C-v>k3is", (0, 5)),
+        ("<C-v>k1as", (0, 9)),
+        ("<C-v>k2as", (0, 4)),
+        ("<C-v>k3as", (0, 0)),
+    ] {
+        let mut e = editor_with("aaa. bbb. ccc.\naaa. bbb. ccc.");
+        e.jump_cursor(1, 11);
+        dispatch_keys(&mut e, keys);
+        assert_eq!(e.cursor(), expected, "{keys}");
+    }
+}
+
+#[test]
+fn reverse_block_sentence_counts_skip_newline_and_whitespace_rows() {
+    for (keys, expected) in [
+        ("<C-v>k1is", (1, 0)),
+        ("<C-v>k2is", (0, 0)),
+        ("<C-v>k3is", (0, 0)),
+        ("<C-v>k1as", (1, 0)),
+        ("<C-v>k2as", (0, 0)),
+        ("<C-v>k3as", (0, 0)),
+    ] {
+        let mut e = editor_with("aaa.\nbbb.\nccc.\nxxx.");
+        e.jump_cursor(3, 0);
+        dispatch_keys(&mut e, keys);
+        assert_eq!(e.cursor(), expected, "{keys}");
+    }
+
+    for (keys, expected) in [
+        ("<C-v>k1is", (2, 0)),
+        ("<C-v>k2is", (0, 0)),
+        ("<C-v>k3is", (0, 0)),
+        ("<C-v>k1as", (2, 0)),
+        ("<C-v>k2as", (0, 0)),
+        ("<C-v>k3as", (0, 0)),
+    ] {
+        let mut e = editor_with("aaa.\n   \nbbb.\nccc.\nxxx.");
+        e.jump_cursor(4, 0);
+        dispatch_keys(&mut e, keys);
+        assert_eq!(e.cursor(), expected, "{keys}");
+    }
+}
+
 // Note: the pathological `count1 * count2` saturation is covered by the
 // `op_total_count_saturates_instead_of_overflowing` unit test in
 // `pending.rs`. It is NOT exercised end-to-end here because feeding a

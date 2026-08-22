@@ -50,6 +50,10 @@ patch bumps.
   also includes the preceding separator whitespace, matching Neovim's reverse
   `findsent` selection. The block stays active and yanking produces the matching
   rectangle. Pinned by eight new oracle corpus cases.
+- **Visual text objects now honor count prefixes.** Counted word, paragraph,
+  sentence, and nested-bracket selections match Neovim; reverse blockwise
+  sentence counts alternate body and separator landings on one row, skip newline
+  separators, and clamp at the first sentence body.
 - **Counted `J` / `gJ` / `~` revert as a single undo step.** `3J` and `5~`
   previously created one undo entry per join/char, so a single `u` only reverted
   part of the command; the counted command is now one undo unit, matching nvim.

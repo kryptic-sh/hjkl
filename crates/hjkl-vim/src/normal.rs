@@ -349,6 +349,9 @@ pub fn step_normal<H: Host>(
         && matches!(input.key, Key::Char('i') | Key::Char('a'))
     {
         let inner = matches!(input.key, Key::Char('i'));
+        if had_explicit_count {
+            ed.set_count(count);
+        }
         ed.set_pending(Pending::VisualTextObj { inner });
         return true;
     }
@@ -1241,10 +1244,11 @@ fn handle_visual_text_obj<H: Host>(
     input: Input,
     inner: bool,
 ) -> bool {
+    let count = ed.take_count();
     let Key::Char(ch) = input.key else {
         return true;
     };
-    ed.visual_text_obj_extend(ch, inner);
+    ed.visual_text_obj_extend_counted(ch, inner, count);
     true
 }
 

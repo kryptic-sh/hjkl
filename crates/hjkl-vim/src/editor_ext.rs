@@ -655,6 +655,15 @@ pub trait VimEditorExt {
     /// object identified by `ch`.
     fn visual_text_obj_extend(&mut self, ch: char, inner: bool);
 
+    /// Counted Visual-mode `i<ch>` / `a<ch>` extension.
+    ///
+    /// Defaults to the uncounted method so existing downstream implementations
+    /// remain source-compatible.
+    fn visual_text_obj_extend_counted(&mut self, ch: char, inner: bool, count: usize) {
+        let _ = count;
+        self.visual_text_obj_extend(ch, inner);
+    }
+
     // ─── Insert-mode primitives ────────────────────────────────────────────
     //
     // Each wraps a `crate::vim::insert_*_bridge` and, when the bridge
@@ -1803,13 +1812,18 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     }
 
     fn visual_text_obj_extend(&mut self, ch: char, inner: bool) {
+        self.visual_text_obj_extend_counted(ch, inner, 1);
+    }
+
+    fn visual_text_obj_extend_counted(&mut self, ch: char, inner: bool, count: usize) {
+        let count = count.max(1);
         let Some(obj) = crate::vim::text_object_from_char(ch) else {
             return;
         };
         let reverse_block_sentence = obj == TextObject::Sentence
             && crate::vim_state::vim(self).mode == FsmMode::VisualBlock
             && self.cursor().0 < crate::vim_state::vim(self).block_anchor.0;
-        let range = if reverse_block_sentence {
+        let reverse_landing = if reverse_block_sentence {
             let (cur_row, _) = self.cursor();
             let block_vcol = crate::vim_state::vim(self).block_vcol;
             let probe_col = self.line(cur_row).map_or(0, |line| {
@@ -1820,15 +1834,41 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             // block retains its logical column. Probe that column for vim's
             // reverse sentence lookup, then restore even when it finds none.
             self.jump_cursor(cur_row, probe_col);
-            let range = crate::vim::text_object_range(self, obj, inner, 1);
+            let landing = crate::vim::reverse_visual_block_sentence_landing(self, inner, count);
             self.jump_cursor(saved_cursor.0, saved_cursor.1);
-            range
+            landing
         } else {
-            crate::vim::text_object_range(self, obj, inner, 1)
+            None
         };
-        let Some((start, end, kind)) = range else {
+        let block_sentence_forward = obj == TextObject::Sentence
+            && inner
+            && crate::vim_state::vim(self).mode == FsmMode::VisualBlock
+            && self.cursor().0 > crate::vim_state::vim(self).block_anchor.0;
+        let range = if let Some(landing) = reverse_landing {
+            Some((landing, landing, RangeKind::Exclusive))
+        } else if block_sentence_forward {
+            // In a forward VisualBlock selection, `is` advances through the
+            // sentence body and its following same-line separator as distinct
+            // count units: body, separator, next body, ….
+            let object_count = count.div_ceil(2);
+            let include_separator = count.is_multiple_of(2);
+            crate::vim::text_object_range(self, obj, !include_separator, object_count)
+        } else {
+            crate::vim::text_object_range(self, obj, inner, count)
+        };
+        let Some((start, mut end, kind)) = range else {
             return;
         };
+        if obj == TextObject::Sentence
+            && inner
+            && count > 1
+            && crate::vim_state::vim(self).mode == FsmMode::Visual
+            && let Some((_, around_end, _)) = crate::vim::text_object_range(self, obj, false, 1)
+        {
+            // `v2is` includes the current sentence's following separator;
+            // sentence counts in Visual mode retain Vim's inclusive endpoint.
+            end = around_end;
+        }
         // B6: `:h v_ip` — when the selection ALREADY exactly equals this
         // text object's natural bounds (the user is re-applying `ip`/`ap`/
         // etc. to a selection it already produced, e.g. `vipip`), the
@@ -1956,18 +1996,20 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 let anchor_row = crate::vim_state::vim(self).block_anchor.0;
                 if cur_row != anchor_row {
                     if cur_row < anchor_row {
-                        let landing = if inner || start.1 == 0 {
-                            start
-                        } else {
-                            self.line(start.0).map_or(start, |line| {
-                                let chars: Vec<char> = line.chars().collect();
-                                let mut col = start.1;
-                                while col > 0 && chars[col - 1].is_whitespace() {
-                                    col -= 1;
-                                }
-                                (start.0, col)
-                            })
-                        };
+                        let landing = reverse_landing.unwrap_or_else(|| {
+                            if inner || start.1 == 0 {
+                                start
+                            } else {
+                                self.line(start.0).map_or(start, |line| {
+                                    let chars: Vec<char> = line.chars().collect();
+                                    let mut col = start.1;
+                                    while col > 0 && chars[col - 1].is_whitespace() {
+                                        col -= 1;
+                                    }
+                                    (start.0, col)
+                                })
+                            }
+                        });
                         self.jump_cursor(landing.0, landing.1);
                         crate::vim_state::vim_mut(self).block_vcol = landing.1;
                         crate::vim_state::vim_mut(self).block_to_eol = false;
