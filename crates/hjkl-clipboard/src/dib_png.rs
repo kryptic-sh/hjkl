@@ -401,7 +401,7 @@ pub fn png_to_dib(png: &[u8]) -> Result<Vec<u8>, ClipboardError> {
         let mut dib_row = Vec::with_capacity(stride);
         if channels == 4 {
             // RGBA -> BGRA
-            for px in row.chunks_exact(4) {
+            for px in row.as_chunks::<4>().0 {
                 dib_row.push(px[2]); // B
                 dib_row.push(px[1]); // G
                 dib_row.push(px[0]); // R
@@ -409,7 +409,7 @@ pub fn png_to_dib(png: &[u8]) -> Result<Vec<u8>, ClipboardError> {
             }
         } else {
             // RGB -> BGR
-            for px in row.chunks_exact(3) {
+            for px in row.as_chunks::<3>().0 {
                 dib_row.push(px[2]); // B
                 dib_row.push(px[1]); // G
                 dib_row.push(px[0]); // R
@@ -487,7 +487,7 @@ pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
         let mut row = Vec::with_capacity(width as usize * channels);
         if channels == 4 {
             // BGRA -> RGBA
-            for px in src.chunks_exact(4) {
+            for px in src.as_chunks::<4>().0 {
                 row.push(px[2]); // R
                 row.push(px[1]); // G
                 row.push(px[0]); // B
@@ -495,7 +495,7 @@ pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
             }
         } else {
             // BGR -> RGB
-            for px in src.chunks_exact(3) {
+            for px in src.as_chunks::<3>().0 {
                 row.push(px[2]); // R
                 row.push(px[1]); // G
                 row.push(px[0]); // B

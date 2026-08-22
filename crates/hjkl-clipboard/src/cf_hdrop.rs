@@ -139,7 +139,9 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<PathBuf>, ClipboardError> {
     }
 
     let units: Vec<u16> = list_bytes
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|c| u16::from_le_bytes([c[0], c[1]]))
         .collect();
 

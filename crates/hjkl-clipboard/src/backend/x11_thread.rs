@@ -1450,7 +1450,9 @@ fn do_available(state: &mut X11State, sel_atom: u32) -> Result<Vec<u32>, Clipboa
                 ));
             }
             let atoms: Vec<u32> = bytes
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
                 .collect();
             Ok(atoms)
@@ -2239,7 +2241,9 @@ mod tests {
                         let targets = mock_read_property(fns, raw, req.requestor, prop);
                         // targets is a list of u32 atoms (format=32).
                         let atom_list: Vec<u32> = targets
-                            .chunks_exact(4)
+                            .as_chunks::<4>()
+                            .0
+                            .iter()
                             .map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]))
                             .collect();
 
