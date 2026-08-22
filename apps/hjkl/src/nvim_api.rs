@@ -289,46 +289,35 @@ fn mode_code(editor: &hjkl_engine::Editor<View, TuiHost>) -> &'static str {
     }
 }
 
-// ── buffer line range helper ──────────────────────────────────────────────────
+fn validation_err(stdout: &mut impl Write, msgid: u32, msg: &str) -> Result<()> {
+    write_response(
+        stdout,
+        msgid,
+        Value::Array(vec![Value::from(1i64), Value::from(msg)]),
+        Value::Nil,
+    )
+}
 
-/// Resolve nvim-style [start, end) line indices (end=-1 means to the last
-/// line) into a concrete Rust range over the buffer's lines. Both `start` and
-/// `end` are 0-based. Returns an error string if out of bounds.
-///
-/// Matches nvim's documented `nvim_buf_get_lines`/`nvim_buf_set_lines`
-/// semantics: "Out-of-bounds indices are clamped to the nearest valid value,
-/// unless strict_indexing is set" (then it's `"Index out of bounds"`). An
-/// index counts as out-of-bounds when, after negative-index resolution, it
-/// still falls outside `[0, line_count]` — e.g. `start=100` on a 3-line
-/// buffer, or `start=-100` on the same buffer (resolves to a still-negative
-/// value). `strict=true` rejects that with an error instead of silently
-/// clamping; `strict=false` clamps (so `start > line_count` yields an empty
-/// range `(line_count, line_count)`, not an error).
-///
-/// Uses saturating arithmetic — extreme negative values from a hostile client
-/// (e.g. `i64::MIN`) must clamp instead of overflowing.
+// ── buffer coordinate helpers ─────────────────────────────────────────────────
+
+/// Resolve nvim-style [start, end) line indices. Unlike text rows, line
+/// endpoints may equal `line_count`; negative indices use `line_count + index + 1`.
 fn resolve_line_range(
     line_count: usize,
     start: i64,
     end: i64,
     strict: bool,
 ) -> std::result::Result<(usize, usize), String> {
-    let n = line_count as i64;
-    // Resolve negative indices (counting from the end) WITHOUT clamping yet —
-    // clamping here would hide an out-of-bounds resolution (e.g. start deep
-    // enough negative that `n + start` is still negative) from the
-    // strict_indexing check below.
-    let s_resolved = if start < 0 {
-        n.saturating_add(start)
-    } else {
-        start
+    let n = i64::try_from(line_count).unwrap_or(i64::MAX);
+    let resolve = |index: i64| {
+        if index < 0 {
+            n.saturating_add(index).saturating_add(1)
+        } else {
+            index
+        }
     };
-    let e_resolved = if end < 0 {
-        n.saturating_add(end).saturating_add(1)
-    } else {
-        end
-    };
-
+    let s_resolved = resolve(start);
+    let e_resolved = resolve(end);
     let s_oob = s_resolved < 0 || s_resolved > n;
     let e_oob = e_resolved < 0 || e_resolved > n;
     if strict && (s_oob || e_oob) {
@@ -343,6 +332,30 @@ fn resolve_line_range(
         ));
     }
     Ok((s, e))
+}
+
+/// Resolve a text row. Text rows select concrete lines, so their valid range is
+/// `[0, line_count - 1]` and their negative form is `line_count + row`.
+fn resolve_text_row(line_count: usize, row: i64) -> Option<usize> {
+    let n = i64::try_from(line_count).unwrap_or(i64::MAX);
+    let resolved = if row < 0 { n.saturating_add(row) } else { row };
+    (0..n).contains(&resolved).then_some(resolved as usize)
+}
+
+/// Resolve a text byte column. Negative columns count from the line end, where
+/// `-1` is EOL. Getters clamp; setters reject the `None` result.
+fn resolve_text_col(line_len: usize, col: i64, clamp: bool) -> Option<usize> {
+    let len = i64::try_from(line_len).unwrap_or(i64::MAX);
+    let resolved = if col < 0 {
+        len.saturating_add(col).saturating_add(1)
+    } else {
+        col
+    };
+    if clamp {
+        Some(resolved.clamp(0, len) as usize)
+    } else {
+        (0..=len).contains(&resolved).then_some(resolved as usize)
+    }
 }
 
 /// Convert an nvim byte-col into a char-col for `line`.
@@ -857,6 +870,9 @@ fn dispatch(
                 let line_count = rope.len_lines();
                 let (s, e) = match resolve_line_range(line_count, start, end, strict) {
                     Ok(r) => r,
+                    Err(msg) if msg == "Index out of bounds" => {
+                        return validation_err(stdout, msgid, &msg);
+                    }
                     Err(msg) => return err(stdout, msgid, &msg),
                 };
 
@@ -896,6 +912,9 @@ fn dispatch(
                 let line_count = rope.len_lines();
                 let (s, e) = match resolve_line_range(line_count, start, end, strict) {
                     Ok(r) => r,
+                    Err(msg) if msg == "Index out of bounds" => {
+                        return validation_err(stdout, msgid, &msg);
+                    }
                     Err(msg) => return err(stdout, msgid, &msg),
                 };
 
@@ -958,6 +977,9 @@ fn dispatch(
             let line_count = rope.len_lines();
             let (s, e) = match resolve_line_range(line_count, start, end, strict) {
                 Ok(r) => r,
+                Err(msg) if msg == "Index out of bounds" => {
+                    return validation_err(stdout, msgid, &msg);
+                }
                 Err(msg) => return err(stdout, msgid, &msg),
             };
             let result: Vec<Value> = (s..e)
@@ -1556,31 +1578,22 @@ fn dispatch(
                 Err(e) => return err(stdout, msgid, &e),
             };
             let start_row = match param_i64(p, 1) {
-                Ok(v) => v.max(0) as usize,
+                Ok(v) => v,
                 Err(e) => return err(stdout, msgid, &e),
             };
             let start_col = match param_i64(p, 2) {
-                Ok(v) => v.max(0) as usize,
+                Ok(v) => v,
                 Err(e) => return err(stdout, msgid, &e),
             };
             let end_row = match param_i64(p, 3) {
-                Ok(v) => v.max(0) as usize,
+                Ok(v) => v,
                 Err(e) => return err(stdout, msgid, &e),
             };
             let end_col = match param_i64(p, 4) {
-                Ok(v) => v.max(0) as usize,
+                Ok(v) => v,
                 Err(e) => return err(stdout, msgid, &e),
             };
             // params[5] = opts dict — ignored
-
-            // Reject an inverted range (start after end) like nvim does —
-            // a start_row > end_row (or equal rows with start_col >
-            // end_col) would otherwise fall through the loop below and
-            // silently return an empty array. Mirrors the check and
-            // message in nvim_buf_set_text.
-            if start_row > end_row || (start_row == end_row && start_col > end_col) {
-                return err(stdout, msgid, "start is higher than end");
-            }
 
             let current_id = app.nvim_current_buffer_id();
             let rope = if buf_id == current_id {
@@ -1592,8 +1605,26 @@ fn dispatch(
                 }
             };
             let line_count = rope.len_lines();
-            let start_row = start_row.min(line_count.saturating_sub(1));
-            let end_row = end_row.min(line_count.saturating_sub(1));
+            let Some(start_row) = resolve_text_row(line_count, start_row) else {
+                return validation_err(stdout, msgid, "Index out of bounds");
+            };
+            let Some(end_row) = resolve_text_row(line_count, end_row) else {
+                return validation_err(stdout, msgid, "Index out of bounds");
+            };
+            if start_row > end_row {
+                return validation_err(stdout, msgid, "'start' is higher than 'end'");
+            }
+            let start_line = hjkl_buffer::rope_line_str(&rope, start_row);
+            let end_line = hjkl_buffer::rope_line_str(&rope, end_row);
+            let start_col = resolve_text_col(start_line.len(), start_col, true).unwrap();
+            let end_col = resolve_text_col(end_line.len(), end_col, true).unwrap();
+            if start_row == end_row && start_col > end_col {
+                return validation_err(
+                    stdout,
+                    msgid,
+                    "start_col must be less than or equal to end_col",
+                );
+            }
 
             let mut result: Vec<Value> = Vec::new();
             for row in start_row..=end_row {
@@ -1639,19 +1670,19 @@ fn dispatch(
                 Err(e) => return err(stdout, msgid, &e),
             };
             let start_row = match param_i64(p, 1) {
-                Ok(v) => v.max(0) as usize,
+                Ok(v) => v,
                 Err(e) => return err(stdout, msgid, &e),
             };
             let start_col = match param_i64(p, 2) {
-                Ok(v) => v.max(0) as usize,
+                Ok(v) => v,
                 Err(e) => return err(stdout, msgid, &e),
             };
             let end_row = match param_i64(p, 3) {
-                Ok(v) => v.max(0) as usize,
+                Ok(v) => v,
                 Err(e) => return err(stdout, msgid, &e),
             };
             let end_col = match param_i64(p, 4) {
-                Ok(v) => v.max(0) as usize,
+                Ok(v) => v,
                 Err(e) => return err(stdout, msgid, &e),
             };
             let replacement = match param_string_array(p, 5) {
@@ -1662,21 +1693,35 @@ fn dispatch(
             let current_id = app.nvim_current_buffer_id();
             let is_current = buf_id == current_id;
 
-            // Materialise buffer lines.
-            let lines: Vec<String> = {
-                let rope = if is_current {
-                    app.active_editor().buffer().rope()
-                } else {
-                    match app.nvim_slot(buf_id) {
-                        Some(ed) => ed.buffer().rope(),
-                        None => return err(stdout, msgid, "invalid buffer id"),
-                    }
-                };
-                let n = rope.len_lines();
-                (0..n)
-                    .map(|i| hjkl_buffer::rope_line_str(&rope, i))
-                    .collect()
+            let rope = if is_current {
+                app.active_editor().buffer().rope()
+            } else {
+                match app.nvim_slot(buf_id) {
+                    Some(ed) => ed.buffer().rope(),
+                    None => return err(stdout, msgid, "invalid buffer id"),
+                }
             };
+            let Some(start_row) = resolve_text_row(rope.len_lines(), start_row) else {
+                return validation_err(stdout, msgid, "Invalid 'start_row': out of range");
+            };
+            let Some(end_row) = resolve_text_row(rope.len_lines(), end_row) else {
+                return validation_err(stdout, msgid, "Invalid 'end_row': out of range");
+            };
+            let start_line = hjkl_buffer::rope_line_str(&rope, start_row);
+            let end_line = hjkl_buffer::rope_line_str(&rope, end_row);
+            let Some(start_col) = resolve_text_col(start_line.len(), start_col, false) else {
+                return validation_err(stdout, msgid, "Invalid 'start_col': out of range");
+            };
+            let Some(end_col) = resolve_text_col(end_line.len(), end_col, false) else {
+                return validation_err(stdout, msgid, "Invalid 'end_col': out of range");
+            };
+            if start_row > end_row || (start_row == end_row && start_col > end_col) {
+                return validation_err(stdout, msgid, "'start' is higher than 'end'");
+            }
+
+            let lines: Vec<String> = (0..rope.len_lines())
+                .map(|i| hjkl_buffer::rope_line_str(&rope, i))
+                .collect();
 
             // Compute absolute byte positions by walking lines.
             // Each line contributes its byte length + 1 for the joining '\n'.
@@ -5511,7 +5556,7 @@ mod tests {
             Value::Array(a) => a[1].as_str().unwrap_or_default().to_string(),
             other => panic!("expected an error array, got {other:?}"),
         };
-        assert_eq!(msg, "start is higher than end");
+        assert_eq!(msg, "'start' is higher than 'end'");
 
         // Same row: start_col AFTER end_col must also error.
         let resp = call(
@@ -5530,7 +5575,63 @@ mod tests {
             Value::Array(a) => a[1].as_str().unwrap_or_default().to_string(),
             other => panic!("expected an error array, got {other:?}"),
         };
-        assert_eq!(msg, "start is higher than end");
+        assert_eq!(msg, "start_col must be less than or equal to end_col");
+    }
+
+    #[test]
+    fn test_nvim_text_coordinate_resolvers_extremes() {
+        assert_eq!(resolve_line_range(2, -3, -1, true), Ok((0, 2)));
+        assert!(resolve_line_range(2, -4, -1, true).is_err());
+        assert_eq!(resolve_line_range(2, -1, -1, true), Ok((2, 2)));
+        assert_eq!(resolve_line_range(2, i64::MIN, i64::MAX, false), Ok((0, 2)));
+        assert!(resolve_line_range(2, i64::MIN, i64::MAX, true).is_err());
+
+        assert_eq!(resolve_text_row(2, -2), Some(0));
+        assert_eq!(resolve_text_row(2, -1), Some(1));
+        assert_eq!(resolve_text_row(2, -3), None);
+        assert_eq!(resolve_text_row(2, 2), None);
+        assert_eq!(resolve_text_row(2, i64::MIN), None);
+        assert_eq!(resolve_text_row(2, i64::MAX), None);
+
+        assert_eq!(resolve_text_col(3, -1, false), Some(3));
+        assert_eq!(resolve_text_col(3, -4, false), Some(0));
+        assert_eq!(resolve_text_col(3, -5, false), None);
+        assert_eq!(resolve_text_col(3, i64::MIN, true), Some(0));
+        assert_eq!(resolve_text_col(3, i64::MAX, true), Some(3));
+        assert_eq!(resolve_text_col(3, i64::MIN, false), None);
+        assert_eq!(resolve_text_col(3, i64::MAX, false), None);
+    }
+
+    #[test]
+    fn test_nvim_buf_get_text_oob_row_is_validation_error() {
+        let mut app = build_app(None).unwrap();
+        assert_ok(call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("abc"), Value::from("def")]),
+            ],
+        ));
+        let resp = call(
+            &mut app,
+            "nvim_buf_get_text",
+            vec![
+                Value::Nil,
+                Value::from(2i64),
+                Value::from(0i64),
+                Value::from(2i64),
+                Value::from(0i64),
+                Value::Map(vec![]),
+            ],
+        );
+        assert_eq!(
+            resp[2],
+            Value::Array(vec![Value::from(1i64), Value::from("Index out of bounds")])
+        );
     }
 
     // ── strict_indexing (audit R2, fix 3) ──────────────────────────────────

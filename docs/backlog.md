@@ -772,11 +772,6 @@ with ripgrep installed are unaffected.
 
 ### 1.10 Left open by the 2026-08-04 code review
 
-- **`nvim_buf_set_text` and `nvim_buf_get_text` clamp, never error, on rows past
-  end-of-buffer.** Real nvim errors E966/E1206 for out-of-range rows; hjkl
-  clamps to `line_count-1` (get_text) and slices clamped (set_text). Not fixed
-  because the review found no client misbehaviour from the clamping.
-
 (The default-scope `:g`/`:v` phantom-row and `replace_all` change-log items
 shipped 2026-08-04 — see the Record.)
 

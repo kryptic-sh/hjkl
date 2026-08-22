@@ -10,6 +10,13 @@ patch bumps.
 
 ### Fixed
 
+- **Neovim buffer line and text coordinates now validate at the API boundary.**
+  Strict out-of-bounds line requests and invalid text endpoints return msgpack
+  validation errors (type 1), non-strict line endpoints clamp, text rows reject
+  out-of-range values, and text columns retain Neovim's
+  getter-clamp/setter-error behavior without mutating the buffer on rejected
+  edits.
+
 - Same-start nested folds now preserve each exact range; single-fold fold
   commands select the innermost containing range. Recursive `zC` / `zO` / `zA`
   commands operate on the selected fold subtree. The renderer shows a closed

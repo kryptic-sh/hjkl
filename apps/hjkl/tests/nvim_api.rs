@@ -714,3 +714,254 @@ async fn nvim_api_fresh_open_of_over_cap_file_is_refused() {
     let _ = nvim.command("qa!").await;
     let _ = child.wait().await;
 }
+
+/// Text and line coordinate bounds use Neovim validation errors on the raw RPC wire.
+#[tokio::test(flavor = "multi_thread")]
+async fn nvim_api_coordinate_validation_errors() {
+    let (nvim, _io, mut child) = spawn_hjkl_nvim_api().await.expect("spawn hjkl --nvim-api");
+    let error = |result: Result<Value, Value>, message: &str| {
+        assert_eq!(
+            result.expect_err("expected RPC error"),
+            Value::Array(vec![Value::from(1i64), Value::from(message)])
+        );
+    };
+    nvim.call(
+        "nvim_buf_set_lines",
+        vec![
+            Value::Nil,
+            Value::from(0i64),
+            Value::from(-1i64),
+            Value::Boolean(false),
+            Value::Array(vec![Value::from("abc"), Value::from("def")]),
+        ],
+    )
+    .await
+    .expect("seed call")
+    .expect("seed result");
+    for row in [2, -3] {
+        error(
+            nvim.call(
+                "nvim_buf_get_text",
+                vec![
+                    Value::Nil,
+                    Value::from(row),
+                    Value::from(0i64),
+                    Value::from(row),
+                    Value::from(0i64),
+                    Value::Map(vec![]),
+                ],
+            )
+            .await
+            .expect("get_text call"),
+            "Index out of bounds",
+        );
+    }
+    for (p, message) in [
+        ((2, 0, 1, 0), "Invalid 'start_row': out of range"),
+        ((0, 0, 2, 0), "Invalid 'end_row': out of range"),
+        ((0, 4, 1, 0), "Invalid 'start_col': out of range"),
+        ((0, 0, 1, 4), "Invalid 'end_col': out of range"),
+    ] {
+        error(
+            nvim.call(
+                "nvim_buf_set_text",
+                vec![
+                    Value::Nil,
+                    Value::from(p.0),
+                    Value::from(p.1),
+                    Value::from(p.2),
+                    Value::from(p.3),
+                    Value::Array(vec![Value::from("X")]),
+                ],
+            )
+            .await
+            .expect("set_text call"),
+            message,
+        );
+        assert_eq!(
+            nvim.call(
+                "nvim_buf_get_lines",
+                vec![
+                    Value::Nil,
+                    Value::from(0i64),
+                    Value::from(-1i64),
+                    Value::Boolean(false)
+                ]
+            )
+            .await
+            .expect("get_lines call")
+            .expect("get_lines result"),
+            Value::Array(vec![Value::from("abc"), Value::from("def")])
+        );
+    }
+    assert_eq!(
+        nvim.call(
+            "nvim_buf_get_text",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(99i64),
+                Value::from(1i64),
+                Value::from(99i64),
+                Value::Map(vec![])
+            ]
+        )
+        .await
+        .expect("get_text call")
+        .expect("get_text result"),
+        Value::Array(vec![Value::from(""), Value::from("def")])
+    );
+    assert_eq!(
+        nvim.call(
+            "nvim_buf_get_text",
+            vec![
+                Value::Nil,
+                Value::from(-1i64),
+                Value::from(0i64),
+                Value::from(1i64),
+                Value::from(0i64),
+                Value::Map(vec![])
+            ]
+        )
+        .await
+        .expect("get_text call")
+        .expect("get_text result"),
+        Value::Array(vec![Value::from("")])
+    );
+    nvim.call(
+        "nvim_buf_set_text",
+        vec![
+            Value::Nil,
+            Value::from(-1i64),
+            Value::from(0i64),
+            Value::from(1i64),
+            Value::from(0i64),
+            Value::Array(vec![Value::from("X")]),
+        ],
+    )
+    .await
+    .expect("set_text call")
+    .expect("set_text result");
+    assert_eq!(
+        nvim.call(
+            "nvim_buf_get_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false)
+            ]
+        )
+        .await
+        .expect("get_lines call")
+        .expect("get_lines result"),
+        Value::Array(vec![Value::from("abc"), Value::from("Xdef")])
+    );
+    error(
+        nvim.call(
+            "nvim_buf_get_lines",
+            vec![
+                Value::Nil,
+                Value::from(-4i64),
+                Value::from(-1i64),
+                Value::Boolean(true),
+            ],
+        )
+        .await
+        .expect("strict get_lines call"),
+        "Index out of bounds",
+    );
+    error(
+        nvim.call(
+            "nvim_buf_get_lines",
+            vec![
+                Value::Nil,
+                Value::from(99i64),
+                Value::from(-1i64),
+                Value::Boolean(true),
+            ],
+        )
+        .await
+        .expect("strict get_lines call"),
+        "Index out of bounds",
+    );
+    assert_eq!(
+        nvim.call(
+            "nvim_buf_get_lines",
+            vec![
+                Value::Nil,
+                Value::from(-4i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+            ],
+        )
+        .await
+        .expect("non-strict get_lines call")
+        .expect("get_lines result"),
+        Value::Array(vec![Value::from("abc"), Value::from("Xdef")])
+    );
+    error(
+        nvim.call(
+            "nvim_buf_set_lines",
+            vec![
+                Value::Nil,
+                Value::from(99i64),
+                Value::from(99i64),
+                Value::Boolean(true),
+                Value::Array(vec![Value::from("wrong")]),
+            ],
+        )
+        .await
+        .expect("strict set_lines call"),
+        "Index out of bounds",
+    );
+    assert_eq!(
+        nvim.call(
+            "nvim_buf_get_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false)
+            ],
+        )
+        .await
+        .expect("get_lines call")
+        .expect("get_lines result"),
+        Value::Array(vec![Value::from("abc"), Value::from("Xdef")])
+    );
+    nvim.call(
+        "nvim_buf_set_lines",
+        vec![
+            Value::Nil,
+            Value::from(99i64),
+            Value::from(99i64),
+            Value::Boolean(false),
+            Value::Array(vec![Value::from("tail")]),
+        ],
+    )
+    .await
+    .expect("non-strict set_lines call")
+    .expect("set_lines result");
+    assert_eq!(
+        nvim.call(
+            "nvim_buf_get_lines",
+            vec![
+                Value::Nil,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false)
+            ]
+        )
+        .await
+        .expect("get_lines call")
+        .expect("get_lines result"),
+        Value::Array(vec![
+            Value::from("abc"),
+            Value::from("Xdef"),
+            Value::from("tail")
+        ])
+    );
+    let _ = nvim.command("qa!").await;
+    let _ = child.wait().await;
+}
