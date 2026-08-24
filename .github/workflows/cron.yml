@@ -128,7 +128,7 @@ jobs:
       # version, and cargo-deny changes what its checks mean between minors.
       # A prebuilt binary rather than `cargo install` — nothing here needs to
       # compile it, and it is the difference between seconds and minutes.
-      - uses: taiki-e/install-action@v2.85.13
+      - uses: taiki-e/install-action@v2.86.5
         with:
           tool: cargo-deny@0.19.7
       - run: cargo deny --all-features check
