@@ -110,7 +110,13 @@ fn dispatch_sub_command<H: Host>(
         return crate::builtins::normal_handler(editor, keys, range);
     }
 
-    let (head, rest) = cmd.split_at(1);
+    // Split on the first CHAR boundary, not `split_at(1)`: a multi-byte
+    // sub-command head (e.g. `:g/x/é`) would make `split_at(1)` panic with
+    // "byte index 1 is not a char boundary" instead of reaching the `_` arm's
+    // error. `cmd` is non-empty here (guarded above), so `chars().next()` is
+    // always `Some`.
+    let head_len = cmd.chars().next().map_or(0, char::len_utf8);
+    let (head, rest) = cmd.split_at(head_len);
     match head {
         "d" => crate::builtins::delete_handler(editor, rest.trim_start(), range),
         "y" => crate::builtins::yank_handler(editor, rest.trim_start(), range),
@@ -337,6 +343,17 @@ mod tests {
     fn global_bad_pattern_returns_error() {
         let mut editor = make_editor_with_lines(&["foo"]);
         let result = global_match_handler(&mut editor, "/[bad/d", None);
+        assert!(
+            matches!(result, Some(ExEffect::Error(_))),
+            "got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn global_multibyte_sub_command_returns_error_not_panic() {
+        let mut editor = make_editor_with_lines(&["foo"]);
+        // `é` is a two-byte char; the old `cmd.split_at(1)` panicked here.
+        let result = global_match_handler(&mut editor, "/foo/é", None);
         assert!(
             matches!(result, Some(ExEffect::Error(_))),
             "got: {result:?}"
