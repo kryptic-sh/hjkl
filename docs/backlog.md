@@ -3577,3 +3577,44 @@ item in the published crates (needs the sibling-repo consumer check the §4 trap
 section prescribes, which was out of scope here), and clone/allocation trimming
 across the ~1000 `.clone()` sites (clippy already denies the ones it can see;
 the rest need per-site hot-path judgement, which is perf territory, not tidy).
+
+## full-codebase performance review 2026-08-28
+
+Scope: clean `main`; whole workspace, static pass (no profiling). Ran directly —
+delegation unavailable this session. This is a report-only static performance
+review; the recorded perf history (§1.7, §1.11, §12, §16, the 2026-08-22 review)
+was read first and treated as prior work, not re-derived.
+
+### Findings — ranked
+
+**None that reach a verified hot path.** The low-hanging allocation and
+whole-buffer-rebuild work was already done: `content_joined()` is a
+`dirty_gen`-cached `Arc<String>` (`hjkl-buffer/src/buffer.rs:405-416`), the
+2026-08-07 pass replaced per-motion full-buffer `Vec` builds with row-range
+reads/writes (recorded in §1.7), and the undo snapshot path stores `Rope` (O(1)
+Arc-clone) instead of `Arc<String>` (the deliberate trade is documented at
+`editor.rs:4945-4958` — one ~3 MB `to_string` per user-initiated undo, instead
+of per-snapshot).
+
+Two sites that look expensive are, on inspection, not:
+
+- `operator.rs:671` — `(*content_joined()).clone()` — sits inside
+  `#[cfg(test)] mod indent_count_tests`, test-only.
+- `render.rs` `.position`/`.find` over `blame_box_plan` / `matches` — bounded by
+  the visible viewport / small per-cell collections, not N-document.
+
+### Coverage
+
+Traced: the rope-row helpers, `content_joined()` cache, the undo
+snapshot/restore trade, the operator edit path, `save.rs`, and the
+render/completion `contains`/`position` scan sites. Static candidate scans
+covered the same allocation and nested-iteration patterns as the prior perf
+passes.
+
+**GAP — cost not settled without profiling:** the remaining ~1000 `.clone()`
+sites (clippy already denies the private-code ones it can see; the rest are
+`pub`/cross-crate and need per-site hot-path judgement); the render blame and
+gutter `.position`/`.find` linear scans if those collections ever scale past the
+viewport; completion ranking and directory-completion I/O (previously flagged,
+still unmeasured — see the 2026-08-22 perf review, which names them). No new
+measurements were taken this pass.
