@@ -3062,6 +3062,8 @@ verified its findings against nvim 0.12.5 directly.
    multi-byte char** (`crates/hjkl-ex/src/global.rs:113` — verified).
    `dispatch_sub_command` does `cmd.split_at(1)` after only `is_empty()` and the
    `normal` checks; byte 1 is not a char boundary for any multi-byte head.
+   **Shipped `445627e3` (2026-08-28):** split on the first char boundary, plus
+   regression test `global_multibyte_sub_command_returns_error_not_panic`.
 
    ```
    Repro: buffer with a line containing `x`; `:g/x/é`
@@ -3412,26 +3414,26 @@ Scope: clean `main`; whole workspace, focused on the untrusted-input boundaries
 (RPC msgpack, LSP JSON-RPC, process execution, archive extraction, swap/undo
 deserialization, path confinement, TOCTOU). Delegation for this pass was
 unavailable (workspace monthly spend limit), so it was run directly rather than
-split across sub-agents; coverage below reflects that narrower walk. No
-findings survived verification.
+split across sub-agents; coverage below reflects that narrower walk. No findings
+survived verification.
 
 ### Findings — ranked
 
-**None.** The single candidate reported in the first write of this section
-("LSP `Content-Length` is not capped before allocation") was **retracted
-2026-08-28**: a closer read showed the body length IS capped — `codec.rs:5-6`
-defines `MAX_MESSAGE_BYTES = 16 MiB` and `codec.rs:77-82` rejects `len >
-MAX_MESSAGE_BYTES` before `vec![0u8; len]` at `:95`. The first pass had read
-only the allocation (`:88-97`) and missed the check at `:67-84`. Recorded in
-Cleared below so the retraction is on the record.
+**None.** The single candidate reported in the first write of this section ("LSP
+`Content-Length` is not capped before allocation") was **retracted 2026-08-28**:
+a closer read showed the body length IS capped — `codec.rs:5-6` defines
+`MAX_MESSAGE_BYTES = 16 MiB` and `codec.rs:77-82` rejects
+`len > MAX_MESSAGE_BYTES` before `vec![0u8; len]` at `:95`. The first pass had
+read only the allocation (`:88-97`) and missed the check at `:67-84`. Recorded
+in Cleared below so the retraction is on the record.
 
 ### Cleared
 
-- **LSP `Content-Length` is capped before allocation** (`crates/hjkl-lsp/src/codec.rs:77-82`,
-  re-verified after a retracted candidate). `read_message` rejects `len >
-  MAX_MESSAGE_BYTES` (16 MiB, `:5-6`) before the `vec![0u8; len]` at `:95`, and
-  the header itself is budgeted at 64 KiB (`MAX_HEADER_BYTES`, `:11`). No
-  hostile-server amplification.
+- **LSP `Content-Length` is capped before allocation**
+  (`crates/hjkl-lsp/src/codec.rs:77-82`, re-verified after a retracted
+  candidate). `read_message` rejects `len > MAX_MESSAGE_BYTES` (16 MiB, `:5-6`)
+  before the `vec![0u8; len]` at `:95`, and the header itself is budgeted at 64
+  KiB (`MAX_HEADER_BYTES`, `:11`). No hostile-server amplification.
 - **RPC msgpack depth and size.** `nvim_api.rs` frames reads through a
   `LimitedReader` capped at `MAX_MSG_SIZE` 64 MiB (`nvim_api.rs:47,2450-2464`);
   `rmpv` 1.3.1's `read_value` enforces `MAX_DEPTH = 1024`
