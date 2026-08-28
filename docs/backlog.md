@@ -3405,3 +3405,125 @@ wide-char column math, `buf_set_cursor_rc` curswant) were excluded per the
 briefs. Cluster B ran `difffuzz` at a fresh seed and the full oracle corpus: 66
 divergences, all triaged into the findings above plus the known-excluded
 classes; corpus 96/96.
+
+## security/correctness audit 2026-08-28
+
+Scope: clean `main`; whole workspace, focused on the untrusted-input boundaries
+(RPC msgpack, LSP JSON-RPC, process execution, archive extraction, swap/undo
+deserialization, path confinement, TOCTOU). Delegation for this pass was
+unavailable (workspace monthly spend limit), so it was run directly rather than
+split across sub-agents; coverage below reflects that narrower walk. One
+finding; the rest of the boundary code is defended.
+
+### Findings — ranked
+
+1. **MEDIUM — LSP JSON-RPC `Content-Length` is not capped before allocation; a
+   hostile or compromised language server can OOM the editor**
+   (`crates/hjkl-lsp/src/codec.rs:88-97` — verified by trace). `read_message`
+   reads `Content-Length` (only the _header_ is budgeted at 64 KiB,
+   `MAX_HEADER_BYTES`, `:11`) and then does `let mut buf = vec![0u8; len];` with
+   `len` taken verbatim from the server's header. `read.rs::caps::LSP_MESSAGE`
+   (16 MiB) is the intended cap — the header comment in `read.rs` lists it — but
+   it is not wired into this path; the three call sites (`server.rs:346`,
+   `server.rs:470`, `runtime.rs:319`) use `read_message` directly. A server that
+   sends `Content-Length: 4294967295` makes hjkl attempt a 4 GiB `vec!` → abort.
+   LSP servers are user-installed but launched from repo config and run as
+   long-lived child processes, so a malicious or compromised server is a
+   realistic threat; the codebase itself treats LSP messages as capped input
+   (hence the 16 MiB constant). The prior 2026-08-18 audit's "codec header
+   budget" note validated only header parsing, not the body length, so this
+   survived.
+
+   ```
+   Repro: LSP server emits "Content-Length: 4000000000\r\n\r\n{}"
+   Expect: message rejected as over the LSP_MESSAGE cap (16 MiB)
+   Actual: vec![0u8; 4_000_000_000] allocation attempt → OOM abort
+   ```
+
+   Fix: before allocating, reject `len > read::caps::LSP_MESSAGE` (and reuse
+   `read_capped` / a bounded `take`) so the body read itself is capped, not just
+   the header.
+
+### Cleared
+
+- **RPC msgpack depth and size.** `nvim_api.rs` frames reads through a
+  `LimitedReader` capped at `MAX_MSG_SIZE` 64 MiB (`nvim_api.rs:47,2450-2464`);
+  `rmpv` 1.3.1's `read_value` enforces `MAX_DEPTH = 1024`
+  (`rmpv-1.3.1/src/decode/mod.rs:14`), so a 64 MiB run of nested-array openers
+  errors out instead of recursing the stack. No depth or amplification hole.
+- **Swap/undo deserialization.** `read_swap_full_locked`
+  (`crates/hjkl-app/src/swap.rs:425-517`) caps the header length (1 MiB), undo
+  length (256 MiB) and body length (64 MiB) _before_ every allocation, with a
+  comment naming the hostile-length attack; `postcard::from_bytes` failures map
+  to `InvalidData`. A corrupt length prefix cannot OOM. Undofile reads share the
+  same read-cap discipline (`read.rs::caps`).
+- **Archive extraction / zip-slip.** `extract_archive`
+  (`crates/hjkl-anvil/src/installer.rs:804-876`) runs every entry name through
+  `safe_join` (`:248-257`), which rejects `ParentDir`/`RootDir`/`Prefix`
+  components; tar entries extract only `is_file()` (symlinks skipped — so no
+  symlink-based traversal, `:830-837`); a shared `MAX_EXTRACT_BYTES`
+  decompression budget applies across all files. zip uses `safe_join` on
+  `entry.name()` too (`:857`).
+- **Process execution is argv-array, not shell string**, at every site except
+  the deliberate vim-parity `:!`/`formatprg`/`equalprg` shell paths: `git.rs`
+  uses `Command::new("git").arg(..)` arrays; `hjkl-lsp/src/server.rs:63` spawns
+  `cmd.command` argv from user config; `hjkl-mangler` spawns the configured
+  formatter by argv; picker/quickfix grep backends spawn `rg`/`grep`/`findstr`
+  by argv. No file-controlled string reaches a shell.
+- **`sh -c` is gated behind `policy::shell_disabled()`** in every shell-out path
+  — `filter_range` (`editor.rs:5115-5119`, formatprg/equalprg),
+  `quickfix.rs:681,771`, `ex_host_cmds.rs:1369`, `shell.rs`. `main.rs:529-537`
+  flips `disable_shell()` and `restrict_fs()` for `--embed`/`--nvim-api`/
+  `--headless`, and `policy.rs:9-11` makes the flags monotonic (never relax), so
+  a remote RPC caller cannot execute shell or reach outside the cwd.
+- **RPC filesystem confinement is plumbed end to end.** `restrict_fs()` +
+  `check_fs_path` (`policy.rs:39-71`) reject absolute and `..` paths; the save
+  path checks it (`save.rs:197,205`), the open/read paths check it
+  (`ex_dispatch.rs:2176-2177,2320`; `embed.rs:233`), and `:e`/`:r`/quickfix file
+  reads are capped when restricted (`app/mod.rs:882`,
+  `ex_dispatch.rs:2352,2520`). No filesystem-mutating RPC method was found that
+  skips the gate.
+- **No weak crypto, hardcoded secrets, or token RNG.** SHA-256 is the only hash
+  (anvil TOFU pinning); no `Md5`/`Sha1`/RC4, no `rand` token generation, no
+  constant-time comparison needed anywhere (hash-vs-hash of downloaded artifacts
+  carries no meaningful timing signal).
+
+### Hardening (correct today, fragile — not vulnerabilities)
+
+- **Modeline/editorconfig can set `formatprg`/`equalprg`/`makeprg`**, which the
+  engine then runs via `sh -c` on `gq`/`=`/`:make`. In interactive TUI this is
+  exactly vim/nvim's exposure (no `secure`-mode equivalent here), and the RPC
+  modes disable shell entirely, so it is a parity choice rather than a defect —
+  recorded so it is not mistaken for a missing control.
+- **Anvil-installed language servers are third-party binaries executed as LSP
+  servers.** SHA-256 TOFU (`installer.rs`) verifies the downloaded artifact
+  against a recorded baseline, but the artifact is then run; this is the
+  product's stated purpose (installing servers) and is user-initiated
+  (`:Anvil install`), so it is trust-the-toolchain, not a vulnerability. Related
+  to the §3 grammar-compile/dlopen deferral.
+
+### Coverage
+
+- **Walked (entry point → sink):** RPC msgpack read loop and param decoding
+  (`nvim_api.rs`), LSP codec (`codec.rs`), LSP server/runtime call sites,
+  `policy.rs`, the shell-out sites (`shell.rs`, `builtins.rs:137`,
+  `filter_range`, `quickfix.rs`, `ex_host_cmds.rs`), every `Command::new` site
+  (full inventory above), `extract_archive` + `safe_join`, swap/undo
+  deserialization, and the `save.rs`/`ex_dispatch.rs`/`embed.rs` fs-confinement
+  checkpoints.
+- **GAP — not audited this pass:** the X11/Wayland clipboard protocol backends
+  beyond the two findings the review pass already recorded (§correctness review
+  2026-08-28 #7, #10); OSC52/kitty terminal-escape parsing; the msgpack encoder
+  side; wasm policy; and a line-by-line read of every RPC method's argument
+  handling (the review pass walked `nvim_api.rs`'s read/dispatch surface but not
+  every `param_*` for integer-cast truncation). The prior audits (§10, §14,
+  2026-08-19) cover the clipboard protocol surface; they were treated as prior
+  work, not re-derived.
+
+### Summary
+
+One MEDIUM finding (unbounded LSP `Content-Length` allocation), no criticals or
+highs, zero hardcoded secrets or crypto issues. Overall the untrusted-input
+boundaries are well-defended — the LSP codec body-length cap is the single
+concrete gap and is a three-line fix; fix it first, then the hardening notes are
+parity decisions for the user.
