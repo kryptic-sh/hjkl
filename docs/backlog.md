@@ -3412,40 +3412,26 @@ Scope: clean `main`; whole workspace, focused on the untrusted-input boundaries
 (RPC msgpack, LSP JSON-RPC, process execution, archive extraction, swap/undo
 deserialization, path confinement, TOCTOU). Delegation for this pass was
 unavailable (workspace monthly spend limit), so it was run directly rather than
-split across sub-agents; coverage below reflects that narrower walk. One
-finding; the rest of the boundary code is defended.
+split across sub-agents; coverage below reflects that narrower walk. No
+findings survived verification.
 
 ### Findings — ranked
 
-1. **MEDIUM — LSP JSON-RPC `Content-Length` is not capped before allocation; a
-   hostile or compromised language server can OOM the editor**
-   (`crates/hjkl-lsp/src/codec.rs:88-97` — verified by trace). `read_message`
-   reads `Content-Length` (only the _header_ is budgeted at 64 KiB,
-   `MAX_HEADER_BYTES`, `:11`) and then does `let mut buf = vec![0u8; len];` with
-   `len` taken verbatim from the server's header. `read.rs::caps::LSP_MESSAGE`
-   (16 MiB) is the intended cap — the header comment in `read.rs` lists it — but
-   it is not wired into this path; the three call sites (`server.rs:346`,
-   `server.rs:470`, `runtime.rs:319`) use `read_message` directly. A server that
-   sends `Content-Length: 4294967295` makes hjkl attempt a 4 GiB `vec!` → abort.
-   LSP servers are user-installed but launched from repo config and run as
-   long-lived child processes, so a malicious or compromised server is a
-   realistic threat; the codebase itself treats LSP messages as capped input
-   (hence the 16 MiB constant). The prior 2026-08-18 audit's "codec header
-   budget" note validated only header parsing, not the body length, so this
-   survived.
-
-   ```
-   Repro: LSP server emits "Content-Length: 4000000000\r\n\r\n{}"
-   Expect: message rejected as over the LSP_MESSAGE cap (16 MiB)
-   Actual: vec![0u8; 4_000_000_000] allocation attempt → OOM abort
-   ```
-
-   Fix: before allocating, reject `len > read::caps::LSP_MESSAGE` (and reuse
-   `read_capped` / a bounded `take`) so the body read itself is capped, not just
-   the header.
+**None.** The single candidate reported in the first write of this section
+("LSP `Content-Length` is not capped before allocation") was **retracted
+2026-08-28**: a closer read showed the body length IS capped — `codec.rs:5-6`
+defines `MAX_MESSAGE_BYTES = 16 MiB` and `codec.rs:77-82` rejects `len >
+MAX_MESSAGE_BYTES` before `vec![0u8; len]` at `:95`. The first pass had read
+only the allocation (`:88-97`) and missed the check at `:67-84`. Recorded in
+Cleared below so the retraction is on the record.
 
 ### Cleared
 
+- **LSP `Content-Length` is capped before allocation** (`crates/hjkl-lsp/src/codec.rs:77-82`,
+  re-verified after a retracted candidate). `read_message` rejects `len >
+  MAX_MESSAGE_BYTES` (16 MiB, `:5-6`) before the `vec![0u8; len]` at `:95`, and
+  the header itself is budgeted at 64 KiB (`MAX_HEADER_BYTES`, `:11`). No
+  hostile-server amplification.
 - **RPC msgpack depth and size.** `nvim_api.rs` frames reads through a
   `LimitedReader` capped at `MAX_MSG_SIZE` 64 MiB (`nvim_api.rs:47,2450-2464`);
   `rmpv` 1.3.1's `read_value` enforces `MAX_DEPTH = 1024`
@@ -3522,11 +3508,12 @@ finding; the rest of the boundary code is defended.
 
 ### Summary
 
-One MEDIUM finding (unbounded LSP `Content-Length` allocation), no criticals or
-highs, zero hardcoded secrets or crypto issues. Overall the untrusted-input
-boundaries are well-defended — the LSP codec body-length cap is the single
-concrete gap and is a three-line fix; fix it first, then the hardening notes are
-parity decisions for the user.
+No findings after verification — the single candidate was retracted on a closer
+read (see Findings). No criticals, highs, mediums, or lows; zero hardcoded
+secrets or crypto issues. The untrusted-input boundaries are well-defended
+(msgpack depth+size caps, LSP body+header caps, swap/undo length caps, archive
+zip-slip guards, argv-array exec, RPC fs/shell confinement); the two hardening
+notes are parity decisions for the user.
 
 ## full-codebase tidy review 2026-08-28
 
