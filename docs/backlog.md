@@ -3527,3 +3527,53 @@ highs, zero hardcoded secrets or crypto issues. Overall the untrusted-input
 boundaries are well-defended — the LSP codec body-length cap is the single
 concrete gap and is a three-line fix; fix it first, then the hardening notes are
 parity decisions for the user.
+
+## full-codebase tidy review 2026-08-28
+
+Scope: clean `main`; whole workspace. Ran directly (delegation unavailable this
+session). Quality cleanups only — no correctness. The tree is already
+clippy-clean at `-D warnings`, so unused private/`pub(crate)` code is absent by
+construction; the tidy signal that remains is cross-crate duplication and
+`pub`-surface redundancy, which prior passes have already largely swept (§11,
+§15, and the deferred-refactor rows in §1.8).
+
+### Findings — ranked
+
+1. **Refinement of §1.8's path-escape unification row — a third lexical checker
+   now exists** (`crates/hjkl-engine/src/policy.rs:50-58` `path_escapes`, added
+   with the RPC fs-confinement work). It rejects `ParentDir`/`RootDir`/`Prefix`
+   components, the same invariant as `safe_join`
+   (`crates/hjkl-anvil/src/installer.rs:248-257`) and `is_safe_relative_path`
+   (`crates/hjkl-bonsai/src/runtime/source.rs`), each with a slightly different
+   contract (engine: absolute-or-cwd path; anvil: archive entry relative to
+   staging; bonsai: relative to a source root). The §1.8 row already proposed
+   reworking the first two onto `hjkl_fs::resolve_under`; `path_escapes` should
+   join that unification rather than remain a fourth lexical reimplementation.
+   Behavior-preserving; the three contracts differ only in whether the input may
+   be absolute, which the unified helper can express as a flag.
+
+### Cleared (suspected, disproved — not worth a change)
+
+- **`rope_line_to_str` duplicates `rope_line_str`** — it does not;
+  `crates/hjkl-engine/src/rope_util.rs:11-16` is a deliberate one-line
+  delegation ("One rule, one implementation") so the engine core no longer
+  carries a divergent copy. Already the correct shape.
+- **Width/ellipsis truncators beyond the four §1.8 names** — `truncate_desc`
+  (`hjkl-which-key`) and `truncate_to_width` (`hjkl-statusline`) are the same
+  pair §11 #9 already ruled on ("only worth sharing if a third consumer
+  appears"); `truncate_filename` (`hjkl-statusline:442`) is a distinct
+  middle-truncation concern, not the tail-truncation duplicate. No new copy.
+- **Menu/tabs/markdown-tui width accounting** — these call
+  `hjkl_buffer::geom`/`cell_width` for layout, not reimplementations; no
+  duplicated truncation logic to fold.
+
+### Coverage
+
+Reviewed cross-crate duplication seams: the rope row helpers (buffer vs engine),
+the path-escape checkers (`policy::path_escapes` vs anvil `safe_join` vs bonsai
+`is_safe_relative_path`), and the width/ellipsis truncator family across the TUI
+crates. **GAP — not swept:** a systematic dead-code inventory of every `pub`
+item in the published crates (needs the sibling-repo consumer check the §4 traps
+section prescribes, which was out of scope here), and clone/allocation trimming
+across the ~1000 `.clone()` sites (clippy already denies the ones it can see;
+the rest need per-site hot-path judgement, which is perf territory, not tidy).
