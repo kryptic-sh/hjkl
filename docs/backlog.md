@@ -3124,20 +3124,7 @@ verified its findings against nvim 0.12.5 directly.
    Same for `dw`/`gUw`/`yw` with the cursor on a closed fold's start row.
    `dd`/`>>`/`gUU`/`p`/`u` already agree.
 
-4. **MEDIUM — inner sentence `is` swallows trailing whitespace when the sentence
-   has no terminator before end-of-line** (`text_object.rs:735-752,786`
-   windowed, `:878-892,920` full — verified against nvim 0.12.5). `end` runs to
-   `flat_len`, then `end_idx = (end + 1).min(flat_len)` includes the tail; nvim
-   ends the inner object at the last non-blank char.
-
-   ```
-   Repro: "abc def   " cursor (0,0), `yis`
-   Expect: reg = "abc def"     Actual: reg = "abc def   "
-   ```
-
-   With a terminator (`"abc.   "`) both engines agree.
-
-5. **MEDIUM — RPC splice paths rewrite a CRLF buffer's final `\r` into a line
+4. **MEDIUM — RPC splice paths rewrite a CRLF buffer's final `\r` into a line
    break** (`apps/hjkl/src/nvim_api.rs:892` `nvim_buf_set_lines` fast path,
    `:1735` `nvim_buf_set_text` — verified by trace). Both rebuild the buffer as
    `rope_line_str` rows + `join("\n")`; ropey splits on lone `\r`, and CRLF rows
@@ -3162,26 +3149,7 @@ verified its findings against nvim 0.12.5 directly.
    Fix: per-row splice (or a separator-preserving join), plus a `fileformat`
    decision — none exists today.
 
-6. **MEDIUM — X11 INCR handshake sends `SELECTION_NOTIFY` before writing the
-   INCR size-hint property**
-   (`crates/hjkl-clipboard/src/backend/x11_thread.rs:674-682` — verified by
-   trace against ICCCM §2.5, not against a live server). The notify
-   `xcb_flush`es at `:913` before `start_incr_send` (`:726-753`) writes the
-   hint, so a requestor that issues `GetProperty` on receiving the notify can
-   read a stale/empty property. The comment at `:672-673` inverts the ICCCM
-   order; writing the property first is safe for every requestor. Intermittent,
-   large-paste-only.
-
-   Fix: in the oversized arm, call `start_incr_send` before
-   `send_selection_notify`.
-
-7. **LOW (candidate) — X11 `TARGETS` advertises `MULTIPLE` but `MULTIPLE`
-   requests are refused** (`x11_thread.rs:626-627` push the atom; no handler arm
-   exists — `:647-693` falls to `payloads.get` miss → `property = NONE`). Per
-   ICCCM 2.6.2 an advertised-but-unsupported target is worse than omitting it.
-   Fix: drop `atoms.multiple` from the list, or implement the property walk.
-
-8. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
+5. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
    vim's formatter preserves both**
    (`crates/hjkl-vim/src/vim/text_object_ops.rs:99-139`, `greedy_wrap`'s
    `split_whitespace()` — verified against nvim 0.12.5 with pinned `textwidth`).
@@ -3197,35 +3165,6 @@ verified its findings against nvim 0.12.5 directly.
    fix needs a whitespace-preserving wrap (tokenise word + gap runs, keep gaps
    within a line, drop the gap at a break) — a larger change than a one-liner.
 
-9. **LOW (candidate) — prompt `advance_completion` revalidates only the `start`
-   boundary of a stale `replace_range`**
-   (`crates/hjkl-prompt/src/lib.rs:252-257`; `end` is rebuilt only after a
-   candidate is applied, `:273`). A caller that mutates field text mid-cycle
-   desyncs the range; no workspace caller does today. Fix: also require
-   `end <= text.len() && text.is_char_boundary(end)` (and ideally that the range
-   still holds the previous candidate).
-
-10. **LOW (candidate) — picker `lower_cache` survives spawn-mode re-enumeration
-    that reassigns indices** (`crates/hjkl-picker/src/picker.rs:289-304` spawn
-    arm builds `filtered` from `0..count` without clearing the cache; the clear
-    at `:327` runs only on the scored path's shrink check). Latent: needs a
-    spawn source whose `match_text` is not a pure function of content plus a
-    count dip-and-regrow. Fix: clear `lower_cache` in the spawn arm.
-
-11. **LOW (candidate) — fs-watch worker exit-flush drops pending debounced
-    events when the consumer channel is full**
-    (`crates/hjkl-fs-watch/src/lib.rs:410-412`, `let _ = ev_tx.try_send(...)`;
-    the steady-state path flags `overflow` → `Rescan` at `:560-565`). Only at
-    teardown with 512 slots full. Fix: queue a `Rescan` when the flush's
-    `try_send` fails.
-
-12. **LOW (candidate) — anvil Github installs never clean staging**
-    (`crates/hjkl-anvil/src/installer.rs:637-688`): the downloaded archive and
-    `extract/` tree stay under `<cache>/staging/<name>/` after the move (and on
-    error paths); each version bump of each tool leaves a full artifact forever.
-    Fix: best-effort cleanup after a successful move, or document the growth
-    policy like `trash.rs` does.
-
 ### Refinement of an already-open item (not counted)
 
 Counted reverse blockwise sentence (`<C-v>k2is`,
@@ -3240,7 +3179,7 @@ sentence-orientation item.
 
 - A: `nvim_buf_set_text`'s byte-column resolution is correct —
   `resolve_text_col` snaps to char boundaries (`nvim_api.rs:1712-1717`); the
-  CRLF defect (finding 5) is the whole-content rejoin, not the col math.
+  CRLF defect (finding 4) is the whole-content rejoin, not the col math.
 - A: completion `anchor_col` is char-based consistently
   (`lsp_glue.rs:1837-1863`, fixed by audit-r2 #7); the byte-vs-char cursor
   defect was in `accept_completion`'s `cursor_offset` math, not the anchor —
@@ -3251,7 +3190,7 @@ sentence-orientation item.
   over-run matches; `s`/`3s` fuzzer divergences are the deliberate
   `motion_sneak` default (corpus ships `:set nomotion_sneak` fallbacks); the
   fuzzer's `gq` buffer diffs are harness artifacts (nvim `gq` no-ops with
-  `textwidth` unset — finding 8 was verified by direct probes instead); the
+  `textwidth` unset — finding 5 was verified by direct probes instead); the
   printed `ye`/`dap`/`zfGx`/`3J`/`viwc` diffs replay as matches (output-format
   misreads); visual `*`/`#` match in all three modes; `search_prompt.rs` offset
   arithmetic traced sound; bracket-clamp and paragraph-extend guards correct.

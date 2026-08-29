@@ -27,6 +27,26 @@ patch bumps.
 - **Wrap-mode `gj`/`gk` bootstrap the sticky column from the visual column.** A
   first vertical step from a never-moved cursor on a tab/wide-char line no
   longer stores a char column as the display column.
+- **`is` ends at the last non-blank char.** A sentence with no terminator before
+  end-of-line no longer swallows its trailing whitespace into the inner object
+  (`"abc def   "` → `"abc def"`); `as` still includes it.
+- **X11 INCR writes its size-hint property before `SELECTION_NOTIFY`.** A
+  requestor that reads the property on notify now sees the hint, not a stale or
+  empty property (ICCCM §2.5).
+- **X11 `TARGETS` no longer advertises `MULTIPLE`.** There was no handler for
+  it, and advertising an unsupported target is worse than omitting it (ICCCM
+  2.6.2).
+- **Completion cycling revalidates the whole replace range.** A mid-cycle edit
+  that leaves `start` valid but `end` stale now drops the cycle instead of
+  re-applying the candidate.
+- **Picker fold cache is cleared on spawn re-enumeration.** A spawn source that
+  reassigns candidate indices no longer leaks stale `match_text` folds into a
+  later in-memory scoring pass.
+- **fs-watch emits a `Rescan` when its exit flush drops events.** A full
+  consumer channel at teardown no longer silently loses the tail of the
+  debounced stream.
+- **Anvil Github installs clean up their staging directory.** The downloaded
+  archive and extraction residue are removed once the package is in place.
 
 ## [0.41.4] - 2026-08-29
 
