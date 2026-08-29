@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.41.4] - 2026-08-29
+
 ### Fixed
 
 - **Neovim buffer line and text coordinates now validate at the API boundary.**
@@ -66,6 +68,10 @@ patch bumps.
   `SAVE_TARGETS` handshake was misattributed to the next paste — surfacing as a
   silent empty paste, atom-list bytes as the payload, or a spurious
   `UnsupportedMime`. The wait now matches the reply's target atom.
+- **`:g`/`:v` no longer panic on a multi-byte sub-command.** A sub-command whose
+  first character is multi-byte (e.g. `:g/x/é`) hit `split_at(1)` and panicked,
+  killing the editor; dispatch now splits on the first char boundary and reports
+  the unsupported-command error instead.
 
 ### Performance
 
@@ -5918,7 +5924,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.4...HEAD
+[0.41.4]: https://github.com/kryptic-sh/hjkl/compare/v0.41.3...v0.41.4
 [0.41.3]: https://github.com/kryptic-sh/hjkl/compare/v0.41.2...v0.41.3
 [0.41.2]: https://github.com/kryptic-sh/hjkl/compare/v0.41.1...v0.41.2
 [0.41.1]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.1
