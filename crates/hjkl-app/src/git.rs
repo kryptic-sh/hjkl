@@ -443,12 +443,13 @@ fn hunks_from_patch(patch: &Patch) -> Vec<Hunk> {
             if matches!(origin, ' ' | '+' | '-') {
                 body.push(origin);
             }
+            // Push content verbatim. Regular lines already carry their `\n`;
+            // a no-trailing-newline line is newline-free and libgit2 emits the
+            // `\ No newline at end of file` marker as a separate `>`/`<` line
+            // whose content begins with `\n`. Forcing a trailing `\n` here
+            // would make `git apply --cached` stage a blob that diverges from
+            // the worktree at EOF.
             body.push_str(&String::from_utf8_lossy(line.content()));
-            // Ensure each patch line is newline-terminated even when the source
-            // file's last line had no trailing newline.
-            if !body.ends_with('\n') {
-                body.push('\n');
-            }
         }
 
         hunks.push(Hunk {
@@ -992,6 +993,21 @@ mod tests {
     use super::*;
     use std::process::Command;
     use tempfile::TempDir;
+
+    #[test]
+    fn hunks_preserve_no_trailing_newline() {
+        let mut opts = DiffOptions::new();
+        opts.context_lines(3);
+        // Old "a\nb" (no trailing newline) → new "a\nc" (no trailing newline):
+        // the last line changed without gaining a newline.
+        let patch = Patch::from_buffers(b"a\nb", None, b"a\nc", None, Some(&mut opts)).unwrap();
+        let hunks = hunks_from_patch(&patch);
+        assert_eq!(hunks.len(), 1);
+        assert_eq!(
+            hunks[0].body,
+            " a\n-b\n\\ No newline at end of file\n+c\n\\ No newline at end of file\n"
+        );
+    }
 
     // ── ExplorerGit / path_in_repo ──────────────────────────────────────────
 
