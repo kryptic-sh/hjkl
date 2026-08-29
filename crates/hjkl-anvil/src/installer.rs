@@ -746,6 +746,13 @@ fn install_github_locked(
     progress(InstallStatus::Done {
         bin_path: bin_path.clone(),
     });
+
+    // 12. Best-effort cleanup: the downloaded archive (and any residue) under
+    // `staging/<name>` is no longer needed once the package is installed. A
+    // failure here is non-fatal — a leftover artifact wastes disk, it doesn't
+    // break the install — so the result is deliberately ignored.
+    let _ = std::fs::remove_dir_all(&staging_dir);
+
     Ok(bin_path)
 }
 
@@ -1804,6 +1811,32 @@ mod tests {
             vec![format!(
                 "https://github.com/owner/repo/releases/download/v1.0/hello-{triple}.tar.gz"
             )],
+        );
+    }
+
+    /// A successful install must remove its `staging/<name>` directory — the
+    /// downloaded archive and any extraction residue are waste once the package
+    /// is in place.
+    #[cfg(unix)]
+    #[test]
+    fn install_cleans_up_staging_dir_after_success() {
+        let (_tmp, paths) = temp_paths();
+        let triple = host_triple().unwrap();
+        let spec = github_spec(triple, HELLO_TAR_GZ_SHA, "hello-{triple}.tar.gz", "hello");
+
+        let result = install_github_inner(
+            "hello",
+            &spec,
+            &paths,
+            |url, dest, progress| stub_download("hello.tar.gz")(url, dest, progress),
+            &|_| {},
+        );
+        result.expect("valid spec must install");
+
+        let staging_dir = paths.cache_root.join("staging").join("hello");
+        assert!(
+            !staging_dir.exists(),
+            "staging dir {staging_dir:?} must be removed after a successful install"
         );
     }
 
