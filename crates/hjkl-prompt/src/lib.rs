@@ -246,11 +246,16 @@ impl PromptState {
         // The replace range must still apply to the current field text — it
         // goes stale when the text changed underneath the completion (e.g.
         // history recall while completing). Slicing with a stale or
-        // non-char-boundary start would panic below; drop the completion
-        // cycle instead.
+        // non-char-boundary start would panic below; a stale `end` is rebuilt
+        // only after a candidate is applied, so an out-of-range or non-boundary
+        // end means a mid-cycle edit desynced the range. Drop the completion
+        // cycle on either.
         let text = self.field.text();
-        if state.replace_range.start > text.len()
-            || !text.is_char_boundary(state.replace_range.start)
+        let range = &state.replace_range;
+        if range.start > text.len()
+            || !text.is_char_boundary(range.start)
+            || range.end > text.len()
+            || !text.is_char_boundary(range.end)
         {
             self.completion = None;
             return;
@@ -500,6 +505,28 @@ mod tests {
         p.advance_completion(None, true); // must not panic
         assert!(p.completion.is_none(), "stale completion must be dropped");
         assert_eq!(p.text(), "w", "text must be left untouched");
+    }
+
+    #[test]
+    fn advance_completion_with_stale_end_drops_completion() {
+        // Regression: after one advance the range's `end` is
+        // `start + candidate.len()`. Shrinking the text via history recall to a
+        // string longer than `start` but shorter than `end` leaves `start`
+        // valid while `end` is stale. Cycling again must drop the completion,
+        // not trust the stale end and re-apply the candidate.
+        let mut p = PromptState::with_prefill(PromptKind::Command, "edit some/long/path");
+        let comp = CommandCompletion::new(
+            "edit some/long/path".into(),
+            vec!["some/long/path.rs".into()],
+            5..19,
+        );
+        p.advance_completion(Some(comp), true); // text -> "edit some/long/path.rs"
+        let history = vec!["edit short".to_string()];
+        p.apply_history_nav(&history, Some(0));
+        assert_eq!(p.text(), "edit short");
+        p.advance_completion(None, true); // end (22) > len (10) → drop
+        assert!(p.completion.is_none(), "stale end must drop the completion");
+        assert_eq!(p.text(), "edit short", "text must be left untouched");
     }
 
     #[test]
