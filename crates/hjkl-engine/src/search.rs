@@ -807,6 +807,23 @@ mod tests {
         assert!(!search_backward(&mut b, &mut s, false));
     }
 
+    #[test]
+    fn search_backward_from_inside_a_match_lands_on_its_start() {
+        // nvim 0.12.5: `?foo` / `N` from a cursor strictly inside a match land
+        // on that match's START, not the previous match. `find_prev` returns
+        // the rightmost match with start <= cursor, so the containing match is
+        // returned and its start is the correct landing spot.
+        let mut buf = View::from_str("abcabc");
+        crate::types::Cursor::set_cursor(&mut buf, crate::types::Pos::new(0, 1));
+        let mut state = SearchState::new();
+        state.set_pattern(Some(re("abc")));
+        assert!(search_backward(&mut buf, &mut state, true));
+        assert_eq!(
+            crate::types::Cursor::cursor(&buf),
+            crate::types::Pos::new(0, 0)
+        );
+    }
+
     // ── B8/B9: default-magic + \v/\V/\m/\M translation ───────────────────────
 
     #[test]
