@@ -619,11 +619,12 @@ fn handle_selection_request(state: &mut X11State, ev: &SelectionRequestEvent) {
     let reply_property = if ev.target == atoms.targets {
         // TARGETS request — reply with our list of offered atoms.
         if let Some(data) = owned {
-            let mut list: Vec<u32> = Vec::with_capacity(data.targets.len() + 2);
-            // Always include TARGETS and MULTIPLE in the TARGETS list so
-            // compliant clients know we understand the protocol.
+            let mut list: Vec<u32> = Vec::with_capacity(data.targets.len() + 1);
+            // Advertise only TARGETS plus the targets we actually serve. A
+            // MULTIPLE request has no handler arm and would be refused, and
+            // ICCCM 2.6.2 says advertising an unsupported target is worse than
+            // omitting it.
             list.push(atoms.targets);
-            list.push(atoms.multiple);
             list.extend_from_slice(&data.targets);
 
             // SAFETY: list.as_ptr() is valid for list.len() u32 values.
@@ -669,9 +670,10 @@ fn handle_selection_request(state: &mut X11State, ev: &SelectionRequestEvent) {
                 // before registering the non-blocking INCR transfer.
                 let bytes = payload.clone();
                 let target_atom = ev.target;
-                // Send SELECTION_NOTIFY first (with property != NONE) so the
-                // requestor knows the INCR handshake has started.
-                send_selection_notify(state, ev, property);
+                // Write the INCR size-hint property *before* notifying: a
+                // requestor that issues GetProperty on receiving
+                // SELECTION_NOTIFY (ICCCM §2.5) must find the hint already
+                // present, not a stale/empty property.
                 start_incr_send(
                     state,
                     ev.requestor,
@@ -680,7 +682,7 @@ fn handle_selection_request(state: &mut X11State, ev: &SelectionRequestEvent) {
                     bytes,
                     max_payload,
                 );
-                // start_incr_send registered the state; SELECTION_NOTIFY sent.
+                send_selection_notify(state, ev, property);
                 return;
             }
         } else {
@@ -698,10 +700,11 @@ fn handle_selection_request(state: &mut X11State, ev: &SelectionRequestEvent) {
 /// Start an INCR send transfer (approach b-lite: non-blocking state machine).
 ///
 /// We write the INCR size-hint property, subscribe to PROPERTY_DELETE events
-/// on the requestor, flush, and return immediately. The caller has already
-/// sent SELECTION_NOTIFY (with `property != NONE`). Subsequent chunks are
-/// written by `advance_incr_sends` each time a matching PROPERTY_DELETE event
-/// arrives in `drain_events`.
+/// on the requestor, flush, and return immediately. The caller sends
+/// SELECTION_NOTIFY (with `property != NONE`) *after* this returns, so the
+/// hint is already on the server when the requestor reads it. Subsequent
+/// chunks are written by `advance_incr_sends` each time a matching
+/// PROPERTY_DELETE event arrives in `drain_events`.
 ///
 /// Trade-off: multiple simultaneous INCR sends are handled correctly (each
 /// advances independently as events arrive). The self-loop case (set then
@@ -752,8 +755,9 @@ fn start_incr_send(
     // SAFETY: conn live.
     unsafe { (fns.xcb_flush)(raw) };
 
-    // SELECTION_NOTIFY was already sent by the caller before calling us.
-    // Register the transfer so drain_events can advance it via advance_incr_sends.
+    // SELECTION_NOTIFY is sent by the caller *after* we return, once the INCR
+    // size-hint property is on the server. Register the transfer so drain_events
+    // can advance it via advance_incr_sends.
     state.incr_sends.push(IncrSend {
         requestor,
         property,
@@ -1828,7 +1832,6 @@ mod tests {
             (a.incr, "INCR"),
             (a.clipboard_manager, "CLIPBOARD_MANAGER"),
             (a.save_targets, "SAVE_TARGETS"),
-            (a.multiple, "MULTIPLE"),
             (a.hjkl_clipboard_get, "HJKL_CLIPBOARD_GET"),
         ] {
             assert_ne!(val, 0, "atom {name} must be non-zero");
@@ -2249,8 +2252,8 @@ mod tests {
 
                         // Fetch each target from the requestor.
                         for target in atom_list {
-                            if target == atoms.targets || target == atoms.multiple {
-                                continue; // skip protocol atoms
+                            if target == atoms.targets {
+                                continue; // skip the TARGETS protocol atom
                             }
                             // Ask requestor to write target into our property.
                             // SAFETY: valid xcb call.
