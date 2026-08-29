@@ -1503,6 +1503,24 @@ fn buffer_word_items_excludes_current_token() {
 }
 
 #[test]
+fn accept_completion_multibyte_function_places_cursor_after_paren() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "x");
+    // Function completion with a multi-byte char before the paren. The cursor
+    // must land right after `(` — CHAR column 6 within "héllo()" — not the
+    // byte-derived column 7.
+    let mut item = make_completion_item("héllo()");
+    item.kind = crate::completion::CompletionKind::Function;
+    app.completion = Some(crate::completion::Completion::new(0, 0, vec![item]));
+    app.completion.as_mut().unwrap().selected = 0;
+
+    app.accept_completion();
+    app.sync_after_engine_mutation();
+
+    assert_eq!(app.active_editor().cursor(), (0, 6));
+}
+
+#[test]
 fn accept_completion_records_content_edit_for_resync() {
     // Regression (#143): accepting a completion must go through the editor's
     // tracked mutation funnel so a `ContentEdit` is recorded. Otherwise the

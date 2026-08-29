@@ -2667,17 +2667,22 @@ impl App {
             };
 
             if let Some(paren_pos) = stripped.find('(') {
-                // Already has parens — place cursor after the `(`.
-                (stripped.to_string(), paren_pos + 1)
+                // Already has parens — place cursor after the `(`. `paren_pos`
+                // is a byte index; the cursor column is a CHAR column, so count
+                // chars before it rather than adding the byte offset.
+                (
+                    stripped.to_string(),
+                    stripped[..paren_pos].chars().count() + 1,
+                )
             } else {
                 // Bare name — append `()` and place cursor between them.
                 let with_parens = format!("{}()", stripped);
-                let offset = stripped.len() + 1; // position after `(`
+                let offset = stripped.chars().count() + 1; // after `(`
                 (with_parens, offset)
             }
         } else {
-            // Non-function: cursor at end of inserted text.
-            (raw_text.clone(), raw_text.len())
+            // Non-function: cursor at end of inserted text (char column).
+            (raw_text.clone(), raw_text.chars().count())
         };
 
         // Replace [anchor_col, cur_col) with actual_text via the editor's
