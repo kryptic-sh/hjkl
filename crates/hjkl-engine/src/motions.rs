@@ -893,7 +893,16 @@ fn move_screen_vertical<B: Cursor + Query>(
     // Preserve curswant across visual vertical motions through shorter
     // or empty segments — matching move_vertical / vim semantics.
     let cursor = read_cursor(buf);
-    let want = sticky_col.unwrap_or(cursor.col);
+    // sticky_col stores a display column; bootstrap from the cursor's CHAR
+    // column converted to display columns (mirrors `move_vertical` below) so
+    // the first wrap-aware vertical step from a never-moved cursor stores the
+    // visual column, not the raw char column.
+    let want = if let Some(col) = *sticky_col {
+        col
+    } else {
+        let cursor_line = read_line(buf, cursor.row);
+        char_col_to_visual_col(&cursor_line, cursor.col, tabstop)
+    };
     *sticky_col = Some(want);
     // The current row's wrap layout is computed ONCE here and threaded
     // through `step_screen`; it is only recomputed when a step crosses
@@ -2211,6 +2220,23 @@ mod tests {
             move_screen_down(&mut b, &f, &v, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(1, 0));
+    }
+
+    #[test]
+    fn screen_down_bootstraps_curswant_from_visual_column() {
+        // "\tabc": the tab spans visual cols 0..3, so 'a' is char col 1 but
+        // visual col 4. The first wrap-aware vertical step from a never-moved
+        // cursor must store the VISUAL column as curswant (mirroring
+        // move_vertical), or a following `j`/`k` snaps to a stale column.
+        let mut b = View::from_str("\tabc\nx");
+        let v = make_wrap_viewport(Wrap::Char, 4);
+        b.set_cursor(Position::new(0, 1));
+        let mut sticky = None;
+        {
+            let f = folds(&b);
+            move_screen_down(&mut b, &f, &v, 1, &mut sticky, 4);
+        }
+        assert_eq!(sticky, Some(4));
     }
 
     #[test]
