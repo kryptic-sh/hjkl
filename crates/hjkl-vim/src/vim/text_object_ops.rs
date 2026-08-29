@@ -4,7 +4,7 @@
 
 use hjkl_vim_types::{Mode, Operator, RangeKind};
 
-use super::command::{cut_vim_range_inner, read_vim_range};
+use super::command::{cut_vim_range_inner, indent_width, read_vim_range};
 use super::*;
 use crate::vim_state::vim_mut;
 use hjkl_engine::Editor;
@@ -410,27 +410,29 @@ pub fn indent_rows<H: hjkl_engine::types::Host>(
 ) {
     ed.sync_buffer_content_from_textarea();
     let width = ed.settings().shiftwidth.saturating_mul(count.max(1));
-    // Honour `expandtab` (#263): `>>` under `noexpandtab` must insert hard tabs,
-    // not spaces. Render `width` columns as tabs (`width / tabstop`) plus any
-    // sub-tab remainder as spaces; under `expandtab` it stays all spaces.
-    let pad: String = if ed.settings().expandtab {
-        " ".repeat(width)
-    } else {
-        let tabstop = ed.settings().tabstop.max(1);
-        let tabs = width / tabstop;
-        let spaces = width % tabstop;
-        format!("{}{}", "\t".repeat(tabs), " ".repeat(spaces))
-    };
+    let expandtab = ed.settings().expandtab;
+    let tabstop = ed.settings().tabstop.max(1);
     use hjkl_buffer::{Edit, Position};
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let bot = bot.min(rope.len_lines().saturating_sub(1));
     for r in top..=bot {
-        if !rope_line_to_str(&rope, r).is_empty() {
-            ed.mutate_edit(Edit::InsertStr {
-                at: Position::new(r, 0),
-                text: pad.clone(),
-            });
+        let line = rope_line_to_str(&rope, r);
+        if line.is_empty() {
+            continue;
         }
+        // Recompute the WHOLE indent at the new width rather than prepending:
+        // `>>` on a tab-indented line under `expandtab` must re-emit the indent
+        // as spaces, not leave the original tab in place (`\tabc` → 8 spaces,
+        // not 4 spaces + `\t`). `indent_fill` renders the leading tab stop
+        // correctly under `noexpandtab` too.
+        let old = indent_width(&line, tabstop);
+        let fill = indent_fill(0, old + width, expandtab, tabstop);
+        let ws = line.chars().take_while(|c| matches!(c, ' ' | '\t')).count();
+        ed.mutate_edit(Edit::Replace {
+            start: Position::new(r, 0),
+            end: Position::new(r, ws),
+            with: fill,
+        });
     }
     // Restore cursor to first non-blank of the top row so the next
     // vertical motion aims sensibly — matches vim's `>>` convention.
@@ -577,36 +579,27 @@ pub fn outdent_rows<H: hjkl_engine::types::Host>(
 ) {
     ed.sync_buffer_content_from_textarea();
     let width = ed.settings().shiftwidth.saturating_mul(count.max(1));
+    let expandtab = ed.settings().expandtab;
     let tabstop = ed.settings().tabstop.max(1);
-    use hjkl_buffer::{Edit, MotionKind, Position};
+    use hjkl_buffer::{Edit, Position};
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let bot = bot.min(rope.len_lines().saturating_sub(1));
     for r in top..=bot {
         let line = rope_line_to_str(&rope, r);
-        let mut strip = 0;
-        let mut visual_width = 0;
-        for ch in line.chars() {
-            if !matches!(ch, ' ' | '\t') {
-                break;
-            }
-            let next_width = if ch == '\t' {
-                visual_width + tabstop - visual_width % tabstop
-            } else {
-                visual_width + 1
-            };
-            if next_width > width {
-                break;
-            }
-            strip += 1;
-            visual_width = next_width;
+        let old = indent_width(&line, tabstop);
+        if old == 0 {
+            continue;
         }
-        if strip > 0 {
-            ed.mutate_edit(Edit::DeleteRange {
-                start: Position::new(r, 0),
-                end: Position::new(r, strip),
-                kind: MotionKind::Char,
-            });
-        }
+        // Recompute the remaining indent rather than deleting whole whitespace
+        // chars: `<<` on a tab-indented line under `expandtab` must re-emit the
+        // remaining indent as spaces (`\t\tabc` → 4 spaces, not `\tabc`).
+        let fill = indent_fill(0, old.saturating_sub(width), expandtab, tabstop);
+        let ws = line.chars().take_while(|c| matches!(c, ' ' | '\t')).count();
+        ed.mutate_edit(Edit::Replace {
+            start: Position::new(r, 0),
+            end: Position::new(r, ws),
+            with: fill,
+        });
     }
     buf_set_cursor_rc(ed.buffer_mut(), top, 0);
     move_first_non_whitespace(ed);
@@ -842,7 +835,9 @@ pub fn clamp_cursor_to_normal_mode<H: hjkl_engine::types::Host>(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_case_op_to_selection, outdent_rows, reflow_rows, toggle_case_str};
+    use super::{
+        apply_case_op_to_selection, indent_rows, outdent_rows, reflow_rows, toggle_case_str,
+    };
     use hjkl_buffer::{View, rope_line_str};
     use hjkl_engine::{DefaultHost, Editor, Options};
 
@@ -857,6 +852,7 @@ mod tests {
         let options = Options {
             tabstop: 4,
             shiftwidth: 4,
+            expandtab: false,
             ..Options::default()
         };
         let mut ed = Editor::new(View::from_str("\t\tfoo"), DefaultHost::new(), options);
@@ -864,6 +860,34 @@ mod tests {
         outdent_rows(&mut ed, 0, 0, 1);
 
         assert_eq!(rope_line_str(&ed.buffer().rope(), 0), "\tfoo");
+    }
+
+    #[test]
+    fn indent_rows_expandtab_recomputes_indent_as_spaces() {
+        let options = Options {
+            tabstop: 4,
+            shiftwidth: 4,
+            expandtab: true,
+            ..Options::default()
+        };
+        let mut ed = Editor::new(View::from_str("\tabc"), DefaultHost::new(), options);
+        indent_rows(&mut ed, 0, 0, 1);
+        // `>>` under expandtab re-emits the WHOLE indent as spaces; the
+        // original tab must not survive.
+        assert_eq!(rope_line_str(&ed.buffer().rope(), 0), "        abc");
+    }
+
+    #[test]
+    fn outdent_rows_expandtab_recomputes_indent_as_spaces() {
+        let options = Options {
+            tabstop: 4,
+            shiftwidth: 4,
+            expandtab: true,
+            ..Options::default()
+        };
+        let mut ed = Editor::new(View::from_str("\t\tabc"), DefaultHost::new(), options);
+        outdent_rows(&mut ed, 0, 0, 1);
+        assert_eq!(rope_line_str(&ed.buffer().rope(), 0), "    abc");
     }
 
     // ── reflow splice boundaries ─────────────────────────────────────────────
