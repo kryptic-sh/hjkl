@@ -3284,6 +3284,33 @@ up (`<C-v>k2isy` on `"aaa.\n   \nbbb.\nccc.\n"` @ (3,3): hjkl reg =
 (1,0)). This is the count dimension of §1.5b's open anchor-BELOW
 sentence-orientation item.
 
+### Shipped (2026-08-30)
+
+Worked with red→green tests; each item's commit follows.
+
+- **#8 `move_screen_vertical` curswant bootstrap** — `0147418e`; now converts
+  the cursor's char column to a visual column, mirroring `move_vertical`.
+- **#9 hunk no-trailing-newline preservation** — `4d35b00a`; hunks now push
+  libgit2's EOFNL marker content verbatim instead of force-terminating lines.
+- **#12 `>>`/`<<` indent recompute under `expandtab`** — `b6e79da9`; both
+  re-emit the whole indent at the new width via `indent_fill`.
+- **Hardening: `accept_completion` byte-vs-char cursor** — `625a7598`; the
+  cursor offset is now a char count.
+- **Hardening: `advance_by_text` separator counting** — `e75f69d5`; counts every
+  ropey line separator, not just `\n`.
+- **`search_backward` skip-current (cluster C candidate)** — probed nvim 0.12.5:
+  the existing behaviour is correct (`?`/`N` from inside a match land on the
+  containing match's start). Not a defect; regression test in `55829d70`.
+
+**Deferred: #11 `gq` whitespace preservation.** Probed nvim 0.12.5 — `gq`
+preserves interior space runs and trailing whitespace both when a line already
+fits (`tw=79`, `"aaa  bbb   ccc"` unchanged) and when it wraps (`tw=10`,
+`"aaa  bbb   ccc  ddd  eee"` → `"aaa  bbb"` / `"ccc  ddd"` / `"eee"`).
+`greedy_wrap`'s `split_whitespace()` rejoin collapses both. The fix needs a
+whitespace-preserving wrap (tokenise word + gap runs, keep gaps within a line,
+drop the gap at a break) — a larger change than a one-liner, left for its own
+session.
+
 ### Cleared
 
 - A: `nvim_buf_set_text`'s byte-column resolution is correct —
