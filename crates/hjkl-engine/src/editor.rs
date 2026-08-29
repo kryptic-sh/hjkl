@@ -172,18 +172,42 @@ fn position_to_byte_coords(
     (byte, (row as u32, col_byte as u32))
 }
 
-/// Walk `bytes[..end]` counting newlines and return the (row, col_byte)
-/// position at byte offset `end`. `col_byte` is the byte distance from
-/// the most recent `\n` (or buffer start). Used to translate a byte
-/// offset into a tree-sitter `Point`.
+/// Walk `bytes[..end]` and return the `(row, col_byte)` position at byte
+/// offset `end`, matching ropey's `unicode_lines` line-break model — the same
+/// one the buffer's row helpers and [`rope_byte_to_row_col`] use. A line break
+/// is `\n`, `\r\n` (one break), a lone `\r`, or U+000B / U+000C / U+0085 /
+/// U+2028 / U+2029. `col_byte` is the byte distance from the start of the final
+/// row. Used to translate a byte offset into a tree-sitter `Point`.
 fn byte_to_row_col(bytes: &[u8], end: usize) -> (u32, u32) {
     let end = end.min(bytes.len());
     let mut row: u32 = 0;
     let mut row_start: usize = 0;
-    for (i, &b) in bytes[..end].iter().enumerate() {
-        if b == b'\n' {
+    let mut i = 0;
+    while i < end {
+        let b = bytes[i];
+        let (advance, is_break) = match b {
+            b'\n' => (1, true),
+            b'\r' => {
+                if i + 1 < end && bytes[i + 1] == b'\n' {
+                    (2, true) // CRLF is a single break
+                } else {
+                    (1, true)
+                }
+            }
+            0x0B | 0x0C => (1, true),
+            0xC2 if i + 1 < end && bytes[i + 1] == 0x85 => (2, true),
+            0xE2 if i + 2 < end
+                && bytes[i + 1] == 0x80
+                && (bytes[i + 2] == 0xA8 || bytes[i + 2] == 0xA9) =>
+            {
+                (3, true)
+            }
+            _ => (1, false),
+        };
+        i += advance;
+        if is_break {
             row += 1;
-            row_start = i + 1;
+            row_start = i;
         }
     }
     (row, (end - row_start) as u32)
@@ -259,14 +283,17 @@ fn rope_byte_to_row_col(rope: &ropey::Rope, byte_idx: usize) -> (u32, u32) {
 /// `start_byte` / `start_pos`. Returns `(end_byte, end_position)`.
 fn advance_by_text(text: &str, start_byte: usize, start_pos: (u32, u32)) -> (usize, (u32, u32)) {
     let new_end_byte = start_byte + text.len();
-    let newlines = text.bytes().filter(|&b| b == b'\n').count();
-    let end_pos = if newlines == 0 {
+    // Row/column of the text's end in the buffer's line-break model — the same
+    // separators `byte_to_row_col` / `rope_byte_to_row_col` use, not just `\n`.
+    let (breaks, tail_col) = byte_to_row_col(text.as_bytes(), text.len());
+    let end_pos = if breaks == 0 {
+        // No break: the text stays on the start row; column advances by its
+        // byte length (positions are byte-columns, see `position_to_byte_coords`).
         (start_pos.0, start_pos.1 + text.len() as u32)
     } else {
-        // Bytes after the last newline determine the trailing column.
-        let last_nl = text.rfind('\n').unwrap();
-        let tail_bytes = (text.len() - last_nl - 1) as u32;
-        (start_pos.0 + newlines as u32, tail_bytes)
+        // At least one break: the end is `breaks` rows down, at the byte
+        // column of whatever follows the last break.
+        (start_pos.0 + breaks, tail_col)
     };
     (new_end_byte, end_pos)
 }
@@ -6051,6 +6078,26 @@ mod content_edit_shape_tests {
              the buffer's actual post-edit text"
         );
         edits
+    }
+
+    #[test]
+    fn byte_to_row_col_and_advance_by_text_count_every_line_separator() {
+        // ropey's `unicode_lines` splits on more than `\n`; the tree-sitter
+        // Point must agree with the buffer's row model or incremental reparse
+        // points at the wrong row.
+        for sep in ["\r", "\u{0b}", "\u{0c}", "\u{85}", "\u{2028}", "\u{2029}"] {
+            let text = format!("a{sep}b");
+            let bytes = text.as_bytes();
+            assert_eq!(
+                byte_to_row_col(bytes, bytes.len()),
+                (1, 1),
+                "byte_to_row_col separator {sep:?}"
+            );
+            let (_, end_pos) = advance_by_text(&text, 0, (0, 0));
+            assert_eq!(end_pos, (1, 1), "advance_by_text separator {sep:?}");
+        }
+        // `\r\n` is one break; the column is the tail after the `\n`.
+        assert_eq!(advance_by_text("ab\r\ncd", 0, (0, 0)), (6, (1, 2)));
     }
 
     fn join(row: usize, count: usize, with_space: bool) -> Edit {
