@@ -786,7 +786,14 @@ pub fn sentence_text_object<H: hjkl_engine::types::Host>(
     let end_idx = (end + 1).min(flat_len);
 
     let final_end = if inner {
-        end_idx
+        // `is`: end at the last non-blank char. When the walk ran off the
+        // buffer (no terminator before end-of-line), `end_idx` sits one past
+        // the trailing whitespace; nvim excludes that from an inner sentence.
+        let mut e = end_idx;
+        while e > start && chars[e - 1].is_whitespace() {
+            e -= 1;
+        }
+        e
     } else {
         // `as`: include trailing whitespace (but stop before the next
         // newline so we don't gobble a paragraph break — vim keeps
@@ -920,7 +927,12 @@ fn sentence_text_object_full<H: hjkl_engine::types::Host>(
     let end_idx = (end + 1).min(chars.len());
 
     let final_end = if inner {
-        end_idx
+        // `is`: end at the last non-blank char (see the windowed path).
+        let mut e = end_idx;
+        while e > start && chars[e - 1].is_whitespace() {
+            e -= 1;
+        }
+        e
     } else {
         // `as`: include trailing whitespace (but stop before the next
         // newline so we don't gobble a paragraph break — vim keeps
@@ -2099,6 +2111,19 @@ mod tests {
             sentence_text_object(&ed, false, 1),
             Some(((0, 16), (0, 27)))
         );
+    }
+
+    /// `is` on a terminator-less sentence with trailing whitespace: nvim ends
+    /// the inner object at the last non-blank char, so the trailing spaces are
+    /// excluded.
+    #[test]
+    fn sentence_text_object_is_trim_trailing_whitespace() {
+        let mut ed = make_editor("abc def   ");
+        ed.set_cursor_quiet(0, 0);
+        // `is` → "abc def" (exclusive end at col 7).
+        assert_eq!(sentence_text_object(&ed, true, 1), Some(((0, 0), (0, 7))));
+        // `as` still includes the trailing whitespace.
+        assert_eq!(sentence_text_object(&ed, false, 1), Some(((0, 0), (0, 10))));
     }
 
     /// `(` / `)` boundary walking across a blank-line paragraph break.
