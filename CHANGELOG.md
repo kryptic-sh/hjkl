@@ -8,6 +8,26 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Staging a hunk no longer force-adds a trailing newline to the last line.** A
+  hunk touching a file with no final newline now carries the
+  `\ No newline at end of file` marker, so `git apply --cached` stages a blob
+  byte-identical to the worktree instead of diverging at EOF.
+- **`>>`/`<<` recompute the indent column under `expandtab`.** Indenting or
+  outdenting a tab-indented line re-emits the whole indent as spaces (e.g.
+  `\tabc` + `>>` becomes eight spaces), instead of leaving the original tab in a
+  mixed indent.
+- **Accepting a completion places the cursor by character, not byte.** A
+  Function/Method completion with a multi-byte character before the paren no
+  longer lands the cursor one column too far.
+- **Content-edit positions count every line separator.** Inserting/pasting text
+  with a lone `\r` or a Unicode line separator no longer leaves the tree-sitter
+  incremental parse pointing at the wrong row.
+- **Wrap-mode `gj`/`gk` bootstrap the sticky column from the visual column.** A
+  first vertical step from a never-moved cursor on a tab/wide-char line no
+  longer stores a char column as the display column.
+
 ## [0.41.4] - 2026-08-29
 
 ### Fixed

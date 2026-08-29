@@ -3058,23 +3058,7 @@ verified its findings against nvim 0.12.5 directly.
 
 ### Findings — ranked
 
-1. **HIGH — `:g`/`:v` panics the editor when the sub-command starts with a
-   multi-byte char** (`crates/hjkl-ex/src/global.rs:113` — verified).
-   `dispatch_sub_command` does `cmd.split_at(1)` after only `is_empty()` and the
-   `normal` checks; byte 1 is not a char boundary for any multi-byte head.
-   **Shipped `445627e3` (2026-08-28):** split on the first char boundary, plus
-   regression test `global_multibyte_sub_command_returns_error_not_panic`.
-
-   ```
-   Repro: buffer with a line containing `x`; `:g/x/é`
-   Expect: ExEffect::Error(":g supports d/s/j/y today, got `é`") (the `_` arm, global.rs:122)
-   Actual: panic — `byte index 1 is not a char boundary; it is inside 'é' (bytes 0..2)`
-   ```
-
-   Fix: split on `cmd.chars().next()` + `c.len_utf8()`, or gate on
-   `cmd.is_char_boundary(1)`.
-
-2. **HIGH — counted `is`/`as` extends across `count - 1` sentence bodies with no
+1. **HIGH — counted `is`/`as` extends across `count - 1` sentence bodies with no
    separator units, and no-ops never: nvim alternates body/separator units and
    fails when units run out** (`crates/hjkl-vim/src/vim/text_object.rs:753-784`
    windowed, `:893-918` full — verified against nvim 0.12.5). The `rem` loop
@@ -3105,7 +3089,7 @@ verified its findings against nvim 0.12.5 directly.
    `count` units are unavailable, delete the `editor_ext.rs:1862-1871` visual
    special case.
 
-3. **MEDIUM — Visual-mode counted `ip`/`ap` extends/collapses where nvim
+2. **MEDIUM — Visual-mode counted `ip`/`ap` extends/collapses where nvim
    no-ops** (`crates/hjkl-vim/src/editor_ext.rs:1857-1931`, counted path from
    `003cf2ad` — verified against nvim 0.12.5). When the selection does not
    already equal the object (B6 grow branch skipped), nvim's counted `ip` fails
@@ -3123,7 +3107,7 @@ verified its findings against nvim 0.12.5 directly.
    Actual: reg = "aaa.\nbbb.\nccc.\n" — whole buffer yanked
    ```
 
-4. **MEDIUM — charwise operators on a closed fold act on one char/row; nvim
+3. **MEDIUM — charwise operators on a closed fold act on one char/row; nvim
    extends the operation linewise over the whole fold**
    (`expand_linewise_over_closed_folds`,
    `crates/hjkl-vim/src/vim/linewise.rs:15-45`, is applied only in linewise
@@ -3140,7 +3124,7 @@ verified its findings against nvim 0.12.5 directly.
    Same for `dw`/`gUw`/`yw` with the cursor on a closed fold's start row.
    `dd`/`>>`/`gUU`/`p`/`u` already agree.
 
-5. **MEDIUM — inner sentence `is` swallows trailing whitespace when the sentence
+4. **MEDIUM — inner sentence `is` swallows trailing whitespace when the sentence
    has no terminator before end-of-line** (`text_object.rs:735-752,786`
    windowed, `:878-892,920` full — verified against nvim 0.12.5). `end` runs to
    `flat_len`, then `end_idx = (end + 1).min(flat_len)` includes the tail; nvim
@@ -3153,7 +3137,7 @@ verified its findings against nvim 0.12.5 directly.
 
    With a terminator (`"abc.   "`) both engines agree.
 
-6. **MEDIUM — RPC splice paths rewrite a CRLF buffer's final `\r` into a line
+5. **MEDIUM — RPC splice paths rewrite a CRLF buffer's final `\r` into a line
    break** (`apps/hjkl/src/nvim_api.rs:892` `nvim_buf_set_lines` fast path,
    `:1735` `nvim_buf_set_text` — verified by trace). Both rebuild the buffer as
    `rope_line_str` rows + `join("\n")`; ropey splits on lone `\r`, and CRLF rows
@@ -3178,7 +3162,7 @@ verified its findings against nvim 0.12.5 directly.
    Fix: per-row splice (or a separator-preserving join), plus a `fileformat`
    decision — none exists today.
 
-7. **MEDIUM — X11 INCR handshake sends `SELECTION_NOTIFY` before writing the
+6. **MEDIUM — X11 INCR handshake sends `SELECTION_NOTIFY` before writing the
    INCR size-hint property**
    (`crates/hjkl-clipboard/src/backend/x11_thread.rs:674-682` — verified by
    trace against ICCCM §2.5, not against a live server). The notify
@@ -3191,83 +3175,51 @@ verified its findings against nvim 0.12.5 directly.
    Fix: in the oversized arm, call `start_incr_send` before
    `send_selection_notify`.
 
-8. **MEDIUM (candidate) — `move_screen_vertical` bootstraps curswant from a char
-   column, not a visual one** (`crates/hjkl-engine/src/motions.rs:896`).
-   `let want = sticky_col.unwrap_or(cursor.col)` reads the raw char col as the
-   visual want and stores it back (`:897`); the sibling `move_vertical`
-   bootstraps correctly via `char_col_to_visual_col` (`motions.rs:984-989`).
-   Reachable only when `sticky_col` is still `None`; mechanism confirmed, the
-   engine-API trigger path was not exercised.
+7. **LOW (candidate) — X11 `TARGETS` advertises `MULTIPLE` but `MULTIPLE`
+   requests are refused** (`x11_thread.rs:626-627` push the atom; no handler arm
+   exists — `:647-693` falls to `payloads.get` miss → `property = NONE`). Per
+   ICCCM 2.6.2 an advertised-but-unsupported target is worse than omitting it.
+   Fix: drop `atoms.multiple` from the list, or implement the property walk.
 
-9. **LOW — hunk patching force-adds a trailing newline, making the index diverge
-   from the worktree at EOF** (`crates/hjkl-app/src/git.rs:447-451`,
-   `hunks_from_patch` — verified by trace). The `+` line of a file without a
-   trailing newline arrives from libgit2 without `\n` plus an `AddEOFNL` marker
-   (origin `>`, skipped by the `:443` filter); force-terminating the line stages
-   a blob with no `\ No newline` marker, so `git apply --cached` (`:586-590`)
-   permanently diverges from the worktree at EOF.
+8. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
+   vim's formatter preserves both**
+   (`crates/hjkl-vim/src/vim/text_object_ops.rs:99-139`, `greedy_wrap`'s
+   `split_whitespace()` — verified against nvim 0.12.5 with pinned `textwidth`).
 
    ```
-   Repro: edit the last line of a file with no trailing newline; stage that hunk
-   Expect: index blob byte-identical to the worktree file
-   Actual: index blob gains a trailing `\n`; phantom EOF diff ever after
+   Repro: tw=79, line "aaa  bbb   ccc", `gqq`
+   Expect (nvim): unchanged     Actual: "aaa bbb ccc"
    ```
 
-   Fix: emit the line verbatim and append `\ No newline at end of file` when the
-   source lacked the `\n`.
+   Probed nvim 0.12.5 further: `gq` preserves interior space runs and trailing
+   whitespace both when a line already fits and when it wraps (`tw=10`,
+   `"aaa  bbb   ccc  ddd  eee"` → `"aaa  bbb"` / `"ccc  ddd"` / `"eee"`). The
+   fix needs a whitespace-preserving wrap (tokenise word + gap runs, keep gaps
+   within a line, drop the gap at a break) — a larger change than a one-liner.
 
-10. **LOW (candidate) — X11 `TARGETS` advertises `MULTIPLE` but `MULTIPLE`
-    requests are refused** (`x11_thread.rs:626-627` push the atom; no handler
-    arm exists — `:647-693` falls to `payloads.get` miss → `property = NONE`).
-    Per ICCCM 2.6.2 an advertised-but-unsupported target is worse than omitting
-    it. Fix: drop `atoms.multiple` from the list, or implement the property
-    walk.
+9. **LOW (candidate) — prompt `advance_completion` revalidates only the `start`
+   boundary of a stale `replace_range`**
+   (`crates/hjkl-prompt/src/lib.rs:252-257`; `end` is rebuilt only after a
+   candidate is applied, `:273`). A caller that mutates field text mid-cycle
+   desyncs the range; no workspace caller does today. Fix: also require
+   `end <= text.len() && text.is_char_boundary(end)` (and ideally that the range
+   still holds the previous candidate).
 
-11. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
-    vim's formatter preserves both**
-    (`crates/hjkl-vim/src/vim/text_object_ops.rs:99-139`, `greedy_wrap`'s
-    `split_whitespace()` — verified against nvim 0.12.5 with pinned
-    `textwidth`).
-
-    ```
-    Repro: tw=79, line "aaa  bbb   ccc", `gqq`
-    Expect (nvim): unchanged     Actual: "aaa bbb ccc"
-    ```
-
-12. **LOW — linewise `>>`/`<<` on tab-indented lines under `expandtab` leaves a
-    mixed indent instead of recomputing the indent column**
-    (`text_object_ops.rs:405-433` `indent_rows` prepends spaces at col 0;
-    `:572-613` `outdent_rows` deletes whole leading whitespace chars — verified
-    against nvim 0.12.5).
-
-    ```
-    Repro: sw=4 ts=4 expandtab, line "\tabc", `>>`
-    Expect (nvim): "        abc" (8 spaces)   Actual: "    \tabc" (4 spaces + tab)
-    ```
-
-13. **LOW (candidate) — prompt `advance_completion` revalidates only the `start`
-    boundary of a stale `replace_range`**
-    (`crates/hjkl-prompt/src/lib.rs:252-257`; `end` is rebuilt only after a
-    candidate is applied, `:273`). A caller that mutates field text mid-cycle
-    desyncs the range; no workspace caller does today. Fix: also require
-    `end <= text.len() && text.is_char_boundary(end)` (and ideally that the
-    range still holds the previous candidate).
-
-14. **LOW (candidate) — picker `lower_cache` survives spawn-mode re-enumeration
+10. **LOW (candidate) — picker `lower_cache` survives spawn-mode re-enumeration
     that reassigns indices** (`crates/hjkl-picker/src/picker.rs:289-304` spawn
     arm builds `filtered` from `0..count` without clearing the cache; the clear
     at `:327` runs only on the scored path's shrink check). Latent: needs a
     spawn source whose `match_text` is not a pure function of content plus a
     count dip-and-regrow. Fix: clear `lower_cache` in the spawn arm.
 
-15. **LOW (candidate) — fs-watch worker exit-flush drops pending debounced
+11. **LOW (candidate) — fs-watch worker exit-flush drops pending debounced
     events when the consumer channel is full**
     (`crates/hjkl-fs-watch/src/lib.rs:410-412`, `let _ = ev_tx.try_send(...)`;
     the steady-state path flags `overflow` → `Rescan` at `:560-565`). Only at
     teardown with 512 slots full. Fix: queue a `Rescan` when the flush's
     `try_send` fails.
 
-16. **LOW (candidate) — anvil Github installs never clean staging**
+12. **LOW (candidate) — anvil Github installs never clean staging**
     (`crates/hjkl-anvil/src/installer.rs:637-688`): the downloaded archive and
     `extract/` tree stay under `<cache>/staging/<name>/` after the move (and on
     error paths); each version bump of each tool leaves a full artifact forever.
@@ -3284,48 +3236,22 @@ up (`<C-v>k2isy` on `"aaa.\n   \nbbb.\nccc.\n"` @ (3,3): hjkl reg =
 (1,0)). This is the count dimension of §1.5b's open anchor-BELOW
 sentence-orientation item.
 
-### Shipped (2026-08-30)
-
-Worked with red→green tests; each item's commit follows.
-
-- **#8 `move_screen_vertical` curswant bootstrap** — `0147418e`; now converts
-  the cursor's char column to a visual column, mirroring `move_vertical`.
-- **#9 hunk no-trailing-newline preservation** — `4d35b00a`; hunks now push
-  libgit2's EOFNL marker content verbatim instead of force-terminating lines.
-- **#12 `>>`/`<<` indent recompute under `expandtab`** — `b6e79da9`; both
-  re-emit the whole indent at the new width via `indent_fill`.
-- **Hardening: `accept_completion` byte-vs-char cursor** — `625a7598`; the
-  cursor offset is now a char count.
-- **Hardening: `advance_by_text` separator counting** — `e75f69d5`; counts every
-  ropey line separator, not just `\n`.
-- **`search_backward` skip-current (cluster C candidate)** — probed nvim 0.12.5:
-  the existing behaviour is correct (`?`/`N` from inside a match land on the
-  containing match's start). Not a defect; regression test in `55829d70`.
-
-**Deferred: #11 `gq` whitespace preservation.** Probed nvim 0.12.5 — `gq`
-preserves interior space runs and trailing whitespace both when a line already
-fits (`tw=79`, `"aaa  bbb   ccc"` unchanged) and when it wraps (`tw=10`,
-`"aaa  bbb   ccc  ddd  eee"` → `"aaa  bbb"` / `"ccc  ddd"` / `"eee"`).
-`greedy_wrap`'s `split_whitespace()` rejoin collapses both. The fix needs a
-whitespace-preserving wrap (tokenise word + gap runs, keep gaps within a line,
-drop the gap at a break) — a larger change than a one-liner, left for its own
-session.
-
 ### Cleared
 
 - A: `nvim_buf_set_text`'s byte-column resolution is correct —
   `resolve_text_col` snaps to char boundaries (`nvim_api.rs:1712-1717`); the
-  CRLF defect (finding 6) is the whole-content rejoin, not the col math.
+  CRLF defect (finding 5) is the whole-content rejoin, not the col math.
 - A: completion `anchor_col` is char-based consistently
-  (`lsp_glue.rs:1837-1863`, fixed by audit-r2 #7); the byte-vs-char defect
-  (below, finding 17) is only in `accept_completion`'s `cursor_offset` math.
+  (`lsp_glue.rs:1837-1863`, fixed by audit-r2 #7); the byte-vs-char cursor
+  defect was in `accept_completion`'s `cursor_offset` math, not the anchor —
+  since fixed (see the changelog).
 - B (all against nvim 0.12.5): `Y` is `y$`-like in 0.12.5 and hjkl matches;
   counted `iw`/`aw`/`iW` match in operator/visual/blockwise incl. over-run;
   counted `i{`/`a{` match incl. the new no-op-on-missing-level; counted `J`
   over-run matches; `s`/`3s` fuzzer divergences are the deliberate
   `motion_sneak` default (corpus ships `:set nomotion_sneak` fallbacks); the
   fuzzer's `gq` buffer diffs are harness artifacts (nvim `gq` no-ops with
-  `textwidth` unset — finding 11 was verified by direct probes instead); the
+  `textwidth` unset — finding 8 was verified by direct probes instead); the
   printed `ye`/`dap`/`zfGx`/`3J`/`viwc` diffs replay as matches (output-format
   misreads); visual `*`/`#` match in all three modes; `search_prompt.rs` offset
   arithmetic traced sound; bracket-clamp and paragraph-extend guards correct.
@@ -3373,26 +3299,11 @@ session.
 
 ### Hardening
 
-- A: `accept_completion`'s `cursor_offset` is byte-based
-  (`lsp_glue.rs:2671,2675,2680`: `find('(')+1`, `stripped.len()+1`,
-  `raw_text.len()`) while `anchor_col`/cursor/`jump_cursor` are char-based
-  (`:2699` → `editor.rs:2438-2442`, `Position` bounds documented in
-  `hjkl-buffer/src/position.rs:14-18`). Any multibyte `insert_text` (a Function
-  item with a wide char before the paren, any non-function item with one)
-  misplaces the cursor. Verified in the code; no test drives a multibyte
-  completion today.
 - A: `bufnr("str")` is plain substring match (`nvim_buffer_id_for_name`,
   `apps/hjkl/src/app/buffer_ops.rs:552-561`, via `nvim_api.rs:1268-1272`); vim
   matches a String arg as a file-pattern against the full buffer name (exact
   first). Parity gap in the RPC surface; fix wants a decision on how much of
   vim's pattern syntax to support.
-- C: `advance_by_text` (`crates/hjkl-engine/src/editor.rs:260-272`) counts only
-  `\n` when computing the tree-sitter `Point` for inserted text; ropey also
-  splits on lone `\r`, U+0085, U+000B/C, U+2028/9 (the workspace's own comments,
-  `rope_util.rs:12-15`, `edit.rs:332-339`). Inserted text with one of those
-  yields a wrong `new_end_position` row/col in the `ContentEdit` fed to
-  incremental reparse (mis-highlight until the next full parse). Mechanism
-  confirmed; unit test pinning `new_end_position` still to write.
 
 ### Coverage
 
