@@ -297,6 +297,11 @@ impl Picker {
                     matches: Vec::new(),
                 })
                 .collect();
+            // Spawn re-enumeration reassigns candidate indices, so a fold
+            // cache keyed by the previous enumeration's indices is stale. Drop
+            // it so a later return to in-memory filtering rebuilds from
+            // scratch instead of reusing `match_text` folds from other items.
+            self.lower_cache.clear();
             if self.selected >= self.filtered.len() {
                 self.selected = self.filtered.len().saturating_sub(1);
             }
@@ -650,7 +655,7 @@ impl Drop for Picker {
 #[cfg(test)]
 mod filter_tests {
     use super::*;
-    use crate::logic::{PickerAction, PickerLogic};
+    use crate::logic::{PickerAction, PickerLogic, RequeryMode};
 
     struct OneItem(String);
 
@@ -803,6 +808,94 @@ mod filter_tests {
         );
         let apr: Vec<String> = p.visible_entries().into_iter().map(|(l, _)| l).collect();
         assert_eq!(apr, vec!["Apricot"]);
+    }
+
+    /// A source whose `requery_mode` can flip between in-memory filtering and
+    /// spawn re-enumeration, counting `match_text` calls so the fold cache is
+    /// observable directly.
+    struct SwitchingSource {
+        mode: Arc<std::sync::atomic::AtomicU8>,
+        items: Arc<std::sync::Mutex<Vec<String>>>,
+        match_text_calls: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl PickerLogic for SwitchingSource {
+        fn title(&self) -> &str {
+            "sw"
+        }
+        fn item_count(&self) -> usize {
+            self.items.lock().map_or(0, |g| g.len())
+        }
+        fn label(&self, idx: usize) -> String {
+            self.items
+                .lock()
+                .ok()
+                .and_then(|g| g.get(idx).cloned())
+                .unwrap_or_default()
+        }
+        fn match_text(&self, idx: usize) -> String {
+            self.match_text_calls.fetch_add(1, Ordering::Relaxed);
+            self.label(idx)
+        }
+        fn select(&self, _idx: usize) -> PickerAction {
+            PickerAction::None
+        }
+        fn enumerate(
+            &mut self,
+            _query: Option<&str>,
+            _cancel: Arc<AtomicBool>,
+        ) -> Option<JoinHandle<()>> {
+            None
+        }
+        fn requery_mode(&self) -> RequeryMode {
+            if self.mode.load(Ordering::SeqCst) == 1 {
+                RequeryMode::Spawn
+            } else {
+                RequeryMode::FilterInMemory
+            }
+        }
+    }
+
+    #[test]
+    fn spawn_mode_clears_fold_cache_on_index_reassignment() {
+        let mode = Arc::new(std::sync::atomic::AtomicU8::new(0));
+        let items = Arc::new(std::sync::Mutex::new(vec![
+            "alpha".to_string(),
+            "beta".to_string(),
+            "gamma".to_string(),
+        ]));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut p = Picker::new_with_query(
+            Box::new(SwitchingSource {
+                mode: Arc::clone(&mode),
+                items: Arc::clone(&items),
+                match_text_calls: Arc::clone(&calls),
+            }),
+            "a",
+        );
+        p.refresh();
+        assert_eq!(calls.load(Ordering::Relaxed), 3, "initial fold of all 3");
+
+        // Spawn re-enumeration reassigns the same 3 indices to different items.
+        mode.store(1, Ordering::SeqCst);
+        *items.lock().unwrap() = vec![
+            "delta".to_string(),
+            "epsilon".to_string(),
+            "zeta".to_string(),
+        ];
+        p.query.set_text("d");
+        p.refresh();
+
+        // Back to in-memory filtering with the same count: a stale cache would
+        // skip refolding and keep alpha/beta/gamma folds under delta/... names.
+        mode.store(0, Ordering::SeqCst);
+        p.query.set_text("e");
+        p.refresh();
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            6,
+            "spawn re-enumeration must clear the fold cache"
+        );
     }
 }
 
