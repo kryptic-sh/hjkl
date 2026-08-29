@@ -406,9 +406,11 @@ fn worker(
         }
     }
 
-    // Flush remaining events before exit.
-    for (path, p) in pending {
-        let _ = ev_tx.try_send(pending_to_event(path, p));
+    // Flush remaining events before exit. A full consumer channel would drop
+    // those events silently (no next tick to retry on), so surface one coarse
+    // Rescan in that case.
+    if flush_exit(pending, &ev_tx) {
+        let _ = ev_tx.try_send(FsEvent::Rescan);
     }
 }
 
@@ -574,6 +576,21 @@ fn pending_to_event(path: PathBuf, p: Pending) -> FsEvent {
         PendingKind::RenameFrom => FsEvent::Removed(path),
         PendingKind::Renamed { to } => FsEvent::Renamed { from: path, to },
     }
+}
+
+/// Flush the remaining pending events at worker exit.
+///
+/// Returns `true` when any event was dropped because the consumer channel was
+/// full — the caller should then best-effort emit a `Rescan` so the missed
+/// events aren't silently lost (there is no next tick to retry on at teardown).
+fn flush_exit(pending: HashMap<PathBuf, Pending>, ev_tx: &Sender<FsEvent>) -> bool {
+    let mut dropped = false;
+    for (path, p) in pending {
+        if ev_tx.try_send(pending_to_event(path, p)).is_err() {
+            dropped = true;
+        }
+    }
+    dropped
 }
 
 #[inline]
@@ -751,6 +768,43 @@ mod tests {
         assert!(
             overflow.load(Ordering::SeqCst),
             "a dropped debounced event must set overflow so a Rescan is emitted"
+        );
+    }
+
+    #[test]
+    fn flush_exit_reports_drop_when_consumer_channel_full() {
+        // Full single-slot channel: the teardown flush must report the drop so
+        // the worker can emit a coarse Rescan.
+        let (tx, _rx) = bounded::<FsEvent>(1);
+        tx.try_send(FsEvent::Rescan).unwrap();
+        let mut pending: HashMap<PathBuf, Pending> = HashMap::new();
+        pending.insert(
+            PathBuf::from("/tmp/x"),
+            Pending {
+                kind: PendingKind::Modified,
+                at: Instant::now(),
+            },
+        );
+        assert!(
+            flush_exit(pending, &tx),
+            "a full channel must report a dropped event"
+        );
+    }
+
+    #[test]
+    fn flush_exit_reports_no_drop_when_channel_has_room() {
+        let (tx, _rx) = bounded::<FsEvent>(2);
+        let mut pending: HashMap<PathBuf, Pending> = HashMap::new();
+        pending.insert(
+            PathBuf::from("/tmp/x"),
+            Pending {
+                kind: PendingKind::Modified,
+                at: Instant::now(),
+            },
+        );
+        assert!(
+            !flush_exit(pending, &tx),
+            "a roomy channel must not report a drop"
         );
     }
 
