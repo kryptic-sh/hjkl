@@ -248,13 +248,12 @@ fn set_explorer_open_persists_to_real_config_file() {
     );
 }
 
-/// `$` on a filename wider than the sidebar must NOT horizontally scroll the
-/// explorer. A tree truncates names: scrolling would shift the buffer text left
-/// while the glyph/icon/name overlay stays put, garbling the sidebar (showing
-/// the tail of the name instead of the left-aligned prefix). Regression for the
-/// "borked sidebar render" report.
+/// `$` on a filename wider than the sidebar scrolls the explorer horizontally,
+/// and the glyph/icon/name overlay must honor `top_col` (shift with the text)
+/// rather than painting at fixed columns — otherwise the tree glyphs overwrite
+/// the scrolled text. Regression for the "borked sidebar render" report.
 #[test]
-fn dollar_on_wide_filename_keeps_sidebar_left_aligned() {
+fn dollar_on_wide_filename_scrolls_tree_and_aligns_overlay() {
     let tmp = tempfile::tempdir().unwrap();
     let long = "this_is_a_very_long_filename_that_exceeds_the_sidebar_width_abcdefghijklmnopqrstuvwxyz.txt";
     std::fs::write(tmp.path().join(long), "x").unwrap();
@@ -268,18 +267,19 @@ fn dollar_on_wide_filename_keeps_sidebar_left_aligned() {
     session.keys("jjj");
     session.keys("$");
 
-    // The name must stay left-aligned (truncated at the right edge), so its
-    // prefix is visible — not scrolled to show only the tail ("bcdefg…").
-    let left_aligned = wait_until(|| {
-        (0..24).any(|r| {
-            let line = session.line(r);
-            line.contains("this_is_a_very_long_filename")
-                && !line.contains("bcdefghijklmnopqrstuvwxyz")
-        })
+    // The tree scrolls to the end of the name: the tail is visible (with the
+    // "a" of "abcdefghijklmnopqrstuvwxyz" intact — a misaligned overlay would
+    // overwrite it with the tree glyph) and the prefix scrolled off.
+    let scrolled = wait_until(|| {
+        let tail = "abcdefghijklmnopqrstuvwxyz.txt";
+        let prefix = "this_is_a_very_long_filename";
+        let tail_visible = (0..24).any(|r| session.line(r).contains(tail));
+        let prefix_hidden = !(0..24).any(|r| session.line(r).contains(prefix));
+        tail_visible && prefix_hidden
     });
     assert!(
-        left_aligned,
-        "sidebar must show the filename prefix, not its scrolled tail:\n{}",
+        scrolled,
+        "explorer must scroll to the name tail with the overlay aligned:\n{}",
         session.dump_screen()
     );
 }

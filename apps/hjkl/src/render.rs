@@ -1367,6 +1367,13 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
         let screen_height = area.height as usize;
         // Explorer is gutterless: text starts at area.x (sign_w=fold_w=num_gw=0).
         let text_x = area.x;
+        // The explorer buffer CAN scroll horizontally (e.g. `$` past the dock
+        // width). BufferView paints the text shifted left by `top_col`, so this
+        // glyph/icon/name overlay must shift by the same amount or it lands on
+        // cells the scrolled text no longer occupies. Virtual (unscrolled)
+        // column → on-screen column; `None` when scrolled off the left edge.
+        let top_col = viewport_ref.top_col as u16;
+        let screen_x = |virtual_col: u16| virtual_col.checked_sub(top_col);
 
         // The viewport top row for this window (same variable as the BufferView uses).
         let vp_top_ex = vp_top;
@@ -1465,8 +1472,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
 
             if node.depth == 0 {
                 // Root: icon at col 0, space at col 1.
-                let icon_abs = text_x;
-                if icon_abs < right
+                if let Some(icon_abs) = screen_x(text_x)
+                    && icon_abs < right
                     && let Some(cell) = buf.cell_mut((icon_abs, screen_row))
                 {
                     cell.set_symbol(&icon_ch.to_string());
@@ -1475,7 +1482,9 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             } else {
                 // Guide columns: for each ancestor level.
                 for (i, &has_sibling) in node.branches.iter().enumerate() {
-                    let col = text_x + (i as u16) * 2;
+                    let Some(col) = screen_x(text_x + (i as u16) * 2) else {
+                        continue;
+                    };
                     if col < right
                         && let Some(cell) = buf.cell_mut((col, screen_row))
                     {
@@ -1487,16 +1496,17 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 }
 
                 // Connector: at col (depth-1)*2 and (depth-1)*2+1.
-                let connector_col = text_x + (node.branches.len() as u16) * 2;
-                if connector_col < right
+                if let Some(connector_col) = screen_x(text_x + (node.branches.len() as u16) * 2)
+                    && connector_col < right
                     && let Some(cell) = buf.cell_mut((connector_col, screen_row))
                 {
                     let sym = if node.is_last { "└" } else { "├" };
                     cell.set_symbol(sym);
                     cell.set_fg(guide_fg);
                 }
-                let connector_col2 = connector_col + 1;
-                if connector_col2 < right
+                if let Some(connector_col2) =
+                    screen_x(text_x + (node.branches.len() as u16) * 2 + 1)
+                    && connector_col2 < right
                     && let Some(cell) = buf.cell_mut((connector_col2, screen_row))
                 {
                     cell.set_symbol("╴");
@@ -1504,8 +1514,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                 }
 
                 // Icon: at col depth*2 (= name_col - 2).
-                let icon_abs = text_x + node.depth as u16 * 2;
-                if icon_abs < right
+                if let Some(icon_abs) = screen_x(text_x + node.depth as u16 * 2)
+                    && icon_abs < right
                     && let Some(cell) = buf.cell_mut((icon_abs, screen_row))
                 {
                     cell.set_symbol(&icon_ch.to_string());
@@ -1565,7 +1575,8 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
             // regardless of git state — the icon column never gets a git bg).
             // Always set a definite fg so the icon never inherits the
             // cursorline's foreground on the cursor row.
-            if icon_col < right
+            if let Some(icon_col) = screen_x(icon_col)
+                && icon_col < right
                 && let Some(cell) = buf.cell_mut((icon_col, screen_row))
             {
                 cell.set_fg(icon_color);
@@ -1586,10 +1597,18 @@ fn render_window(frame: &mut Frame, app: &mut App, area: Rect, win_id: window::W
                     .take_while(|&c| c != '\u{1F}')
                     .count() as u16
             });
-            let name_end = name_col.saturating_add(name_len).min(right);
+            // The name spans virtual columns [name_col, name_col + name_len);
+            // the visible window (after horizontal scroll) is
+            // [top_col, top_col + area.width). Color their intersection, shifted
+            // left onto the screen by `top_col`.
+            let name_hi = name_col
+                .saturating_add(name_len)
+                .min(top_col.saturating_add(area.width));
+            let name_lo = name_col.max(top_col);
 
             // Repaint name cells.
-            for col in name_col..name_end {
+            for virtual_col in name_lo..name_hi {
+                let col = virtual_col - top_col;
                 if let Some(cell) = buf.cell_mut((col, screen_row)) {
                     match git_bg {
                         Some(bg) => {

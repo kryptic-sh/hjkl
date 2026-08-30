@@ -43,9 +43,9 @@ patch bumps.
   takes the whole run, and over-running is a no-op instead of a best-effort
   clamp.
 - **`$` on a wide filename no longer borks the explorer sidebar.** The explorer
-  is a tree and never scrolls horizontally; `$` at the end of a filename wider
-  than the dock previously set `top_col`, shifting the text left while the glyph
-  overlay stayed put. The explorer now keeps `top_col` at 0.
+  scrolls horizontally like a code buffer; its glyph/icon/name overlay now
+  honors `top_col` instead of painting at fixed columns, so the tree glyphs no
+  longer overwrite the scrolled text.
 
 ## [0.41.5] - 2026-08-30
 

@@ -1848,14 +1848,6 @@ impl App {
         // behaviour from the app side so the keymap path stays viewport-coherent.
         // Idempotent for non-motion mutations (already-in-bounds = no-op).
         self.active_editor_mut().ensure_cursor_in_scrolloff();
-        // The explorer is a tree, not a code buffer: it never scrolls
-        // horizontally. `$` on a filename wider than the sidebar would
-        // otherwise set `top_col` (via `ensure_visible`), shifting the buffer
-        // text left while the glyph/icon/name overlay — drawn at fixed columns
-        // — stays put, garbling the sidebar.
-        if self.slots()[self.focused_slot_idx()].is_explorer() {
-            self.active_editor_mut().host_mut().viewport_mut().top_col = 0;
-        }
         // Propagate any mode change (e.g. i/I/a/A/o/O enter-insert actions
         // dispatched through the app keymap) to the host cursor-shape so the
         // render loop picks it up on the next frame. Idempotent when mode
