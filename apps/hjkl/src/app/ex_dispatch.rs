@@ -23,28 +23,64 @@ use super::{App, DiskState, ex_host_cmds};
 /// needs a live `Editor`, hence the split: this half only needs read access
 /// to the shared buffer (#151 Stage 2b).
 fn trimmed_trailing_whitespace(slot: &super::BufferSlot) -> Option<String> {
-    use hjkl_engine::Query;
     let buf = slot.buffer();
-    let n = buf.line_count() as usize;
-    let mut changed = false;
-    let lines: Vec<String> = (0..n)
-        .map(|r| {
-            let line = buf.line(r as u32);
-            let trimmed = line.trim_end_matches([' ', '\t']);
-            if trimmed.len() != line.len() {
-                changed = true;
-                trimmed.to_string()
-            } else {
-                line
+    // Work on the raw rope bytes, not per-line `rope_line_str` strings: a CRLF
+    // row's `\r` is kept as content for interior lines but stripped as a lone
+    // break for the final line, so a `rope_line_str` + `join("\n")` + `set_content`
+    // round-trip drops the final `\r` (the same class of bug the RPC splice fix
+    // closed). Stripping `[ \t]` runs that immediately precede a line break (or
+    // EOF) preserves every break byte-exactly.
+    let raw = buf.content_joined();
+    let trimmed = strip_trailing_ws_preserving_breaks(&raw);
+    (trimmed != *raw).then_some(trimmed)
+}
+
+/// Strip runs of `[ \t]` that immediately precede a line break (`\r\n`, `\n`,
+/// `\r`) or end-of-string, preserving the break itself. This mirrors vim's
+/// `:s/[ \t]\+$//` on a file whose CRLF line endings must survive.
+fn strip_trailing_ws_preserving_breaks(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut line_start = 0usize;
+    let mut i = 0usize;
+    while i < s.len() {
+        let c = s[i..].chars().next().unwrap();
+        if c == '\n' || c == '\r' {
+            // Trim trailing [ \t] from the segment `[line_start, i)`.
+            let mut end = i;
+            while end > line_start {
+                let prev = s[..end].chars().last().unwrap();
+                if prev == ' ' || prev == '\t' {
+                    end -= prev.len_utf8();
+                } else {
+                    break;
+                }
             }
-        })
-        .collect();
-    if !changed {
-        return None;
+            out.push_str(&s[line_start..end]);
+            if c == '\r' && i + 1 < s.len() && bytes[i + 1] == b'\n' {
+                out.push_str("\r\n");
+                i += 2;
+            } else {
+                out.push(c);
+                i += 1;
+            }
+            line_start = i;
+        } else {
+            i += c.len_utf8();
+        }
     }
-    // Preserve line count — don't collapse trailing blank lines. The per-line
-    // trim above already stripped the whitespace; just rejoin and replace.
-    Some(lines.join("\n"))
+    // Final segment (no break at end): strip its trailing [ \t].
+    let mut end = s.len();
+    while end > line_start {
+        let prev = s[..end].chars().last().unwrap();
+        if prev == ' ' || prev == '\t' {
+            end -= prev.len_utf8();
+        } else {
+            break;
+        }
+    }
+    out.push_str(&s[line_start..end]);
+    out
 }
 
 /// Supplemental ex-command NAMES for the `:` completion popup (issue #307).

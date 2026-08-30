@@ -32,6 +32,10 @@ patch bumps.
   interior space runs or strips trailing whitespace; it now tokenises words with
   their gap runs, keeps gaps within a line, drops the gap at a break, and
   expands tabs to `tabstop` for the wrap column while preserving the tab byte.
+- **`trim_trailing_whitespace` now trims CRLF lines.** The pre-save hook trimmed
+  `[ \t]` only on LF lines — a CRLF row's `\r` shielded the trailing whitespace,
+  and the per-line round-trip dropped the final `\r`. It now strips `[ \t]` runs
+  that precede a line break (or EOF) on the raw rope bytes, preserving CRLF.
 
 ## [0.41.5] - 2026-08-30
 

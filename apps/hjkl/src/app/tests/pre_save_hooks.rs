@@ -123,6 +123,38 @@ fn save_trim_noop_when_no_trailing_whitespace() {
     let _ = std::fs::remove_file(&path);
 }
 
+/// A CRLF buffer's trailing whitespace sits before the `\r` (which
+/// `rope_line_str` keeps as content), so trimming must strip the spaces/tabs
+/// while preserving the `\r\n` line ending.
+#[test]
+fn save_trims_crlf_trailing_whitespace_preserving_crlf() {
+    use std::io::Write;
+    let path = tmp_path(&format!(
+        "hjkl_tts_crlf_{}.txt",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut f = std::fs::File::create(&path).unwrap();
+    f.write_all(b"hello   \r\nworld\t\r\nclean\r\n").unwrap();
+    drop(f);
+
+    let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
+    app.active_editor_mut()
+        .settings_mut()
+        .trim_trailing_whitespace = true;
+    app.dispatch_ex("write");
+
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        on_disk, "hello\r\nworld\r\nclean\r\n",
+        "CRLF trailing whitespace must be trimmed, `\\r` preserved"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
 // ── format_on_save pre-save hook tests ───────────────────────────────────────
 
 /// Saving with `format_on_save` on and no formatter registered for the file
