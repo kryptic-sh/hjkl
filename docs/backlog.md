@@ -3058,25 +3058,7 @@ verified its findings against nvim 0.12.5 directly.
 
 ### Findings — ranked
 
-1. **MEDIUM — Visual-mode counted `ip`/`ap` extends/collapses where nvim
-   no-ops** (`crates/hjkl-vim/src/editor_ext.rs:1857-1931`, counted path from
-   `003cf2ad` — verified against nvim 0.12.5). When the selection does not
-   already equal the object (B6 grow branch skipped), nvim's counted `ip` fails
-   unless real extend steps can consume the count; hjkl re-selects through
-   `text_object_range(self, Paragraph, inner, count)` and collapses to
-   `VisualLine`.
-
-   ```
-   Repro: "aaa.\nbbb.\nccc.\n" cursor (0,0), `v2ip`
-   Expect (nvim): no-op — mode stays Visual, selection unchanged
-   Actual:        collapses to VisualLine rows 0-2 (cur=(2,0), visual_line)
-
-   Repro: same buffer, `v2ipy`
-   Expect: yank of a single char
-   Actual: reg = "aaa.\nbbb.\nccc.\n" — whole buffer yanked
-   ```
-
-2. **MEDIUM — charwise operators on a closed fold act on one char/row; nvim
+1. **MEDIUM — charwise operators on a closed fold act on one char/row; nvim
    extends the operation linewise over the whole fold**
    (`expand_linewise_over_closed_folds`,
    `crates/hjkl-vim/src/vim/linewise.rs:15-45`, is applied only in linewise
@@ -3093,7 +3075,7 @@ verified its findings against nvim 0.12.5 directly.
    Same for `dw`/`gUw`/`yw` with the cursor on a closed fold's start row.
    `dd`/`>>`/`gUU`/`p`/`u` already agree.
 
-3. **MEDIUM — RPC splice paths rewrite a CRLF buffer's final `\r` into a line
+2. **MEDIUM — RPC splice paths rewrite a CRLF buffer's final `\r` into a line
    break** (`apps/hjkl/src/nvim_api.rs:892` `nvim_buf_set_lines` fast path,
    `:1735` `nvim_buf_set_text` — verified by trace). Both rebuild the buffer as
    `rope_line_str` rows + `join("\n")`; ropey splits on lone `\r`, and CRLF rows
@@ -3118,7 +3100,7 @@ verified its findings against nvim 0.12.5 directly.
    Fix: per-row splice (or a separator-preserving join), plus a `fileformat`
    decision — none exists today.
 
-4. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
+3. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
    vim's formatter preserves both**
    (`crates/hjkl-vim/src/vim/text_object_ops.rs:99-139`, `greedy_wrap`'s
    `split_whitespace()` — verified against nvim 0.12.5 with pinned `textwidth`).
@@ -3134,6 +3116,17 @@ verified its findings against nvim 0.12.5 directly.
    fix needs a whitespace-preserving wrap (tokenise word + gap runs, keep gaps
    within a line, drop the gap at a break) — a larger change than a one-liner.
 
+4. **LOW — `ap` with a blank-line cursor or a trailing blank run at EOF still
+   diverges (found 2026-08-30, during the counted-`ip`/`ap` fix).** The
+   counted-`ip`/`ap` over-run guard above does not fire on these (they reach
+   `rem == 0`), so they are a distinct `ap`-semantics gap, not the over-run
+   class. Verified against nvim 0.12.5:
+   - `d2ap` on `"aaa.\n\nbbb.\n\nccc.\n"` @ (1,0): nvim `"aaa.\n"`, hjkl
+     `"aaa.\nccc.\n"`.
+   - `d3ap` same buffer @ (1,0): nvim no-op, hjkl `"aaa.\n"`.
+   - `dap` on `"a\n\n\n"` @ (0,0): nvim `""`, hjkl `"\n"`.
+   - `d2ap` on `"a\n\n\n"` @ (0,0): nvim no-op, hjkl `""`.
+
 ### Refinement of an already-open item (not counted)
 
 Counted reverse blockwise sentence (`<C-v>k2is`,
@@ -3148,7 +3141,7 @@ sentence-orientation item.
 
 - A: `nvim_buf_set_text`'s byte-column resolution is correct —
   `resolve_text_col` snaps to char boundaries (`nvim_api.rs:1712-1717`); the
-  CRLF defect (finding 3) is the whole-content rejoin, not the col math.
+  CRLF defect (finding 2) is the whole-content rejoin, not the col math.
 - A: completion `anchor_col` is char-based consistently
   (`lsp_glue.rs:1837-1863`, fixed by audit-r2 #7); the byte-vs-char cursor
   defect was in `accept_completion`'s `cursor_offset` math, not the anchor —
@@ -3159,7 +3152,7 @@ sentence-orientation item.
   over-run matches; `s`/`3s` fuzzer divergences are the deliberate
   `motion_sneak` default (corpus ships `:set nomotion_sneak` fallbacks); the
   fuzzer's `gq` buffer diffs are harness artifacts (nvim `gq` no-ops with
-  `textwidth` unset — finding 4 was verified by direct probes instead); the
+  `textwidth` unset — finding 3 was verified by direct probes instead); the
   printed `ye`/`dap`/`zfGx`/`3J`/`viwc` diffs replay as matches (output-format
   misreads); visual `*`/`#` match in all three modes; `search_prompt.rs` offset
   arithmetic traced sound; bracket-clamp and paragraph-extend guards correct.
