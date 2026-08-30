@@ -47,6 +47,16 @@ keys = "dis"
 expected_buffer = "First.  Third.\n"
 expected_cursor = [0, 7]
 
+# `dis` on a terminator-less sentence with trailing whitespace: the inner
+# object ends at the last non-blank char, so `dis` leaves the trailing spaces.
+[[cases]]
+name = "textobj_dis_trim_trailing_whitespace_no_terminator"
+initial_buffer = "abc def   \n"
+initial_cursor = [0, 0]
+keys = "dis"
+expected_buffer = "   \n"
+expected_cursor = [0, 0]
+
 # ─── Single-quote text objects ────────────────────────────────────────────────
 
 # `da'` deletes around single-quoted string (including the quotes).

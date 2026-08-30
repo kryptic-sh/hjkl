@@ -395,6 +395,14 @@ fn full_github_pipeline_tar_gz_end_to_end() {
         rev_content.contains(HELLO_TAR_GZ_SHA),
         "rev sidecar must contain sha"
     );
+
+    // The staging dir (downloaded archive + extraction residue) must be gone
+    // after a successful install.
+    let staging_dir = paths.cache_root.join("staging").join("hello");
+    assert!(
+        !staging_dir.exists(),
+        "staging dir {staging_dir:?} must be removed after a successful install"
+    );
 }
 
 /// Full zip install pipeline.
