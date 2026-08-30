@@ -3069,12 +3069,13 @@ verified its findings against nvim 0.12.5 directly.
    - `dap` on `"a\n\n\n"` @ (0,0): nvim `""`, hjkl `"\n"`.
    - `d2ap` on `"a\n\n\n"` @ (0,0): nvim no-op, hjkl `""`.
 
-2. **LOW — `trimmed_trailing_whitespace` can't trim CRLF trailing whitespace
-   (corollary of the fixed CRLF-splice finding).**
-   `apps/hjkl/src/app/ex_dispatch.rs:33` uses `trim_end_matches([' ', '\t'])`;
-   on a CRLF row `"abc  \r"` the trailing `\r` shields the spaces, so they are
-   never trimmed. Trimming should strip `[ \t]` that precede a trailing `\r`
-   (vim's `:s/[ \t]\+$//` trims the spaces before the `\r\n`).
+2. **LOW — two counted/word-end charwise-op divergences on a closed fold remain
+   (found 2026-08-30, during the closed-fold charwise fix).** The whole-fold
+   promotion now applies at column 0, but:
+   - Counted `2dw`/`2yw` on a closed fold do not re-apply the count on top of
+     the fold (nvim applies the count over the fold).
+   - `de`/`ce` (word-end motion) on a closed fold delete/change the whole buffer
+     in nvim (its `e`-on-fold quirk) where hjkl deletes/changes just the fold.
 
 ### Refinement of an already-open item (not counted)
 
