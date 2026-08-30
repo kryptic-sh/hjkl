@@ -207,3 +207,42 @@ keys = "V}u2)1gUiW"
 expected_buffer = "'QUX'  a-b\n"
 expected_cursor = [0, 0]
 expected_mode = "normal"
+
+# ─── Counted `is` / `as` — body / same-line-separator unit alternation ────────
+
+# `2is` walks body + following separator: the sentence "aaaa." plus its space,
+# not a second full sentence. (nvim 0.12.5)
+[[cases]]
+name = "sentence_counted_2is_body_and_separator"
+initial_buffer = "aaaa. bbbb. cccc."
+initial_cursor = [0, 0]
+keys = "y2is"
+expected_buffer = "aaaa. bbbb. cccc."
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "aaaa. "]
+
+# `4is` from the blank between "six." and "seven": units are blank, body,
+# separator, body — an even count ends after a body, and over-run caps at EOF
+# instead of extending past the object. (nvim 0.12.5)
+[[cases]]
+name = "sentence_counted_d4is_blank_start_multiline"
+initial_buffer = "one two three. four five. six. seven eight nine.\n ten eleven twelve."
+initial_cursor = [0, 30]
+keys = "d4is"
+expected_buffer = "one two three. four five. six."
+expected_cursor = [0, 29]
+expected_mode = "normal"
+expected_register = ['"', " seven eight nine.\n ten eleven twelve."]
+
+# `<C-v>j2is` in a forward block: the same body/separator alternation, so the
+# yank is the first sentence plus its separator. (nvim 0.12.5)
+[[cases]]
+name = "sentence_counted_visual_block_2is"
+initial_buffer = "alpha beta. gamma delta.\n"
+initial_cursor = [0, 0]
+keys = "<C-v>j2isy"
+expected_buffer = "alpha beta. gamma delta.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "alpha beta. "]

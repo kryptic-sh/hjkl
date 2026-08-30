@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Counted `is`/`as` walk body/separator units like nvim.** `y2is`/`d3is`
+  previously skipped a full sentence per count; they now alternate sentence-body
+  and same-line-separator units, so an even count ends after a separator and an
+  over-run caps at end-of-buffer instead of a best-effort extension. The
+  sentence-object scan was rewritten as one shared port of vim's `current_sent`,
+  replacing the duplicated windowed/full-buffer `rem` loops.
+
 ## [0.41.5] - 2026-08-30
 
 ### Fixed

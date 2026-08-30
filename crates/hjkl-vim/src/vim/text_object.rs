@@ -685,127 +685,23 @@ pub fn sentence_text_object<H: hjkl_engine::types::Host>(
     // row contributes its chars plus one separator, and the popped final
     // newline only sits past the last content row.
     let cursor_idx = (rope.line_to_char(cursor.0) + cursor.1 - win_off).min(flat_len - 1);
-    let is_terminator = |c: char| matches!(c, '.' | '?' | '!');
-    let mut clipped = false;
 
-    // Walk backward from cursor to find the start of the current
-    // sentence. A boundary is: whitespace immediately after a run of
-    // terminators (or start-of-buffer). Running off the window's bottom
-    // edge (only possible when the window doesn't start at row 0) means
-    // the true start lies below the window — fall back.
-    let mut start = cursor_idx;
-    while start > 0 {
-        let prev = chars[start - 1];
-        if prev.is_whitespace() {
-            // Check if the whitespace follows a terminator — if so,
-            // we've crossed a sentence boundary; the sentence begins
-            // at the first non-whitespace cell *after* this run.
-            let mut k = start - 1;
-            while k > 0 && chars[k - 1].is_whitespace() {
-                k -= 1;
-            }
-            if k > 0 && is_terminator(chars[k - 1]) {
-                break;
-            }
-        }
-        start -= 1;
-    }
-    if start == 0 && win_lo > 0 {
-        clipped = true;
-    }
-    // Skip leading whitespace (vim doesn't include it in the
-    // sentence body).
-    while start < flat_len && chars[start].is_whitespace() {
-        start += 1;
-    }
-    if start >= flat_len {
+    let Some((start, end, clipped)) =
+        sentence_text_object_on_chars(&chars, cursor_idx, inner, count)
+    else {
         return if whole_buffer {
             None
         } else {
             sentence_text_object_full(ed, inner, count)
         };
-    }
-    if clipped {
-        return sentence_text_object_full(ed, inner, count);
-    }
-
-    // Walk forward to the sentence end (last terminator before the
-    // next whitespace boundary). Walking off the window's top edge when
-    // the window stops short of the buffer's end is a clip.
-    let mut end = start;
-    while end < flat_len {
-        if is_terminator(chars[end]) {
-            // Consume any consecutive terminators (e.g. `?!`).
-            while end + 1 < flat_len && is_terminator(chars[end + 1]) {
-                end += 1;
-            }
-            // If followed by whitespace or end-of-buffer, that's the
-            // boundary.
-            if end + 1 >= flat_len || chars[end + 1].is_whitespace() {
-                break;
-            }
-        }
-        end += 1;
-    }
-    if end == flat_len && win_hi < last_content {
-        return sentence_text_object_full(ed, inner, count);
-    }
-    // `Nis` / `Nas`: extend across `count - 1` further sentences, skipping the
-    // whitespace between each and walking to the next sentence's end.
-    let mut rem = count - 1;
-    while rem > 0 {
-        let mut s = end + 1;
-        while s < flat_len && chars[s].is_whitespace() {
-            s += 1;
-        }
-        if s >= flat_len {
-            if win_hi < last_content {
-                return sentence_text_object_full(ed, inner, count);
-            }
-            break;
-        }
-        let mut e = s;
-        while e < flat_len {
-            if is_terminator(chars[e]) {
-                while e + 1 < flat_len && is_terminator(chars[e + 1]) {
-                    e += 1;
-                }
-                if e + 1 >= flat_len || chars[e + 1].is_whitespace() {
-                    break;
-                }
-            }
-            e += 1;
-        }
-        if e == flat_len && win_hi < last_content {
-            return sentence_text_object_full(ed, inner, count);
-        }
-        end = e;
-        rem -= 1;
-    }
-    // Inclusive end → exclusive end_idx.
-    let end_idx = (end + 1).min(flat_len);
-
-    let final_end = if inner {
-        // `is`: end at the last non-blank char. When the walk ran off the
-        // buffer (no terminator before end-of-line), `end_idx` sits one past
-        // the trailing whitespace; nvim excludes that from an inner sentence.
-        let mut e = end_idx;
-        while e > start && chars[e - 1].is_whitespace() {
-            e -= 1;
-        }
-        e
-    } else {
-        // `as`: include trailing whitespace (but stop before the next
-        // newline so we don't gobble a paragraph break — vim keeps
-        // sentences within a paragraph for the trailing-ws extension).
-        let mut e = end_idx;
-        while e < flat_len && chars[e].is_whitespace() && chars[e] != '\n' {
-            e += 1;
-        }
-        e
     };
+    // A walk that ran off the window's edge is only trustworthy when the
+    // window covers the whole buffer; otherwise recompute on the full buffer.
+    if clipped && !whole_buffer {
+        return sentence_text_object_full(ed, inner, count);
+    }
 
-    Some((idx_to_pos(start), idx_to_pos(final_end)))
+    Some((idx_to_pos(start), idx_to_pos(end)))
 }
 
 /// The whole-buffer `is`/`as` scan — the fallback for windowed
@@ -849,102 +745,253 @@ fn sentence_text_object_full<H: hjkl_engine::types::Host>(
     }
 
     let cursor_idx = pos_to_idx(ed.cursor()).min(chars.len() - 1);
-    let is_terminator = |c: char| matches!(c, '.' | '?' | '!');
 
-    // Walk backward from cursor to find the start of the current
-    // sentence. A boundary is: whitespace immediately after a run of
-    // terminators (or start-of-buffer).
-    let mut start = cursor_idx;
-    while start > 0 {
-        let prev = chars[start - 1];
-        if prev.is_whitespace() {
-            // Check if the whitespace follows a terminator — if so,
-            // we've crossed a sentence boundary; the sentence begins
-            // at the first non-whitespace cell *after* this run.
-            let mut k = start - 1;
-            while k > 0 && chars[k - 1].is_whitespace() {
-                k -= 1;
-            }
-            if k > 0 && is_terminator(chars[k - 1]) {
-                break;
-            }
-        }
-        start -= 1;
-    }
-    // Skip leading whitespace (vim doesn't include it in the
-    // sentence body).
-    while start < chars.len() && chars[start].is_whitespace() {
-        start += 1;
-    }
-    if start >= chars.len() {
-        return None;
-    }
+    let (start, end, _) = sentence_text_object_on_chars(&chars, cursor_idx, inner, count)?;
 
-    // Walk forward to the sentence end (last terminator before the
-    // next whitespace boundary).
-    let mut end = start;
-    while end < chars.len() {
-        if is_terminator(chars[end]) {
-            // Consume any consecutive terminators (e.g. `?!`).
-            while end + 1 < chars.len() && is_terminator(chars[end + 1]) {
-                end += 1;
-            }
-            // If followed by whitespace or end-of-buffer, that's the
-            // boundary.
-            if end + 1 >= chars.len() || chars[end + 1].is_whitespace() {
-                break;
-            }
-        }
-        end += 1;
+    Some((idx_to_pos(start), idx_to_pos(end)))
+}
+
+/// Flat-char `decl`: step back one character, skipping an internal `\n`
+/// (vim's NUL at end-of-line), so positions stay on real characters.
+fn sentence_decl(chars: &[char], i: usize) -> Option<usize> {
+    if i == 0 {
+        None
+    } else if chars[i - 1] == '\n' {
+        i.checked_sub(2)
+    } else {
+        Some(i - 1)
     }
-    // `Nis` / `Nas`: extend across `count - 1` further sentences, skipping the
-    // whitespace between each and walking to the next sentence's end.
-    let mut rem = count - 1;
-    while rem > 0 {
-        let mut s = end + 1;
-        while s < chars.len() && chars[s].is_whitespace() {
-            s += 1;
-        }
-        if s >= chars.len() {
+}
+
+/// Flat-char `incl`: step forward one character, skipping an internal `\n`.
+fn sentence_incl(chars: &[char], i: usize) -> Option<usize> {
+    let n = chars.len();
+    if i + 1 >= n {
+        None
+    } else if chars[i + 1] == '\n' {
+        if i + 2 >= n { None } else { Some(i + 2) }
+    } else {
+        Some(i + 1)
+    }
+}
+
+/// vim `find_first_blank`: walk back over same-line blanks to the first blank
+/// of the run ending at `i`.
+fn sentence_first_blank(chars: &[char], i: usize) -> usize {
+    let mut p = i;
+    while let Some(q) = sentence_decl(chars, p) {
+        if chars[q] == ' ' || chars[q] == '\t' {
+            p = q;
+        } else {
             break;
         }
-        let mut e = s;
-        while e < chars.len() {
-            if is_terminator(chars[e]) {
-                while e + 1 < chars.len() && is_terminator(chars[e + 1]) {
-                    e += 1;
+    }
+    p
+}
+
+/// Flat port of vim's `findsent(FORWARD, 1)`: the next sentence start (first
+/// non-blank cell) strictly after `pos`, or the blank-line / end-of-buffer
+/// landing when no next sentence exists.
+fn sentence_next_start(chars: &[char], pos: usize, clipped: &mut bool) -> usize {
+    let len = chars.len();
+    if pos >= len {
+        *clipped = true;
+        return len;
+    }
+    let is_ws = |c: char| c == ' ' || c == '\t';
+    let is_punct = |c: char| matches!(c, '.' | '!' | '?' | ')' | ']' | '"' | '\'');
+    let is_term = |c: char| matches!(c, '.' | '!' | '?');
+    let is_close = |c: char| matches!(c, ')' | ']' | '"' | '\'');
+
+    // (1) Back up over white space and punctuation to the previous
+    // non-white, non-punctuation character (vim's "go back" loop).
+    let mut p = pos;
+    let mut found_dot = false;
+    loop {
+        let c = chars[p];
+        if !is_ws(c) && !is_punct(c) {
+            break;
+        }
+        let Some(tp) = sentence_decl(chars, p) else {
+            break;
+        };
+        if found_dot {
+            break;
+        }
+        if is_term(c) {
+            found_dot = true;
+        }
+        if is_close(c) && !is_punct(chars[tp]) {
+            break;
+        }
+        p = tp;
+    }
+
+    // (2) Scan forward for the sentence's terminator boundary, then skip
+    // same-line blanks (and the line break of a sentence ending at EOL) to
+    // the next sentence start.
+    let mut e = p;
+    while e < len {
+        let c = chars[e];
+        if is_term(c) {
+            let mut t = e;
+            while t + 1 < len && is_term(chars[t + 1]) {
+                t += 1;
+            }
+            while t + 1 < len && is_close(chars[t + 1]) {
+                t += 1;
+            }
+            if t + 1 >= len {
+                return len;
+            }
+            let n = chars[t + 1];
+            if is_ws(n) {
+                let mut k = t + 1;
+                while k < len && is_ws(chars[k]) {
+                    k += 1;
                 }
-                if e + 1 >= chars.len() || chars[e + 1].is_whitespace() {
+                return k;
+            } else if n == '\n' {
+                let mut k = t + 2;
+                while k < len && is_ws(chars[k]) {
+                    k += 1;
+                }
+                return k;
+            }
+            e = t + 1;
+        } else {
+            e += 1;
+        }
+    }
+    *clipped = true;
+    len
+}
+
+/// True when `i` sits within the leading white space of its line (vim's
+/// `inindent` at column 0 of the object start decides whether the operator's
+/// column-zero adjustment keeps or drops the trailing line break).
+fn sentence_at_line_leading_ws(chars: &[char], i: usize) -> bool {
+    let mut ls = i;
+    while ls > 0 && chars[ls - 1] != '\n' {
+        ls -= 1;
+    }
+    (ls..i).all(|k| chars[k] == ' ' || chars[k] == '\t')
+}
+
+/// The counted `is` / `as` scan over a flat char slice, shared by the windowed
+/// and whole-buffer paths. Mirrors vim's `current_sent`: it walks sentence
+/// bodies and same-line separators as alternating units (vim's `findsent_forward`),
+/// so an even count ends after a separator and an over-run caps at the buffer
+/// end. Returns `(start, end_exclusive)` flat indices plus whether the walk ran
+/// off the edge of `chars` (only meaningful for a window that is not the whole
+/// buffer).
+fn sentence_text_object_on_chars(
+    chars: &[char],
+    cursor_idx: usize,
+    inner: bool,
+    count: usize,
+) -> Option<(usize, usize, bool)> {
+    let len = chars.len();
+    if len == 0 {
+        return None;
+    }
+    let count = count.max(1);
+    let cursor_idx = cursor_idx.min(len - 1);
+    let is_ws = |c: char| c == ' ' || c == '\t' || c == '\n';
+    let is_term = |c: char| matches!(c, '.' | '?' | '!');
+    let mut clipped = false;
+
+    // Cursor on white space immediately after a terminator selects the blank
+    // run itself as the first unit (vim's `start_blank` path).
+    let mut blank = false;
+    if is_ws(chars[cursor_idx]) {
+        let mut k = cursor_idx;
+        while k > 0 && is_ws(chars[k - 1]) {
+            k -= 1;
+        }
+        if k > 0 && is_term(chars[k - 1]) {
+            blank = true;
+        }
+    }
+
+    let start = if blank {
+        sentence_first_blank(chars, cursor_idx)
+    } else {
+        let mut s = cursor_idx;
+        while s > 0 {
+            let prev = chars[s - 1];
+            if is_ws(prev) {
+                let mut k = s - 1;
+                while k > 0 && is_ws(chars[k - 1]) {
+                    k -= 1;
+                }
+                if k > 0 && is_term(chars[k - 1]) {
                     break;
                 }
             }
-            e += 1;
+            s -= 1;
         }
-        end = e;
-        rem -= 1;
-    }
-    // Inclusive end → exclusive end_idx.
-    let end_idx = (end + 1).min(chars.len());
-
-    let final_end = if inner {
-        // `is`: end at the last non-blank char (see the windowed path).
-        let mut e = end_idx;
-        while e > start && chars[e - 1].is_whitespace() {
-            e -= 1;
+        if s == 0 {
+            clipped = true;
         }
-        e
-    } else {
-        // `as`: include trailing whitespace (but stop before the next
-        // newline so we don't gobble a paragraph break — vim keeps
-        // sentences within a paragraph for the trailing-ws extension).
-        let mut e = end_idx;
-        while e < chars.len() && chars[e].is_whitespace() && chars[e] != '\n' {
-            e += 1;
+        while s < len && is_ws(chars[s]) {
+            s += 1;
         }
-        e
+        if s >= len {
+            return None;
+        }
+        s
     };
 
-    Some((idx_to_pos(start), idx_to_pos(final_end)))
+    // `as` walks twice as many units; a blank start already consumed its blank
+    // as the first unit.
+    let ncount = if !inner {
+        count * 2
+    } else if blank {
+        count - 1
+    } else {
+        count
+    };
+
+    let mut pos = if blank {
+        sentence_next_start(chars, cursor_idx, &mut clipped)
+    } else {
+        start
+    };
+    if ncount == 0 {
+        // Blank start with `count == 1` (`is` only): vim steps back from the
+        // next sentence start, so the object is exactly the blank run.
+        pos = sentence_decl(chars, pos).unwrap_or(pos);
+    }
+    let mut at_start_sent = true;
+    let mut remaining = ncount;
+    while remaining > 0 {
+        pos = sentence_next_start(chars, pos, &mut clipped);
+        if at_start_sent {
+            pos = sentence_first_blank(chars, pos);
+        }
+        if remaining == 1 || at_start_sent {
+            match sentence_decl(chars, pos) {
+                Some(d) => pos = d,
+                None => clipped = true,
+            }
+        }
+        at_start_sent = !at_start_sent;
+        remaining -= 1;
+    }
+
+    // Exclusive end: vim moves one character past (skipping a NUL) and then,
+    // when that lands at the start of a line and the object did not begin in
+    // indentation, backs the trailing line break out again.
+    let raw_end = sentence_incl(chars, pos).unwrap_or(len);
+    let at_line_start = raw_end > 0 && chars[raw_end - 1] == '\n';
+    let end = if at_line_start && !sentence_at_line_leading_ws(chars, start) {
+        raw_end - 1
+    } else {
+        raw_end
+    };
+
+    Some((start, end, clipped))
 }
 /// `it` / `at` — XML tag pair text object. Builds a flat char index of
 /// the buffer, walks `<...>` tokens to pair tags via a stack, and
@@ -2126,6 +2173,47 @@ mod tests {
         assert_eq!(sentence_text_object(&ed, false, 1), Some(((0, 0), (0, 10))));
     }
 
+    /// Counted `is` walks body / same-line-separator units, so an even count
+    /// ends after a separator (`2is` = sentence + following space).
+    #[test]
+    fn sentence_text_object_counted_inner_alternates_units() {
+        let mut ed = make_editor("aaaa. bbbb. cccc.");
+        ed.set_cursor_quiet(0, 0);
+        assert_eq!(sentence_text_object(&ed, true, 1), Some(((0, 0), (0, 5))));
+        assert_eq!(sentence_text_object(&ed, true, 2), Some(((0, 0), (0, 6))));
+        assert_eq!(sentence_text_object(&ed, true, 3), Some(((0, 0), (0, 11))));
+        assert_eq!(sentence_text_object(&ed, true, 4), Some(((0, 0), (0, 12))));
+        // Over-run caps at the buffer end rather than a best-effort extension
+        // or a failure.
+        assert_eq!(sentence_text_object(&ed, true, 9), Some(((0, 0), (0, 17))));
+    }
+
+    /// Counted `as` bundles each body with its following separator, so
+    /// `2as` = two (sentence + trailing space) units.
+    #[test]
+    fn sentence_text_object_counted_around_bundles_separator() {
+        let mut ed = make_editor("aaaa. bbbb. cccc.");
+        ed.set_cursor_quiet(0, 0);
+        assert_eq!(sentence_text_object(&ed, false, 1), Some(((0, 0), (0, 6))));
+        assert_eq!(sentence_text_object(&ed, false, 2), Some(((0, 0), (0, 12))));
+        assert_eq!(sentence_text_object(&ed, false, 3), Some(((0, 0), (0, 17))));
+    }
+
+    /// A blank start (cursor on the separator whitespace) selects the blank
+    /// run as its first unit, matching nvim (`1is` = the space, `2is` = space
+    /// + next sentence).
+    #[test]
+    fn sentence_text_object_counted_blank_start() {
+        let mut ed =
+            make_editor("one two three. four five. six. seven eight nine.\n ten eleven twelve.");
+        // Cursor on the space after "six.".
+        ed.set_cursor_quiet(0, 30);
+        assert_eq!(sentence_text_object(&ed, true, 1), Some(((0, 30), (0, 31))));
+        assert_eq!(sentence_text_object(&ed, true, 2), Some(((0, 30), (0, 48))));
+        assert_eq!(sentence_text_object(&ed, true, 3), Some(((0, 30), (1, 1))));
+        assert_eq!(sentence_text_object(&ed, true, 4), Some(((0, 30), (1, 19))));
+    }
+
     /// `(` / `)` boundary walking across a blank-line paragraph break.
     /// `sentence_boundary` must find the same (row, col) landings the
     /// full-buffer scan produced.
@@ -2265,113 +2353,6 @@ mod tests {
         }
     }
 
-    /// Reference: the pre-window full-buffer `sentence_text_object`.
-    fn old_sentence_text_object<H: hjkl_engine::types::Host>(
-        ed: &Editor<hjkl_buffer::View, H>,
-        inner: bool,
-        count: usize,
-    ) -> Option<((usize, usize), (usize, usize))> {
-        let count = count.max(1);
-        let rope = hjkl_engine::types::Query::rope(ed.buffer());
-        let n_lines = rope.len_lines();
-        if n_lines == 0 {
-            return None;
-        }
-        let line_lens: Vec<usize> = (0..n_lines)
-            .map(|r| rope_line_to_str(&rope, r).chars().count())
-            .collect();
-        let pos_to_idx = |pos: (usize, usize)| -> usize {
-            let idx: usize = line_lens.iter().take(pos.0).map(|&len| len + 1).sum();
-            idx + pos.1
-        };
-        let idx_to_pos = |mut idx: usize| -> (usize, usize) {
-            for (r, &len) in line_lens.iter().enumerate() {
-                if idx <= len {
-                    return (r, idx);
-                }
-                idx -= len + 1;
-            }
-            let last = n_lines.saturating_sub(1);
-            (last, line_lens[last])
-        };
-        let mut chars: Vec<char> = rope.chars().collect();
-        if chars.last() == Some(&'\n') {
-            chars.pop();
-        }
-        if chars.is_empty() {
-            return None;
-        }
-        let cursor_idx = pos_to_idx(ed.cursor()).min(chars.len() - 1);
-        let is_terminator = |c: char| matches!(c, '.' | '?' | '!');
-        let mut start = cursor_idx;
-        while start > 0 {
-            let prev = chars[start - 1];
-            if prev.is_whitespace() {
-                let mut k = start - 1;
-                while k > 0 && chars[k - 1].is_whitespace() {
-                    k -= 1;
-                }
-                if k > 0 && is_terminator(chars[k - 1]) {
-                    break;
-                }
-            }
-            start -= 1;
-        }
-        while start < chars.len() && chars[start].is_whitespace() {
-            start += 1;
-        }
-        if start >= chars.len() {
-            return None;
-        }
-        let mut end = start;
-        while end < chars.len() {
-            if is_terminator(chars[end]) {
-                while end + 1 < chars.len() && is_terminator(chars[end + 1]) {
-                    end += 1;
-                }
-                if end + 1 >= chars.len() || chars[end + 1].is_whitespace() {
-                    break;
-                }
-            }
-            end += 1;
-        }
-        let mut rem = count - 1;
-        while rem > 0 {
-            let mut s = end + 1;
-            while s < chars.len() && chars[s].is_whitespace() {
-                s += 1;
-            }
-            if s >= chars.len() {
-                break;
-            }
-            let mut e = s;
-            while e < chars.len() {
-                if is_terminator(chars[e]) {
-                    while e + 1 < chars.len() && is_terminator(chars[e + 1]) {
-                        e += 1;
-                    }
-                    if e + 1 >= chars.len() || chars[e + 1].is_whitespace() {
-                        break;
-                    }
-                }
-                e += 1;
-            }
-            end = e;
-            rem -= 1;
-        }
-        let end_idx = (end + 1).min(chars.len());
-        let final_end = if inner {
-            end_idx
-        } else {
-            let mut e = end_idx;
-            while e < chars.len() && chars[e].is_whitespace() && chars[e] != '\n' {
-                e += 1;
-            }
-            e
-        };
-        Some((idx_to_pos(start), idx_to_pos(final_end)))
-    }
-
     /// Cursor samples for the corpus below: every cell of every row plus
     /// a couple of positions past each row's end (the cursor column is
     /// not clamped, so past-EOL cursors are valid inputs too).
@@ -2451,7 +2432,7 @@ mod tests {
     }
 
     /// The same corpus: the windowed sentence scan must produce the same
-    /// ranges as the old full-buffer scan, for `is` and `as`.
+    /// ranges as the whole-buffer scan, for `is` and `as`.
     #[test]
     fn sentence_text_object_matches_full_scan_on_corpus() {
         for buf in corpus_buffers() {
@@ -2461,7 +2442,7 @@ mod tests {
                 for inner in [true, false] {
                     assert_eq!(
                         sentence_text_object(&ed, inner, 1),
-                        old_sentence_text_object(&ed, inner, 1),
+                        sentence_text_object_full(&ed, inner, 1),
                         "buffer {:?} cursor ({row},{col}) inner={inner}",
                         buf
                     );

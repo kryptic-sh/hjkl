@@ -1847,28 +1847,16 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         let range = if let Some(landing) = reverse_landing {
             Some((landing, landing, RangeKind::Exclusive))
         } else if block_sentence_forward {
-            // In a forward VisualBlock selection, `is` advances through the
-            // sentence body and its following same-line separator as distinct
-            // count units: body, separator, next body, ….
-            let object_count = count.div_ceil(2);
-            let include_separator = count.is_multiple_of(2);
-            crate::vim::text_object_range(self, obj, !include_separator, object_count)
+            // In a forward VisualBlock selection, `is` walks sentence bodies
+            // and same-line separators as distinct count units; the shared
+            // counted-sentence scan already implements that alternation.
+            crate::vim::text_object_range(self, obj, inner, count)
         } else {
             crate::vim::text_object_range(self, obj, inner, count)
         };
-        let Some((start, mut end, kind)) = range else {
+        let Some((start, end, kind)) = range else {
             return;
         };
-        if obj == TextObject::Sentence
-            && inner
-            && count > 1
-            && crate::vim_state::vim(self).mode == FsmMode::Visual
-            && let Some((_, around_end, _)) = crate::vim::text_object_range(self, obj, false, 1)
-        {
-            // `v2is` includes the current sentence's following separator;
-            // sentence counts in Visual mode retain Vim's inclusive endpoint.
-            end = around_end;
-        }
         // B6: `:h v_ip` — when the selection ALREADY exactly equals this
         // text object's natural bounds (the user is re-applying `ip`/`ap`/
         // etc. to a selection it already produced, e.g. `vipip`), the
