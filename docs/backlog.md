@@ -3058,23 +3058,7 @@ verified its findings against nvim 0.12.5 directly.
 
 ### Findings — ranked
 
-1. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
-   vim's formatter preserves both**
-   (`crates/hjkl-vim/src/vim/text_object_ops.rs:99-139`, `greedy_wrap`'s
-   `split_whitespace()` — verified against nvim 0.12.5 with pinned `textwidth`).
-
-   ```
-   Repro: tw=79, line "aaa  bbb   ccc", `gqq`
-   Expect (nvim): unchanged     Actual: "aaa bbb ccc"
-   ```
-
-   Probed nvim 0.12.5 further: `gq` preserves interior space runs and trailing
-   whitespace both when a line already fits and when it wraps (`tw=10`,
-   `"aaa  bbb   ccc  ddd  eee"` → `"aaa  bbb"` / `"ccc  ddd"` / `"eee"`). The
-   fix needs a whitespace-preserving wrap (tokenise word + gap runs, keep gaps
-   within a line, drop the gap at a break) — a larger change than a one-liner.
-
-2. **LOW — `ap` with a blank-line cursor or a trailing blank run at EOF still
+1. **LOW — `ap` with a blank-line cursor or a trailing blank run at EOF still
    diverges (found 2026-08-30, during the counted-`ip`/`ap` fix).** The
    counted-`ip`/`ap` over-run guard above does not fire on these (they reach
    `rem == 0`), so they are a distinct `ap`-semantics gap, not the over-run
@@ -3085,7 +3069,7 @@ verified its findings against nvim 0.12.5 directly.
    - `dap` on `"a\n\n\n"` @ (0,0): nvim `""`, hjkl `"\n"`.
    - `d2ap` on `"a\n\n\n"` @ (0,0): nvim no-op, hjkl `""`.
 
-3. **LOW — `trimmed_trailing_whitespace` can't trim CRLF trailing whitespace
+2. **LOW — `trimmed_trailing_whitespace` can't trim CRLF trailing whitespace
    (corollary of the fixed CRLF-splice finding).**
    `apps/hjkl/src/app/ex_dispatch.rs:33` uses `trim_end_matches([' ', '\t'])`;
    on a CRLF row `"abc  \r"` the trailing `\r` shields the spaces, so they are
@@ -3118,10 +3102,11 @@ sentence-orientation item.
   over-run matches; `s`/`3s` fuzzer divergences are the deliberate
   `motion_sneak` default (corpus ships `:set nomotion_sneak` fallbacks); the
   fuzzer's `gq` buffer diffs are harness artifacts (nvim `gq` no-ops with
-  `textwidth` unset — finding 2 was verified by direct probes instead); the
-  printed `ye`/`dap`/`zfGx`/`3J`/`viwc` diffs replay as matches (output-format
-  misreads); visual `*`/`#` match in all three modes; `search_prompt.rs` offset
-  arithmetic traced sound; bracket-clamp and paragraph-extend guards correct.
+  `textwidth` unset — the `gq` whitespace behavior was verified by direct probes
+  instead); the printed `ye`/`dap`/`zfGx`/`3J`/`viwc` diffs replay as matches
+  (output-format misreads); visual `*`/`#` match in all three modes;
+  `search_prompt.rs` offset arithmetic traced sound; bracket-clamp and
+  paragraph-extend guards correct.
 - C: `apply_substitute` splice/range consistency for every ropey separator;
   empty-range `:s` returns before the splice; discarded `apply_edit` result
   unreachable via `do_replace`; `rebase_marks_after_row_growth` reverse
