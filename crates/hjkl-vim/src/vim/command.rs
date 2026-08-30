@@ -202,6 +202,26 @@ pub fn do_char_delete<H: hjkl_engine::types::Host>(
     count: usize,
 ) {
     use hjkl_buffer::{Edit, MotionKind, Position};
+    // `x` at COLUMN 0 of a CLOSED fold deletes the whole fold linewise (vim
+    // `:h fold`: a closed fold is included as a whole). At column > 0 nvim
+    // keeps normal charwise delete. `X` is a *backward* delete and is never
+    // promoted — nvim leaves it charwise (a no-op at column 0), even on a
+    // closed fold.
+    if forward {
+        let (cursor_row, cursor_col) = ed.cursor();
+        let (fold_start, fold_end) =
+            expand_linewise_over_closed_folds(ed.buffer(), cursor_row, cursor_row);
+        if cursor_col == 0 && (fold_start, fold_end) != (cursor_row, cursor_row) {
+            run_operator_over_range(
+                ed,
+                Operator::Delete,
+                (fold_start, 0),
+                (fold_end, 0),
+                RangeKind::Linewise,
+            );
+            return;
+        }
+    }
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
     // Collect deleted chars so we can write them to the unnamed register
@@ -1308,5 +1328,81 @@ mod g_ampersand_tests {
         apply_after_g(&mut ed, '&', 1);
         assert_eq!(buf_line(&ed, 0), "foo");
         assert_eq!(buf_line(&ed, 1), "bar");
+    }
+}
+
+#[cfg(test)]
+mod fold_char_delete_tests {
+    use hjkl_buffer::{View, rope_line_str};
+    use hjkl_engine::types::FoldOp;
+    use hjkl_engine::{DefaultHost, Editor, Options};
+
+    use super::do_char_delete;
+
+    fn make_editor(content: &str, fold: Option<(usize, usize)>) -> Editor<View, DefaultHost> {
+        let mut ed = crate::vim::vim_editor(
+            View::from_str(content),
+            DefaultHost::new(),
+            Options::default(),
+        );
+        ed.jump_cursor(0, 0);
+        if let Some((start, end)) = fold {
+            ed.apply_fold_op(FoldOp::Add {
+                start_row: start,
+                end_row: end,
+                closed: true,
+            });
+        }
+        ed
+    }
+
+    fn full_buffer(ed: &Editor<View, DefaultHost>) -> String {
+        let rope = ed.buffer().rope();
+        (0..rope.len_lines())
+            .map(|i| rope_line_str(&rope, i).to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn x_on_closed_fold_deletes_whole_fold_linewise() {
+        let mut ed = make_editor("abc\ndef\nghi\n", Some((0, 1)));
+        do_char_delete(&mut ed, true, 1);
+        assert_eq!(full_buffer(&ed), "ghi\n");
+        assert_eq!(ed.yank(), "abc\ndef\n");
+        assert_eq!(ed.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn backward_char_delete_on_closed_fold_is_not_promoted() {
+        let mut ed = make_editor("abc\ndef\nghi\n", Some((0, 1)));
+        do_char_delete(&mut ed, false, 1);
+        assert_eq!(full_buffer(&ed), "abc\ndef\nghi\n");
+        assert_eq!(ed.yank(), "");
+    }
+
+    #[test]
+    fn x_on_single_line_fold_stays_charwise() {
+        let mut ed = make_editor("abc\ndef\nghi\n", Some((0, 0)));
+        do_char_delete(&mut ed, true, 1);
+        assert_eq!(full_buffer(&ed), "bc\ndef\nghi\n");
+        assert_eq!(ed.yank(), "a");
+    }
+
+    #[test]
+    fn x_on_plain_buffer_deletes_one_char() {
+        let mut ed = make_editor("abc\ndef\nghi\n", None);
+        do_char_delete(&mut ed, true, 1);
+        assert_eq!(full_buffer(&ed), "bc\ndef\nghi\n");
+        assert_eq!(ed.yank(), "a");
+    }
+
+    #[test]
+    fn x_at_col1_on_closed_fold_stays_charwise() {
+        let mut ed = make_editor("abc\ndef\nghi\n", Some((0, 1)));
+        ed.jump_cursor(0, 1);
+        do_char_delete(&mut ed, true, 1);
+        assert_eq!(full_buffer(&ed), "ac\ndef\nghi\n");
+        assert_eq!(ed.yank(), "b");
     }
 }

@@ -92,3 +92,135 @@ keys = "zf2jg??"
 foldmethod = "manual"
 expected_buffer = "a\no\np\nq\ne\n"
 expected_mode = "normal"
+
+# ── Charwise operators on a CLOSED fold ───────────────────────────────────────
+#
+# A *charwise* operator with the cursor on a closed fold also acts on the whole
+# fold (`:h fold`: "a closed fold is included as a whole"). Delete (`x`/`dw`/
+# `dW`) becomes linewise — the register carries a trailing newline, like `dd`.
+# Yank (`yw`/`yW`) and change (`cw`) consume the fold as a whole but keep a
+# CHARWISE register (no trailing newline), matching nvim. A single-line fold
+# does not expand (there is nothing beyond the one row). `X` is a backward
+# delete and is never promoted. Expected buffers/registers captured from
+# `nvim --headless` 0.12.5.
+
+# `x` deletes the whole 2-line fold, linewise register.
+[[cases]]
+name = "x_on_closed_fold_deletes_whole_fold"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "zfjx"
+foldmethod = "manual"
+expected_buffer = "ghi\n"
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef\n"]
+
+# `X` on the fold's start column is a backward delete — never promoted (no-op).
+[[cases]]
+name = "capital_x_on_closed_fold_start_is_noop"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "zfjX"
+foldmethod = "manual"
+expected_buffer = "abc\ndef\nghi\n"
+expected_mode = "normal"
+expected_register = ['"', ""]
+
+# `dw` deletes the whole 2-line fold, linewise register.
+[[cases]]
+name = "dw_on_closed_fold_deletes_whole_fold"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "zfjdw"
+foldmethod = "manual"
+expected_buffer = "ghi\n"
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef\n"]
+
+# `dW` (big-word) behaves the same as `dw` on a fold.
+[[cases]]
+name = "big_word_dW_on_closed_fold_deletes_whole_fold"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "zfjdW"
+foldmethod = "manual"
+expected_buffer = "ghi\n"
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef\n"]
+
+# `yw` yanks the whole fold but as a CHARWISE register (no trailing newline).
+[[cases]]
+name = "yw_on_closed_fold_yanks_whole_fold_charwise"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "zfjyw"
+foldmethod = "manual"
+expected_buffer = "abc\ndef\nghi\n"
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef"]
+
+# `yW` (big-word) behaves the same as `yw` on a fold.
+[[cases]]
+name = "big_word_yW_on_closed_fold_yanks_whole_fold_charwise"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "zfjyW"
+foldmethod = "manual"
+expected_buffer = "abc\ndef\nghi\n"
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef"]
+
+# `gUw` uppercases the whole fold linewise (case ops record no register).
+[[cases]]
+name = "gUw_on_closed_fold_uppercases_whole_fold"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "zfjgUw"
+foldmethod = "manual"
+expected_buffer = "ABC\nDEF\nghi\n"
+expected_mode = "normal"
+
+# `cw` changes the whole fold but keeps a CHARWISE register (no trailing newline).
+[[cases]]
+name = "cw_on_closed_fold_changes_whole_fold_charwise_register"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "zfjcw"
+foldmethod = "manual"
+expected_buffer = "\nghi\n"
+expected_mode = "insert"
+expected_register = ['"', "abc\ndef"]
+
+# A single-line fold does not expand: `x` stays a one-char delete.
+[[cases]]
+name = "single_line_fold_x_stays_charwise"
+initial_buffer = "abc\n"
+initial_cursor = [0, 0]
+keys = "zf$x"
+foldmethod = "manual"
+expected_buffer = "bc\n"
+expected_mode = "normal"
+expected_register = ['"', "a"]
+
+# At column > 0 of a closed fold, nvim keeps normal charwise semantics — only
+# column 0 triggers the whole-fold promotion.
+[[cases]]
+name = "x_at_col1_on_closed_fold_stays_charwise"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "zfjlx"
+foldmethod = "manual"
+expected_buffer = "ac\ndef\nghi\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+expected_register = ['"', "b"]
+
+[[cases]]
+name = "dw_at_col1_on_closed_fold_stays_charwise"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "zfjldw"
+foldmethod = "manual"
+expected_buffer = "a\ndef\nghi\n"
+expected_mode = "normal"
+expected_register = ['"', "bc"]

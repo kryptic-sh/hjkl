@@ -20,6 +20,10 @@ patch bumps.
   on a buffer with fewer paragraph units than the count previously best-effort
   extended to the whole buffer; the object now fails, so the operator aborts and
   the selection stays put, matching nvim.
+- **Charwise operators act on a whole closed fold at column 0 like nvim.** `x`/
+  `dw`/`dW` now delete a closed fold linewise and `yw`/`yW`/`cw` consume it
+  whole (charwise register) instead of acting on one char/word; at column > 0
+  normal charwise semantics are kept, matching nvim.
 
 ## [0.41.5] - 2026-08-30
 

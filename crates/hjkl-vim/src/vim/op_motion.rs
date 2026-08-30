@@ -15,6 +15,46 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     motion: &Motion,
     count: usize,
 ) {
+    // A charwise operator whose cursor sits at COLUMN 0 of a CLOSED fold acts
+    // on the whole fold (vim `:h fold`: "a closed fold is included as a
+    // whole"). Run it as a single range before any motion is applied — the
+    // motion is irrelevant once the fold wins. Delete/case/indent become
+    // linewise (so `dw`/`x`/`gUw` record the fold with a trailing newline, like
+    // `dd`); Yank/Change run charwise over the fold so `yw`/`cw` record the
+    // fold text WITHOUT a trailing newline (nvim keeps those registers
+    // charwise even though the fold is consumed whole). At column > 0 nvim
+    // keeps the normal charwise semantics — only column 0 triggers the whole-
+    // fold promotion. `Comment` is dispatched to `toggle_comment_range` below,
+    // so it keeps its normal motion-driven path.
+    if op != Operator::Comment {
+        let (cursor_row, cursor_col) = ed.cursor();
+        let (fold_start, fold_end) =
+            expand_linewise_over_closed_folds(ed.buffer(), cursor_row, cursor_row);
+        if cursor_col == 0 && (fold_start, fold_end) != (cursor_row, cursor_row) {
+            match op {
+                Operator::Yank | Operator::Change => {
+                    let last_col = buf_line_chars(ed.buffer(), fold_end).saturating_sub(1);
+                    run_operator_over_range(
+                        ed,
+                        op,
+                        (fold_start, 0),
+                        (fold_end, last_col),
+                        RangeKind::Inclusive,
+                    );
+                }
+                _ => {
+                    run_operator_over_range(
+                        ed,
+                        op,
+                        (fold_start, 0),
+                        (fold_end, 0),
+                        RangeKind::Linewise,
+                    );
+                }
+            }
+            return;
+        }
+    }
     let mut start = ed.cursor();
     // Where the cursor is parked before the operator runs. Held separately
     // from `start` because the exclusive-motion adjustment below can move the
@@ -511,5 +551,101 @@ pub fn run_operator_over_range<H: hjkl_engine::types::Host>(
             // Comment is dispatched through Editor::toggle_comment_range.
             // Reaching this arm is a caller mistake — silently no-op.
         }
+    }
+}
+
+#[cfg(test)]
+mod fold_charwise_tests {
+    use hjkl_buffer::{View, rope_line_str};
+    use hjkl_engine::types::FoldOp;
+    use hjkl_engine::{DefaultHost, Editor, Options};
+    use hjkl_vim_types::{Mode, Motion, Operator};
+
+    use super::apply_op_with_motion;
+
+    fn make_editor(content: &str, fold: Option<(usize, usize)>) -> Editor<View, DefaultHost> {
+        let mut ed = crate::vim::vim_editor(
+            View::from_str(content),
+            DefaultHost::new(),
+            Options::default(),
+        );
+        ed.jump_cursor(0, 0);
+        if let Some((start, end)) = fold {
+            ed.apply_fold_op(FoldOp::Add {
+                start_row: start,
+                end_row: end,
+                closed: true,
+            });
+        }
+        ed
+    }
+
+    fn full_buffer(ed: &Editor<View, DefaultHost>) -> String {
+        let rope = ed.buffer().rope();
+        (0..rope.len_lines())
+            .map(|i| rope_line_str(&rope, i).to_string())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn dw_on_closed_fold_deletes_whole_fold_linewise() {
+        let mut ed = make_editor("abc\ndef\nghi\n", Some((0, 1)));
+        apply_op_with_motion(&mut ed, Operator::Delete, &Motion::WordFwd, 1);
+        assert_eq!(full_buffer(&ed), "ghi\n");
+        assert_eq!(ed.yank(), "abc\ndef\n");
+        assert_eq!(ed.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn yw_on_closed_fold_yanks_whole_fold_charwise() {
+        let mut ed = make_editor("abc\ndef\nghi\n", Some((0, 1)));
+        apply_op_with_motion(&mut ed, Operator::Yank, &Motion::WordFwd, 1);
+        assert_eq!(full_buffer(&ed), "abc\ndef\nghi\n");
+        assert_eq!(ed.yank(), "abc\ndef");
+        assert_eq!(ed.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn g_upper_w_on_closed_fold_uppercases_whole_fold_linewise() {
+        let mut ed = make_editor("abc\ndef\nghi\n", Some((0, 1)));
+        apply_op_with_motion(&mut ed, Operator::Uppercase, &Motion::WordFwd, 1);
+        assert_eq!(full_buffer(&ed), "ABC\nDEF\nghi\n");
+        assert_eq!(ed.yank(), "");
+    }
+
+    #[test]
+    fn cw_on_closed_fold_changes_whole_fold_with_charwise_register() {
+        let mut ed = make_editor("abc\ndef\nghi\n", Some((0, 1)));
+        apply_op_with_motion(&mut ed, Operator::Change, &Motion::WordFwd, 1);
+        assert_eq!(full_buffer(&ed), "\nghi\n");
+        assert_eq!(ed.yank(), "abc\ndef");
+        assert_eq!(ed.cursor(), (0, 0));
+        assert_eq!(crate::vim_state::vim(&ed).mode, Mode::Insert);
+    }
+
+    #[test]
+    fn dw_on_plain_buffer_is_unchanged_charwise() {
+        let mut ed = make_editor("abc\ndef\nghi\n", None);
+        apply_op_with_motion(&mut ed, Operator::Delete, &Motion::WordFwd, 1);
+        assert_eq!(full_buffer(&ed), "\ndef\nghi\n");
+        assert_eq!(ed.yank(), "abc");
+    }
+
+    #[test]
+    fn dw_on_single_line_fold_stays_charwise() {
+        let mut ed = make_editor("abc\ndef\nghi\n", Some((0, 0)));
+        apply_op_with_motion(&mut ed, Operator::Delete, &Motion::WordFwd, 1);
+        assert_eq!(full_buffer(&ed), "\ndef\nghi\n");
+        assert_eq!(ed.yank(), "abc");
+    }
+
+    #[test]
+    fn dw_at_col1_on_closed_fold_stays_charwise() {
+        let mut ed = make_editor("abc\ndef\nghi\n", Some((0, 1)));
+        ed.jump_cursor(0, 1);
+        apply_op_with_motion(&mut ed, Operator::Delete, &Motion::WordFwd, 1);
+        assert_eq!(full_buffer(&ed), "a\ndef\nghi\n");
+        assert_eq!(ed.yank(), "bc");
     }
 }
