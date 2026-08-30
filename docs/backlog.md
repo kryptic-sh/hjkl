@@ -798,22 +798,7 @@ user-reported bug and the audit findings are the top items. Worked as slices:
 delegate → review → commit → push; each slice pruned from this list on
 completion.
 
-1. **Explorer sidebar render borking (user report 2026-08-10) — NEEDS
-   GUIDANCE.** With the cursor in the sidebar/explorer, `eee` / `llll` motions
-   that scroll the sidebar content were reported to corrupt the sidebar render.
-   Investigated twice (2026-08-10): the non-animated scroll path and the
-   animated-frame path both render correctly under the test harness — two
-   regression tests added (`scrolling_keeps_explorer_rows_aligned`,
-   `scrolling_animated_frame_keeps_explorer_rows_aligned`, commit `8682037d`)
-   fail when the animated top is not written into the render viewport. Ordinary
-   `e`/`l` motions never arm scroll animation (only
-   `scroll_full_page`/`scroll_half_page` set the hint), so the reported scenario
-   cannot animate on current main; the symptom may predate the 2026-07-16
-   smooth-scroll fix (`dbc142c3`) or be a real-terminal redraw artifact the
-   in-memory harness cannot see. Waiting on the user: build/commit they saw it
-   on, `:set scroll_duration_ms`, and whether it still reproduces on current
-   main.
-2. **SHIFT normalization divergence (tidy §11 #8) — NEEDS GUIDANCE.**
+1. **SHIFT normalization divergence (tidy §11 #8) — NEEDS GUIDANCE.**
    `chord_event_to_input` (`app/keymap.rs:186-193`) claims to mirror
    `from_crossterm` (`hjkl-keymap-tui/src/lib.rs:38-40`) but doesn't: keymap-tui
    drops SHIFT for every `Char`, the app copy only for ASCII letters — the same
