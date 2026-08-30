@@ -93,61 +93,238 @@ pub fn text_object_around_tag_bridge<H: hjkl_engine::types::Host>(
 ) -> Option<((usize, usize), (usize, usize))> {
     tag_text_object(ed, false)
 }
-/// Pure greedy word-wrap of a slice of lines to `width` chars.
-/// Returns `(original_slice, wrapped_lines)`.
-/// Blank lines are preserved as paragraph separators.
-pub fn greedy_wrap(original: &[String], width: usize) -> Vec<String> {
+/// Pure greedy word-wrap of a slice of lines to `width` display columns.
+/// Returns the wrapped lines.
+///
+/// Unlike a naive `split_whitespace` reflow, this preserves interior whitespace
+/// runs and trailing whitespace the way nvim's `gq`/`gw` does: each word carries
+/// its following gap (the whitespace between it and the next word), the gap is
+/// kept when both words land on the same line and dropped when the next word
+/// starts a new line, and the gap following the last word is kept verbatim.
+///
+/// Paragraphs are runs of non-blank lines separated by blank lines (which are
+/// preserved as empty output lines). Joining a paragraph follows nvim's
+/// `do_join` rule: the next line's leading whitespace is dropped, and a single
+/// space separates two lines unless the previous line already ends in
+/// whitespace. The first line's leading whitespace is the paragraph "leader"
+/// and is re-emitted at the start of every wrapped line. `tabstop` measures
+/// display columns, so a `\t` inside a gap advances to the next tab stop while
+/// the tab character itself is preserved in the output.
+pub fn greedy_wrap(original: &[String], width: usize, tabstop: usize) -> Vec<String> {
     let mut wrapped: Vec<String> = Vec::new();
     let mut paragraph: Vec<String> = Vec::new();
-    let flush = |para: &mut Vec<String>, out: &mut Vec<String>, width: usize| {
-        if para.is_empty() {
-            return;
-        }
-        let words = para.join(" ");
-        let mut current = String::new();
-        for word in words.split_whitespace() {
-            let extra = if current.is_empty() {
-                word.chars().count()
-            } else {
-                current.chars().count() + 1 + word.chars().count()
-            };
-            if extra > width && !current.is_empty() {
-                out.push(std::mem::take(&mut current));
-                current.push_str(word);
-            } else if current.is_empty() {
-                current.push_str(word);
-            } else {
-                current.push(' ');
-                current.push_str(word);
-            }
-        }
-        if !current.is_empty() {
-            out.push(current);
-        }
-        para.clear();
-    };
     for line in original {
         if line.trim().is_empty() {
-            flush(&mut paragraph, &mut wrapped, width);
+            flush_paragraph(&mut paragraph, &mut wrapped, width, tabstop);
             wrapped.push(String::new());
         } else {
             paragraph.push(line.clone());
         }
     }
-    flush(&mut paragraph, &mut wrapped, width);
+    flush_paragraph(&mut paragraph, &mut wrapped, width, tabstop);
     wrapped
 }
-/// Greedy word-wrap the rows in `[top, bot]` to `settings.textwidth`.
-/// Splits on blank-line boundaries so paragraph structure is
-/// preserved. Each paragraph's words are joined with single spaces
-/// before re-wrapping. Cursor lands at `(top, 0)` after the call
-/// (via `ed.restore`).
+
+/// Wrap `paragraph` (a run of non-blank lines) and append its wrapped lines to
+/// `out`, then clear the paragraph buffer.
+fn flush_paragraph(
+    paragraph: &mut Vec<String>,
+    out: &mut Vec<String>,
+    width: usize,
+    tabstop: usize,
+) {
+    if paragraph.is_empty() {
+        return;
+    }
+    out.extend(wrap_paragraph(paragraph, width, tabstop));
+    paragraph.clear();
+}
+
+/// Wrap a single paragraph (a run of non-blank lines) into lines bounded by
+/// `width` display columns.
+fn wrap_paragraph(lines: &[String], width: usize, tabstop: usize) -> Vec<String> {
+    let (leader, tokens) = paragraph_tokens(lines);
+    wrap_tokens(&tokens, &leader, width, tabstop)
+}
+
+/// Join a paragraph's lines the way nvim's `do_join` does: the next line's
+/// leading whitespace is dropped, and a single space is inserted between two
+/// lines unless the previous line already ends in whitespace (space or tab).
+fn join_paragraph(lines: &[String]) -> String {
+    let mut joined = lines[0].clone();
+    for line in &lines[1..] {
+        let stripped = line.trim_start_matches([' ', '\t']);
+        let ends_ws = joined.chars().last().is_some_and(|c| c == ' ' || c == '\t');
+        if !ends_ws {
+            joined.push(' ');
+        }
+        joined.push_str(stripped);
+    }
+    joined
+}
+
+/// Split `s` into its leading whitespace run (spaces and tabs) and the rest.
+fn split_leader(s: &str) -> (&str, &str) {
+    let mut end = 0usize;
+    for (i, c) in s.char_indices() {
+        if c == ' ' || c == '\t' {
+            end = i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    s.split_at(end)
+}
+
+/// Tokenize a joined paragraph body into `(word, following_gap)` pairs. `body`
+/// has its leading whitespace already stripped (it starts with a word), so each
+/// word is followed by its gap run — possibly empty for the last word.
+fn tokenize_body(body: &str) -> Vec<(String, String)> {
+    let mut tokens = Vec::new();
+    let mut chars = body.chars().peekable();
+    let is_ws = |c: char| c == ' ' || c == '\t';
+    while chars.peek().is_some() {
+        let mut word = String::new();
+        while let Some(&c) = chars.peek() {
+            if is_ws(c) {
+                break;
+            }
+            word.push(c);
+            chars.next();
+        }
+        let mut gap = String::new();
+        while let Some(&c) = chars.peek() {
+            if !is_ws(c) {
+                break;
+            }
+            gap.push(c);
+            chars.next();
+        }
+        tokens.push((word, gap));
+    }
+    tokens
+}
+
+/// `(leader, tokens)` for a paragraph, where `tokens` is the `(word, gap)`
+/// pairs covering the joined body (leading whitespace already in `leader`).
+fn paragraph_tokens(lines: &[String]) -> (String, Vec<(String, String)>) {
+    let joined = join_paragraph(lines);
+    let (leader, body) = split_leader(&joined);
+    (leader.to_string(), tokenize_body(body))
+}
+
+/// Display width (in screen cells) of `s`, expanding tabs to `tabstop`.
+fn display_width(s: &str, tabstop: usize) -> usize {
+    hjkl_buffer::char_col_to_visual_col(s, s.chars().count(), tabstop)
+}
+
+/// Greedy-wrap `tokens` with `leader` re-emitted at the start of every line.
+fn wrap_tokens(
+    tokens: &[(String, String)],
+    leader: &str,
+    width: usize,
+    tabstop: usize,
+) -> Vec<String> {
+    wrap_tokens_with_map(tokens, leader, width, tabstop).0
+}
+
+/// Greedy-wrap `tokens` (each `(word, following_gap)`) with `leader` re-emitted
+/// on every line. Returns the wrapped lines and, indexed by char position in
+/// the joined text (`leader` + words + gaps, in order), the output `(row, col)`
+/// of each char — `None` for gap chars dropped at a line break. Re-emitted
+/// leader chars have no joined-text counterpart and are simply absent from the
+/// map (the vector only ever indexes joined chars).
+fn wrap_tokens_with_map(
+    tokens: &[(String, String)],
+    leader: &str,
+    width: usize,
+    tabstop: usize,
+) -> (Vec<String>, Vec<Option<(usize, usize)>>) {
+    let leader_width = display_width(leader, tabstop);
+    let mut lines: Vec<String> = Vec::new();
+    let mut map: Vec<Option<(usize, usize)>> = Vec::new();
+
+    let mut current = String::new();
+    let mut first = true;
+    // `(joined char index where the pending gap starts, the gap string)`.
+    let mut pending_gap: Option<(usize, String)> = None;
+
+    // The first line's leader IS part of the joined text.
+    for ch in leader.chars() {
+        map.push(Some((0, current.chars().count())));
+        current.push(ch);
+    }
+    let mut current_width = leader_width;
+
+    for (word, gap) in tokens {
+        let word_width = display_width(word, tabstop);
+        if first {
+            for ch in word.chars() {
+                map.push(Some((lines.len(), current.chars().count())));
+                current.push(ch);
+            }
+            current_width += word_width;
+            first = false;
+        } else {
+            let (gap_start, gap_str) = pending_gap.take().expect("gap between words");
+            let gap_width = display_width(&gap_str, tabstop);
+            if current_width + gap_width + word_width > width {
+                // Break before this word: drop the pending gap (its map entries
+                // stay `None`), flush the line, and start a new line with the
+                // re-emitted leader.
+                lines.push(std::mem::take(&mut current));
+                current.push_str(leader);
+                for ch in word.chars() {
+                    map.push(Some((lines.len(), current.chars().count())));
+                    current.push(ch);
+                }
+                current_width = leader_width + word_width;
+            } else {
+                // Same line: keep the gap (back-fill its map entries).
+                for (k, ch) in gap_str.chars().enumerate() {
+                    map[gap_start + k] = Some((lines.len(), current.chars().count()));
+                    current.push(ch);
+                }
+                for ch in word.chars() {
+                    map.push(Some((lines.len(), current.chars().count())));
+                    current.push(ch);
+                }
+                current_width += gap_width + word_width;
+            }
+        }
+        // Record this word's following gap (unresolved until the next word).
+        let gap_start = map.len();
+        for _ in gap.chars() {
+            map.push(None);
+        }
+        pending_gap = Some((gap_start, gap.clone()));
+    }
+
+    // The last word's following gap (trailing whitespace) is always kept.
+    if let Some((gap_start, gap_str)) = pending_gap.take() {
+        for (k, ch) in gap_str.chars().enumerate() {
+            map[gap_start + k] = Some((lines.len(), current.chars().count()));
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    (lines, map)
+}
+/// Greedy word-wrap the rows in `[top, bot]` to `settings.textwidth`,
+/// preserving interior and trailing whitespace (see [`greedy_wrap`]).
+/// Splits on blank-line boundaries so paragraph structure is preserved.
+/// Cursor lands at the first non-blank of the last non-blank reflowed line
+/// (nvim's `gq` convention).
 pub fn reflow_rows<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
 ) {
     let width = ed.settings().textwidth.max(1);
+    let tabstop = ed.settings().tabstop.max(1);
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let n = rope.len_lines();
     let bot = bot.min(n.saturating_sub(1));
@@ -155,7 +332,7 @@ pub fn reflow_rows<H: hjkl_engine::types::Host>(
         return;
     }
     let original: Vec<String> = (top..=bot).map(|r| rope_line_to_str(&rope, r)).collect();
-    let wrapped = greedy_wrap(&original, width);
+    let wrapped = greedy_wrap(&original, width, tabstop);
 
     // vim leaves the cursor on the last NON-BLANK line of the reflowed range
     // (a trailing blank from `ap` etc. is not counted).
@@ -197,23 +374,24 @@ pub fn reflow_rows<H: hjkl_engine::types::Host>(
     move_first_non_whitespace(ed);
     ed.mark_content_dirty();
 }
-/// Same reflow as `reflow_rows` but also returns the pre-reflow slice
-/// and the wrapped lines so the caller can compute a character-preserving
-/// cursor position via [`reflow_keep_cursor`].
+/// Same reflow as `reflow_rows` but also returns the pre-reflow slice, the
+/// wrapped lines, and the `(width, tabstop)` used, so the caller can compute a
+/// character-preserving cursor position via [`reflow_keep_cursor`].
 pub fn reflow_rows_keep_cursor<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<String>, Vec<String>, usize, usize) {
     let width = ed.settings().textwidth.max(1);
+    let tabstop = ed.settings().tabstop.max(1);
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let n = rope.len_lines();
     let bot = bot.min(n.saturating_sub(1));
     if top > bot {
-        return (Vec::new(), Vec::new());
+        return (Vec::new(), Vec::new(), width, tabstop);
     }
     let original: Vec<String> = (top..=bot).map(|r| rope_line_to_str(&rope, r)).collect();
-    let wrapped = greedy_wrap(&original, width);
+    let wrapped = greedy_wrap(&original, width, tabstop);
 
     // Same single bounded splice as `reflow_rows` — see that fn for the
     // boundary-newline rationale.
@@ -241,76 +419,111 @@ pub fn reflow_rows_keep_cursor<H: hjkl_engine::types::Host>(
     ed.mutate_edit(Edit::Replace { start, end, with });
     buf_set_cursor_rc(ed.buffer_mut(), top, 0);
     ed.mark_content_dirty();
-    (original, wrapped)
+    (original, wrapped, width, tabstop)
 }
 /// Compute the new `(row, col)` that preserves the character the cursor
 /// was on after `reflow_rows` has been applied to `[top, bot]`.
 ///
-/// Algorithm (mirrors nvim's `gw` behaviour):
-/// 1. Count the char-index of `(cursor_row, cursor_col)` relative to the
-///    start of line `top` in `before_lines` (the pre-reflow snapshot).
-/// 2. Walk the `after_lines` (the wrapped output) to find the row/col
-///    that has the same char index.
-///
-/// If the cursor was past the end of the reflowed content (e.g. beyond
-/// the last char), we clamp to the last char of the last reflowed line.
+/// `before_lines`/`after_lines` are the pre-reflow snapshot and the wrapped
+/// output; `width`/`tabstop` are the same values `greedy_wrap` was called with.
+/// The cursor is mapped by character identity through the whitespace-preserving
+/// join + wrap: a cursor on a word char lands on that same char in the wrapped
+/// output; a cursor on a gap char that was dropped at a line break clamps to the
+/// nearest surviving char before it (matching nvim's `gw`). A cursor on a blank
+/// line maps to that blank line.
 pub fn reflow_keep_cursor(
     top: usize,
     cursor_row: usize,
     cursor_col: usize,
     before_lines: &[String],
     after_lines: &[String],
+    width: usize,
+    tabstop: usize,
 ) -> (usize, usize) {
-    // Char offset of cursor within the before_lines range.
-    // Each line contributes its chars; lines are separated by a single
-    // space in the collapsed paragraph — but since reflow joins everything
-    // and re-wraps with spaces, counting by chars-per-line (plus the
-    // conceptual space separator between lines) mirrors the join.
-    //
-    // The simpler approach (which nvim appears to use): the cursor offset
-    // within the range is the sum of chars in lines before cursor_row
-    // (each + 1 for the space/newline separator) plus cursor_col, then
-    // find that position in the wrapped text.
-    //
-    // Actually, since reflow collapses whitespace (split_whitespace),
-    // the simplest approach is to track the cursor's char in the ORIGINAL
-    // concatenated text and find it in the reflowed text.
-
-    // Build the original range text as it appears when joined for wrapping:
-    // same as what reflow does internally — join with spaces.
-    // But we want raw character index, so we accumulate char counts per line
-    // (without the trailing newline).
     let relative_row = cursor_row.saturating_sub(top);
-    let mut char_offset: usize = 0;
-    for (i, line) in before_lines.iter().enumerate() {
-        if i == relative_row {
-            // Add clamped col within this line.
-            let line_len = line.chars().count();
-            char_offset += cursor_col.min(line_len);
-            break;
+
+    // Walk `before_lines`/`after_lines` in lockstep, paragraph by paragraph, to
+    // find the paragraph holding the cursor and replay the same wrap greedy_wrap
+    // performed so we can map the cursor's joined-text char index to its output.
+    let mut before_i = 0usize;
+    let mut after_i = 0usize;
+    while before_i < before_lines.len() {
+        if before_lines[before_i].trim().is_empty() {
+            if before_i == relative_row {
+                // Cursor on a blank line: maps to the matching blank output row.
+                return (top + after_i, 0);
+            }
+            before_i += 1;
+            after_i += 1;
+            continue;
         }
-        // Each line contributes its chars plus a newline (or space boundary).
-        char_offset += line.chars().count() + 1;
+        let para_start = before_i;
+        while before_i < before_lines.len() && !before_lines[before_i].trim().is_empty() {
+            before_i += 1;
+        }
+        let para = &before_lines[para_start..before_i];
+        let (leader, tokens) = paragraph_tokens(para);
+        let (wrapped, map) = wrap_tokens_with_map(&tokens, &leader, width, tabstop);
+        if relative_row >= para_start && relative_row < before_i {
+            let offset = cursor_joined_offset(para, relative_row - para_start, cursor_col);
+            let (r, c) = map
+                .get(offset)
+                .copied()
+                .flatten()
+                .or_else(|| nearest_map_pos(&map, offset))
+                .unwrap_or((0, 0));
+            return (top + after_i + r, c);
+        }
+        after_i += wrapped.len();
     }
 
-    // Now find char_offset in after_lines.
-    let mut remaining = char_offset;
-    for (i, line) in after_lines.iter().enumerate() {
-        let len = line.chars().count();
-        if remaining <= len {
-            // The col is clamped to line_len - 1 in Normal mode.
-            let col = remaining.min(if len == 0 { 0 } else { len.saturating_sub(1) });
-            return (top + i, col);
-        }
-        // Not on this line; subtract line len + 1 (newline separator).
-        remaining = remaining.saturating_sub(len + 1);
-    }
-
-    // Cursor was beyond the end of the reflowed content — clamp to last line.
+    // Cursor was beyond the reflowed content — clamp to the last char of the
+    // last reflowed line.
     let last = after_lines.len().saturating_sub(1);
     let last_len = after_lines.get(last).map_or(0, |l| l.chars().count());
     let col = if last_len == 0 { 0 } else { last_len - 1 };
     (top + last, col)
+}
+
+/// Char index of `(row_in_para, col)` within a paragraph's joined text —
+/// the same string `join_paragraph` produces (`leader` + words + gaps, where
+/// the gap between two lines is the previous line's trailing whitespace if any,
+/// else a single space, and the next line's leading whitespace is dropped).
+fn cursor_joined_offset(para: &[String], row_in_para: usize, col: usize) -> usize {
+    let mut offset = 0usize;
+    for (i, line) in para.iter().enumerate() {
+        if i == row_in_para {
+            let (lead, _) = split_leader(line);
+            let lead_len = lead.chars().count();
+            if i == 0 {
+                offset += col.min(line.chars().count());
+            } else {
+                offset += col.saturating_sub(lead_len);
+            }
+            return offset;
+        }
+        let (_lead, rest) = split_leader(line);
+        offset += if i == 0 {
+            line.chars().count()
+        } else {
+            rest.chars().count()
+        };
+        let ends_ws = line.chars().last().is_some_and(|c| c == ' ' || c == '\t');
+        if !ends_ws {
+            offset += 1; // single-space gap introduced by the join
+        }
+    }
+    offset
+}
+
+/// Nearest surviving joined char to `offset`: the closest preceding mapped
+/// position, else the closest following one.
+fn nearest_map_pos(map: &[Option<(usize, usize)>], offset: usize) -> Option<(usize, usize)> {
+    map[..offset.min(map.len())]
+        .iter()
+        .rev()
+        .find_map(|p| *p)
+        .or_else(|| map.iter().skip(offset).find_map(|p| *p))
 }
 /// Transform the range `[top, bot]` (vim `RangeKind`) in place with
 /// the given case operator. Cursor lands on `top` afterward — vim
@@ -836,7 +1049,8 @@ pub fn clamp_cursor_to_normal_mode<H: hjkl_engine::types::Host>(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_case_op_to_selection, indent_rows, outdent_rows, reflow_rows, toggle_case_str,
+        apply_case_op_to_selection, greedy_wrap, indent_rows, outdent_rows, reflow_keep_cursor,
+        reflow_rows, toggle_case_str,
     };
     use hjkl_buffer::{View, rope_line_str};
     use hjkl_engine::{DefaultHost, Editor, Options};
@@ -967,6 +1181,123 @@ mod tests {
         assert_eq!(rope_line_str(&rope, 1), "c d");
         assert_eq!(rope_line_str(&rope, 2), "e");
         assert_eq!(rope_line_str(&rope, 3), "");
+    }
+
+    // ── greedy_wrap whitespace preservation ───────────────────────────────────
+
+    fn mk(xs: &[&str]) -> Vec<String> {
+        xs.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// nvim: `gqq` with `textwidth=79` on `"aaa  bbb   ccc"` leaves it alone —
+    /// the interior runs are not squeezed.
+    #[test]
+    fn greedy_wrap_preserves_interior_runs_when_within_width() {
+        assert_eq!(
+            greedy_wrap(&mk(&["aaa  bbb   ccc"]), 79, 8),
+            mk(&["aaa  bbb   ccc"])
+        );
+    }
+
+    /// nvim: `gqq` with `textwidth=10` keeps the interior gaps and drops only
+    /// the gap immediately before a break.
+    #[test]
+    fn greedy_wrap_keeps_interior_gap_drops_gap_before_break() {
+        assert_eq!(
+            greedy_wrap(&mk(&["aaa  bbb   ccc  ddd  eee"]), 10, 8),
+            mk(&["aaa  bbb", "ccc  ddd", "eee"])
+        );
+    }
+
+    /// nvim `do_join` semantics: a line break becomes a single space when the
+    /// previous line ends in a non-whitespace char, and no space when it already
+    /// ends in whitespace; the next line's leading whitespace is dropped.
+    #[test]
+    fn greedy_wrap_joins_multiline_paragraph() {
+        assert_eq!(
+            greedy_wrap(&mk(&["aaa  bbb", "ccc  ddd"]), 10, 8),
+            mk(&["aaa  bbb", "ccc  ddd"])
+        );
+        assert_eq!(
+            greedy_wrap(&mk(&["aaa  ", "bbb  ccc"]), 40, 8),
+            mk(&["aaa  bbb  ccc"])
+        );
+        assert_eq!(
+            greedy_wrap(&mk(&["aaa", "   bbb ccc"]), 40, 8),
+            mk(&["aaa bbb ccc"])
+        );
+    }
+
+    /// The first line's leading whitespace is the paragraph leader, re-emitted
+    /// on every wrapped line.
+    #[test]
+    fn greedy_wrap_reemits_leader_on_continuation_lines() {
+        assert_eq!(
+            greedy_wrap(&mk(&["   aaa  bbb", "ccc"]), 10, 8),
+            mk(&["   aaa", "   bbb ccc"])
+        );
+    }
+
+    /// Trailing whitespace after the last word survives on the last line.
+    #[test]
+    fn greedy_wrap_preserves_trailing_whitespace() {
+        assert_eq!(
+            greedy_wrap(&mk(&["aaa  bbb  ccc   "]), 10, 8),
+            mk(&["aaa  bbb", "ccc   "])
+        );
+    }
+
+    /// A word longer than `width` lands on its own line, overflowing.
+    #[test]
+    fn greedy_wrap_single_long_word_overflows_unchanged() {
+        assert_eq!(
+            greedy_wrap(&mk(&["supercalifragilistic"]), 10, 8),
+            mk(&["supercalifragilistic"])
+        );
+        assert_eq!(
+            greedy_wrap(&mk(&["aaa supercalifragilistic bbb"]), 10, 8),
+            mk(&["aaa", "supercalifragilistic", "bbb"])
+        );
+    }
+
+    /// Tabs count as `tabstop` for the wrap column but are preserved verbatim.
+    #[test]
+    fn greedy_wrap_tab_counts_tabstop_and_is_preserved() {
+        assert_eq!(
+            greedy_wrap(&mk(&["aaa\tbbb ccc ddd"]), 10, 8),
+            mk(&["aaa", "bbb ccc", "ddd"])
+        );
+        assert_eq!(greedy_wrap(&mk(&["aa\tbb cc"]), 40, 8), mk(&["aa\tbb cc"]));
+    }
+
+    /// Blank lines are paragraph separators and survive verbatim.
+    #[test]
+    fn greedy_wrap_preserves_blank_line_separators() {
+        assert_eq!(
+            greedy_wrap(&mk(&["aaa  bbb", "", "ccc  ddd"]), 10, 8),
+            mk(&["aaa  bbb", "", "ccc  ddd"])
+        );
+    }
+
+    // ── reflow_keep_cursor (gw cursor mapping) ────────────────────────────────
+
+    /// Cursor on a word char maps to the same char in the wrapped output.
+    #[test]
+    fn reflow_keep_cursor_preserves_word_char() {
+        // 0-based col 8 = 't' of "three"; "three" starts the second wrapped line.
+        let before = mk(&["one two three four five"]);
+        let after = mk(&["one two", "three four", "five"]);
+        assert_eq!(reflow_keep_cursor(0, 0, 8, &before, &after, 10, 8), (1, 0));
+    }
+
+    /// Cursor on a gap that was dropped at a break clamps to the last surviving
+    /// char before it (nvim clamps to the end of the previous line).
+    #[test]
+    fn reflow_keep_cursor_clamps_dropped_gap_to_previous_line() {
+        // 0-based col 9 is a space in the dropped "   " gap before "ccc".
+        let before = mk(&["aaa  bbb   ccc  ddd  eee"]);
+        let after = mk(&["aaa  bbb", "ccc  ddd", "eee"]);
+        assert_eq!(reflow_keep_cursor(0, 0, 9, &before, &after, 10, 8), (0, 7));
     }
 
     // ── case operators must not touch registers / clipboard ──────────────────

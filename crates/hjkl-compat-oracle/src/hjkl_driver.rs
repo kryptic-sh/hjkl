@@ -83,6 +83,9 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     if let Some(tw) = case.textwidth {
         editor.settings_mut().textwidth = tw;
     }
+    if let Some(ts) = case.tabstop {
+        editor.settings_mut().tabstop = ts;
+    }
     if let Some(ai) = case.autoindent {
         editor.settings_mut().autoindent = ai;
     }

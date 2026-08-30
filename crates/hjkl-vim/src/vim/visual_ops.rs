@@ -147,9 +147,9 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                     ed.push_undo();
                     let (cursor_row, _) = ed.cursor();
                     let bot = cursor_row.max(vim(ed).visual_line_anchor);
-                    let (before, after) = reflow_rows_keep_cursor(ed, top, bot);
+                    let (before, after, width, tabstop) = reflow_rows_keep_cursor(ed, top, bot);
                     let (new_row, new_col) =
-                        reflow_keep_cursor(top, saved.0, saved.1, &before, &after);
+                        reflow_keep_cursor(top, saved.0, saved.1, &before, &after, width, tabstop);
                     buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
                     vim_mut(ed).mode = Mode::Normal;
                 }
@@ -247,9 +247,10 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                     let anchor = vim(ed).visual_anchor;
                     let cursor = ed.cursor();
                     let (top, bot) = order(anchor, cursor);
-                    let (before, after) = reflow_rows_keep_cursor(ed, top.0, bot.0);
-                    let (new_row, new_col) =
-                        reflow_keep_cursor(top.0, saved.0, saved.1, &before, &after);
+                    let (before, after, width, tabstop) = reflow_rows_keep_cursor(ed, top.0, bot.0);
+                    let (new_row, new_col) = reflow_keep_cursor(
+                        top.0, saved.0, saved.1, &before, &after, width, tabstop,
+                    );
                     buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
                     vim_mut(ed).mode = Mode::Normal;
                 }
@@ -555,8 +556,9 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
             // `gw` over a block: same fallback as `gq` but restore cursor.
             let saved = ed.cursor();
             ed.push_undo();
-            let (before, after) = reflow_rows_keep_cursor(ed, top, bot);
-            let (new_row, new_col) = reflow_keep_cursor(top, saved.0, saved.1, &before, &after);
+            let (before, after, width, tabstop) = reflow_rows_keep_cursor(ed, top, bot);
+            let (new_row, new_col) =
+                reflow_keep_cursor(top, saved.0, saved.1, &before, &after, width, tabstop);
             buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
             vim_mut(ed).mode = Mode::Normal;
         }

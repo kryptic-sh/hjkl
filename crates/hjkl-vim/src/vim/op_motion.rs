@@ -529,8 +529,9 @@ pub fn run_operator_over_range<H: hjkl_engine::types::Host>(
             // character it was on before the reflow (vim's gw behaviour).
             let saved = ed.cursor();
             ed.push_undo();
-            let (before, after) = reflow_rows_keep_cursor(ed, top.0, bot.0);
-            let (new_row, new_col) = reflow_keep_cursor(top.0, saved.0, saved.1, &before, &after);
+            let (before, after, width, tabstop) = reflow_rows_keep_cursor(ed, top.0, bot.0);
+            let (new_row, new_col) =
+                reflow_keep_cursor(top.0, saved.0, saved.1, &before, &after, width, tabstop);
             buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
             ed.set_sticky_col(Some(new_col));
             vim_mut(ed).mode = Mode::Normal;

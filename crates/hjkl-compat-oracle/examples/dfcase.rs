@@ -29,6 +29,7 @@ async fn main() {
         shiftwidth: Some(4),
         expandtab: Some(true),
         textwidth: None,
+        tabstop: None,
         autoindent: Some(false),
         foldmethod: Some("manual".into()),
     };

@@ -323,6 +323,7 @@ mod tests {
             shiftwidth: None,
             expandtab: None,
             textwidth: None,
+            tabstop: None,
             autoindent: None,
             foldmethod: None,
         }

@@ -212,6 +212,9 @@ async fn seed_case(nvim: &Neovim<Compat<ChildStdin>>, case: &OracleCase) -> anyh
     if let Some(tw) = case.textwidth {
         nvim.command(&format!("set textwidth={tw}")).await?;
     }
+    if let Some(ts) = case.tabstop {
+        nvim.command(&format!("set tabstop={ts}")).await?;
+    }
     if let Some(ai) = case.autoindent {
         nvim.command(if ai {
             "set autoindent"

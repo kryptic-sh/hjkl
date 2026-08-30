@@ -36,6 +36,7 @@ fn case(
         shiftwidth: None,
         expandtab: None,
         textwidth: None,
+        tabstop: None,
         autoindent: None,
         foldmethod: None,
     }
@@ -61,6 +62,7 @@ fn pinned_case(
         shiftwidth: Some(4),
         expandtab: Some(true),
         textwidth,
+        tabstop: None,
         autoindent: Some(false),
         foldmethod: Some(foldmethod.to_string()),
     }
@@ -160,6 +162,7 @@ fn exfuzz_probe_case() -> hjkl_compat_oracle::OracleCase {
         shiftwidth: Some(4),
         expandtab: Some(true),
         textwidth: None,
+        tabstop: None,
         autoindent: Some(false),
         foldmethod: Some("manual".to_string()),
     }

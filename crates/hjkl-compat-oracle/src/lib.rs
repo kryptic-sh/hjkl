@@ -80,6 +80,12 @@ pub struct OracleCase {
     #[serde(default)]
     pub textwidth: Option<usize>,
 
+    /// Optional `tabstop` (display width of a `\t`). Applied to both drivers so
+    /// reflow cases containing tabs measure the same wrap column — hjkl
+    /// defaults `tabstop=4` while `nvim --clean` defaults `tabstop=8`.
+    #[serde(default)]
+    pub tabstop: Option<usize>,
+
     /// Optional `autoindent` toggle. Applied to both drivers so `o` / `O`
     /// open-line cases match despite hjkl defaulting `autoindent` on and
     /// `nvim --clean` defaulting it off.

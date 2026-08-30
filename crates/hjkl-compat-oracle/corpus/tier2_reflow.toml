@@ -55,3 +55,98 @@ keys = "gqq"
 expected_buffer = "one two three four\nfive six seven eight\n"
 expected_mode = "normal"
 textwidth = 20
+
+# Whitespace-preserving reflow: `gq` must NOT squeeze interior space runs or
+# strip trailing whitespace (nvim keeps both).
+
+# `gqq` within textwidth leaves the line byte-identical.
+[[cases]]
+name = "reflow_gqq_preserves_interior_runs"
+initial_buffer = "aaa  bbb   ccc\n"
+initial_cursor = [0, 0]
+keys = "gqq"
+expected_buffer = "aaa  bbb   ccc\n"
+expected_mode = "normal"
+textwidth = 79
+
+# Interior runs stay on the wrapped line; only the gap immediately before a
+# break is dropped.
+[[cases]]
+name = "reflow_gqq_interior_gap_dropped_at_break"
+initial_buffer = "aaa  bbb   ccc  ddd  eee\n"
+initial_cursor = [0, 0]
+keys = "gqq"
+expected_buffer = "aaa  bbb\nccc  ddd\neee\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+textwidth = 10
+
+# `gqap` over a multi-line paragraph: the line break joins to a single space
+# (previous line ends in non-whitespace), interior runs preserved.
+[[cases]]
+name = "reflow_gqap_multiline_whitespace"
+initial_buffer = "aaa  bbb\nccc  ddd\n"
+initial_cursor = [0, 0]
+keys = "gqap"
+expected_buffer = "aaa  bbb\nccc  ddd\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+textwidth = 10
+
+# Leading whitespace on the first line is the paragraph leader, re-emitted on
+# every wrapped line.
+[[cases]]
+name = "reflow_gqap_leading_whitespace_leader"
+initial_buffer = "   aaa  bbb\nccc\n"
+initial_cursor = [0, 0]
+keys = "gqap"
+expected_buffer = "   aaa\n   bbb ccc\n"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+textwidth = 10
+
+# Trailing whitespace on the last line survives on the wrapped last line.
+[[cases]]
+name = "reflow_gqq_trailing_whitespace_preserved"
+initial_buffer = "aaa  bbb  ccc   \n"
+initial_cursor = [0, 0]
+keys = "gqq"
+expected_buffer = "aaa  bbb\nccc   \n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+textwidth = 10
+
+# A word longer than textwidth sits on its own line, overflowing.
+[[cases]]
+name = "reflow_gqq_long_word_overflows"
+initial_buffer = "aaa supercalifragilistic bbb\n"
+initial_cursor = [0, 0]
+keys = "gqq"
+expected_buffer = "aaa\nsupercalifragilistic\nbbb\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+textwidth = 10
+
+# A tab in the whitespace counts as tabstop (8) for the wrap column but is
+# preserved verbatim in the output.
+[[cases]]
+name = "reflow_gqq_tab_gap"
+initial_buffer = "aaa\tbbb ccc ddd\n"
+initial_cursor = [0, 0]
+keys = "gqq"
+expected_buffer = "aaa\nbbb ccc\nddd\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+textwidth = 10
+tabstop = 8
+
+# Blank lines stay paragraph separators; `gqG` reflows each paragraph in place.
+[[cases]]
+name = "reflow_gqG_blank_line_separator"
+initial_buffer = "aaa  bbb\n\nccc  ddd\n"
+initial_cursor = [0, 0]
+keys = "gqG"
+expected_buffer = "aaa  bbb\n\nccc  ddd\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+textwidth = 10

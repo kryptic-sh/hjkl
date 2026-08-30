@@ -28,6 +28,10 @@ patch bumps.
   and `nvim_buf_set_text` rebuilt the buffer via `rope_line_str` + `join("\n")`,
   which reparsed a CRLF row's trailing `\r` as a line break; both now splice at
   the rope byte level, preserving untouched rows byte-exactly.
+- **`gq`/`gw` reflow preserves whitespace like nvim.** Reflow no longer squeezes
+  interior space runs or strips trailing whitespace; it now tokenises words with
+  their gap runs, keeps gaps within a line, drops the gap at a break, and
+  expands tabs to `tabstop` for the wrap column while preserving the tab byte.
 
 ## [0.41.5] - 2026-08-30
 

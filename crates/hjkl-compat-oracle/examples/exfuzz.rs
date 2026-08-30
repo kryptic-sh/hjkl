@@ -176,6 +176,7 @@ fn make_case(name: &str, buffer: &str, cursor: (usize, usize)) -> OracleCase {
         shiftwidth: Some(4),
         expandtab: Some(true),
         textwidth: None,
+        tabstop: None,
         autoindent: Some(false),
         foldmethod: Some("manual".to_string()),
     }

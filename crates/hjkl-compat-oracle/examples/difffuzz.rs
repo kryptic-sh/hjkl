@@ -215,6 +215,7 @@ fn make_case(name: &str, buffer: &str, cursor: (usize, usize), tokens: &[String]
         } else {
             None
         },
+        tabstop: None,
         autoindent: Some(false),
         foldmethod: Some("manual".to_string()),
     }

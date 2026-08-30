@@ -987,6 +987,7 @@ fn author_error_case(register: char) -> hjkl_compat_oracle::OracleCase {
         shiftwidth: None,
         expandtab: None,
         textwidth: None,
+        tabstop: None,
         autoindent: None,
         foldmethod: None,
     }
