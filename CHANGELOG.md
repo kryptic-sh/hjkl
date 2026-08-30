@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.41.5] - 2026-08-30
+
 ### Fixed
 
 - **Staging a hunk no longer force-adds a trailing newline to the last line.** A
@@ -5964,7 +5966,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.4...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.5...HEAD
+[0.41.5]: https://github.com/kryptic-sh/hjkl/compare/v0.41.4...v0.41.5
 [0.41.4]: https://github.com/kryptic-sh/hjkl/compare/v0.41.3...v0.41.4
 [0.41.3]: https://github.com/kryptic-sh/hjkl/compare/v0.41.2...v0.41.3
 [0.41.2]: https://github.com/kryptic-sh/hjkl/compare/v0.41.1...v0.41.2
