@@ -3058,38 +3058,7 @@ verified its findings against nvim 0.12.5 directly.
 
 ### Findings — ranked
 
-1. **HIGH — counted `is`/`as` extends across `count - 1` sentence bodies with no
-   separator units, and no-ops never: nvim alternates body/separator units and
-   fails when units run out** (`crates/hjkl-vim/src/vim/text_object.rs:753-784`
-   windowed, `:893-918` full — verified against nvim 0.12.5). The `rem` loop
-   (added `ce1031a1`) walks `count - 1` full sentences, each ending at its
-   terminator; nvim's counted sentence object walks units (body, same-line
-   separator, next body…), so an even count ends after a separator and an
-   over-run is a no-op, not a best-effort extension. The blockwise forward arm
-   (`editor_ext.rs:1849-1855`, `count.div_ceil(2)` alternation, `003cf2ad`) is a
-   different approximation that also diverges, and the Visual charwise special
-   case (`editor_ext.rs:1862-1871`) does not reproduce nvim either.
-
-   ```
-   Repro: "aaaa. bbbb. cccc." cursor (0,0), `y2is`
-   Expect (nvim): reg = "aaaa. "
-   Actual:        reg = "aaaa. bbbb."
-
-   Repro (over-run): buffer "one two three. four five. six. seven eight nine.
-          ten eleven twelve." cursor (0,30), `d4is`
-   Expect: reg = " seven eight nine. ten eleven twelve." (nvim no-ops once units
-           are exhausted; yank takes cursor char only)
-   Actual: reg = "six. seven eight nine. ten eleven twelve.", cursor (0,25)
-
-   Repro (blockwise): "<C-v>j2isy" on "alpha beta. gamma delta.\n" @ (0,0)
-   Expect: reg = "alpha beta. "     Actual: reg = "alpha beta. gamma delta."
-   ```
-
-   Fix direction: unit-alternation walk (body/separator), fail the object when
-   `count` units are unavailable, delete the `editor_ext.rs:1862-1871` visual
-   special case.
-
-2. **MEDIUM — Visual-mode counted `ip`/`ap` extends/collapses where nvim
+1. **MEDIUM — Visual-mode counted `ip`/`ap` extends/collapses where nvim
    no-ops** (`crates/hjkl-vim/src/editor_ext.rs:1857-1931`, counted path from
    `003cf2ad` — verified against nvim 0.12.5). When the selection does not
    already equal the object (B6 grow branch skipped), nvim's counted `ip` fails
@@ -3107,7 +3076,7 @@ verified its findings against nvim 0.12.5 directly.
    Actual: reg = "aaa.\nbbb.\nccc.\n" — whole buffer yanked
    ```
 
-3. **MEDIUM — charwise operators on a closed fold act on one char/row; nvim
+2. **MEDIUM — charwise operators on a closed fold act on one char/row; nvim
    extends the operation linewise over the whole fold**
    (`expand_linewise_over_closed_folds`,
    `crates/hjkl-vim/src/vim/linewise.rs:15-45`, is applied only in linewise
@@ -3124,7 +3093,7 @@ verified its findings against nvim 0.12.5 directly.
    Same for `dw`/`gUw`/`yw` with the cursor on a closed fold's start row.
    `dd`/`>>`/`gUU`/`p`/`u` already agree.
 
-4. **MEDIUM — RPC splice paths rewrite a CRLF buffer's final `\r` into a line
+3. **MEDIUM — RPC splice paths rewrite a CRLF buffer's final `\r` into a line
    break** (`apps/hjkl/src/nvim_api.rs:892` `nvim_buf_set_lines` fast path,
    `:1735` `nvim_buf_set_text` — verified by trace). Both rebuild the buffer as
    `rope_line_str` rows + `join("\n")`; ropey splits on lone `\r`, and CRLF rows
@@ -3149,7 +3118,7 @@ verified its findings against nvim 0.12.5 directly.
    Fix: per-row splice (or a separator-preserving join), plus a `fileformat`
    decision — none exists today.
 
-5. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
+4. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
    vim's formatter preserves both**
    (`crates/hjkl-vim/src/vim/text_object_ops.rs:99-139`, `greedy_wrap`'s
    `split_whitespace()` — verified against nvim 0.12.5 with pinned `textwidth`).
@@ -3179,7 +3148,7 @@ sentence-orientation item.
 
 - A: `nvim_buf_set_text`'s byte-column resolution is correct —
   `resolve_text_col` snaps to char boundaries (`nvim_api.rs:1712-1717`); the
-  CRLF defect (finding 4) is the whole-content rejoin, not the col math.
+  CRLF defect (finding 3) is the whole-content rejoin, not the col math.
 - A: completion `anchor_col` is char-based consistently
   (`lsp_glue.rs:1837-1863`, fixed by audit-r2 #7); the byte-vs-char cursor
   defect was in `accept_completion`'s `cursor_offset` math, not the anchor —
@@ -3190,7 +3159,7 @@ sentence-orientation item.
   over-run matches; `s`/`3s` fuzzer divergences are the deliberate
   `motion_sneak` default (corpus ships `:set nomotion_sneak` fallbacks); the
   fuzzer's `gq` buffer diffs are harness artifacts (nvim `gq` no-ops with
-  `textwidth` unset — finding 5 was verified by direct probes instead); the
+  `textwidth` unset — finding 4 was verified by direct probes instead); the
   printed `ye`/`dap`/`zfGx`/`3J`/`viwc` diffs replay as matches (output-format
   misreads); visual `*`/`#` match in all three modes; `search_prompt.rs` offset
   arithmetic traced sound; bracket-clamp and paragraph-extend guards correct.
