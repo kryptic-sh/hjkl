@@ -42,6 +42,10 @@ patch bumps.
   stops at the paragraph), a paragraph whose trailing blank run reaches EOF
   takes the whole run, and over-running is a no-op instead of a best-effort
   clamp.
+- **`$` on a wide filename no longer borks the explorer sidebar.** The explorer
+  is a tree and never scrolls horizontally; `$` at the end of a filename wider
+  than the dock previously set `top_col`, shifting the text left while the glyph
+  overlay stayed put. The explorer now keeps `top_col` at 0.
 
 ## [0.41.5] - 2026-08-30
 

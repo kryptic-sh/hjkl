@@ -247,3 +247,39 @@ fn set_explorer_open_persists_to_real_config_file() {
         "`:set explorer.open=false` must persist open = false; got:\n{text}"
     );
 }
+
+/// `$` on a filename wider than the sidebar must NOT horizontally scroll the
+/// explorer. A tree truncates names: scrolling would shift the buffer text left
+/// while the glyph/icon/name overlay stays put, garbling the sidebar (showing
+/// the tail of the name instead of the left-aligned prefix). Regression for the
+/// "borked sidebar render" report.
+#[test]
+fn dollar_on_wide_filename_keeps_sidebar_left_aligned() {
+    let tmp = tempfile::tempdir().unwrap();
+    let long = "this_is_a_very_long_filename_that_exceeds_the_sidebar_width_abcdefghijklmnopqrstuvwxyz.txt";
+    std::fs::write(tmp.path().join(long), "x").unwrap();
+    std::fs::write(tmp.path().join("a.txt"), "x").unwrap();
+    std::fs::write(tmp.path().join("b.txt"), "x").unwrap();
+
+    let mut session = TerminalSession::spawn_in_dir(tmp.path());
+    session.keys(" e");
+    // Navigate down to the long file: root (row 0), then a.txt, b.txt, then
+    // the long-named file (sorted last of the three).
+    session.keys("jjj");
+    session.keys("$");
+
+    // The name must stay left-aligned (truncated at the right edge), so its
+    // prefix is visible — not scrolled to show only the tail ("bcdefg…").
+    let left_aligned = wait_until(|| {
+        (0..24).any(|r| {
+            let line = session.line(r);
+            line.contains("this_is_a_very_long_filename")
+                && !line.contains("bcdefghijklmnopqrstuvwxyz")
+        })
+    });
+    assert!(
+        left_aligned,
+        "sidebar must show the filename prefix, not its scrolled tail:\n{}",
+        session.dump_screen()
+    );
+}
