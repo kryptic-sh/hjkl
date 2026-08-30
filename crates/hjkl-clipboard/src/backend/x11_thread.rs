@@ -1933,6 +1933,41 @@ mod tests {
         assert_eq!(out, b"world", "expected 'world' after replace");
     }
 
+    #[test]
+    fn targets_reply_excludes_multiple() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(thread) = get_thread() else { return };
+
+        set_clipboard(thread, Selection::Clipboard, &MimeType::Text, b"hello")
+            .expect("set_clipboard failed");
+        std::thread::sleep(Duration::from_millis(150));
+
+        // Request the TARGETS list the way a third-party client would. xclip
+        // decodes the atom IDs back to their names, newline-separated.
+        let Some(raw) = xclip_typed("clipboard", "TARGETS") else {
+            eprintln!("SKIP targets_reply_excludes_multiple: xclip not available");
+            return;
+        };
+
+        let text = String::from_utf8_lossy(&raw);
+        let names: Vec<&str> = text.split_whitespace().collect();
+
+        // MULTIPLE was removed from the advertisement (ICCCM 2.6.2: don't
+        // advertise a target you refuse to serve), so it must not appear.
+        assert!(
+            names.contains(&"TARGETS"),
+            "TARGETS reply must list TARGETS, got: {names:?}"
+        );
+        assert!(
+            names.contains(&"UTF8_STRING"),
+            "TARGETS reply must list UTF8_STRING, got: {names:?}"
+        );
+        assert!(
+            !names.contains(&"MULTIPLE"),
+            "TARGETS reply must not advertise MULTIPLE, got: {names:?}"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // 5c tests (get/available)
     // -----------------------------------------------------------------------
@@ -2055,6 +2090,13 @@ mod tests {
     /// and then get it back via our own do_get, which uses our INCR receive
     /// (5c).  This exercises both INCR send and INCR receive end-to-end via
     /// a self-loop through the X server.
+    ///
+    /// The send path this covers is the reordered one: `start_incr_send`
+    /// writes the INCR size-hint property *before* `SELECTION_NOTIFY` (ICCCM
+    /// §2.5), so the hint is on the server when the requestor reads it. The
+    /// hint-vs-notify *ordering* itself is a wire race that a same-connection
+    /// self-loop cannot distinguish — this test guards the mechanism, not the
+    /// interleaving.
     #[test]
     fn large_payload_self_loop() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
