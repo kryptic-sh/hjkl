@@ -2048,6 +2048,14 @@ pub fn paragraph_text_object<H: hjkl_engine::types::Host>(
         }
         rem -= 1;
     }
+    // When the buffer ends before all `count - 1` further units could be
+    // consumed, `rem` is still positive: nvim treats the counted object as
+    // FAILED (a no-op) rather than best-effort extending to the whole buffer.
+    // Returning `None` propagates to a no-op in both the operator and visual
+    // paths (see `text_object_range`).
+    if rem > 0 {
+        return None;
+    }
     // vim `:h ap`: a paragraph object takes the trailing blank lines, or —
     // when the paragraph runs to the end of the buffer with no blank line
     // after it — the leading blank lines instead. `bot` sitting on a
@@ -2212,6 +2220,43 @@ mod tests {
         assert_eq!(sentence_text_object(&ed, true, 2), Some(((0, 30), (0, 48))));
         assert_eq!(sentence_text_object(&ed, true, 3), Some(((0, 30), (1, 1))));
         assert_eq!(sentence_text_object(&ed, true, 4), Some(((0, 30), (1, 19))));
+    }
+
+    /// Counted `ip` / `ap` over-run: when the count exceeds the available
+    /// paragraph units, the object fails (`None`) instead of best-effort
+    /// extending to the whole buffer. Pins the nvim-verified no-op.
+    #[test]
+    fn paragraph_text_object_counted_over_run_is_none() {
+        // Single paragraph, no blank lines: only one `ip` unit exists.
+        let mut ed = make_editor("aaa.\nbbb.\nccc.\n");
+        ed.set_cursor_quiet(0, 0);
+        // count 1 still selects the whole paragraph.
+        assert_eq!(paragraph_text_object(&ed, true, 1), Some(((0, 0), (2, 4))));
+        // `2ip` / `3ip` run out of units → fail.
+        assert_eq!(paragraph_text_object(&ed, true, 2), None);
+        assert_eq!(paragraph_text_object(&ed, true, 3), None);
+        // `ap` on a single paragraph with no trailing blank also fails at
+        // count 2 (`2ap` needs a second paragraph + blank gap).
+        assert_eq!(paragraph_text_object(&ed, false, 2), None);
+
+        // Three paragraphs (`aaa`, `bbb`, `ccc`) separated by blank lines.
+        // `ip` walks same-blankness runs: para, blank, para, blank, para
+        // = 5 units, so counts 1..=5 succeed and 6 over-runs.
+        let mut ed = make_editor("aaa.\n\nbbb.\n\nccc.\n");
+        ed.set_cursor_quiet(0, 0);
+        assert_eq!(paragraph_text_object(&ed, true, 1), Some(((0, 0), (0, 4))));
+        assert_eq!(paragraph_text_object(&ed, true, 2), Some(((0, 0), (1, 0))));
+        assert_eq!(paragraph_text_object(&ed, true, 3), Some(((0, 0), (2, 4))));
+        assert_eq!(paragraph_text_object(&ed, true, 4), Some(((0, 0), (3, 0))));
+        assert_eq!(paragraph_text_object(&ed, true, 5), Some(((0, 0), (4, 4))));
+        assert_eq!(paragraph_text_object(&ed, true, 6), None);
+        // `ap` bundles each paragraph with its trailing blank gap: three
+        // units here (the last paragraph has no trailing blank), so `3ap`
+        // succeeds and `4ap` over-runs → fail.
+        assert_eq!(paragraph_text_object(&ed, false, 1), Some(((0, 0), (1, 0))));
+        assert_eq!(paragraph_text_object(&ed, false, 2), Some(((0, 0), (3, 0))));
+        assert_eq!(paragraph_text_object(&ed, false, 3), Some(((0, 0), (4, 4))));
+        assert_eq!(paragraph_text_object(&ed, false, 4), None);
     }
 
     /// `(` / `)` boundary walking across a blank-line paragraph break.

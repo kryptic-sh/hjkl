@@ -406,3 +406,104 @@ keys = "gE"
 expected_buffer = "'self.x'\n(foo) a, {xy}  \n"
 expected_cursor = [0, 0]
 expected_mode = "normal"
+
+# ── Counted `ip` / `ap` over-run → no-op (not best-effort whole-buffer) ──────
+#
+# When the count exceeds the number of paragraph units available, vim FAILS the
+# text object (a no-op) rather than extending to the whole buffer. hjkl used to
+# clamp the range to EOF. Pinned from nvim 0.12.5; every expectation here is the
+# nvim-measured outcome.
+
+# `d2ip` on a single paragraph: only one `ip` unit exists, so the object fails
+# and the buffer / cursor / default register are all unchanged.
+[[cases]]
+name = "textobj_d2ip_single_paragraph_over_run_noop"
+initial_buffer = "aaa.\nbbb.\nccc.\n"
+initial_cursor = [0, 0]
+keys = "d2ip"
+expected_buffer = "aaa.\nbbb.\nccc.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', ""]
+
+# `y2ip` over-run: the default register stays empty (nothing yanked).
+[[cases]]
+name = "textobj_y2ip_single_paragraph_over_run_noop"
+initial_buffer = "aaa.\nbbb.\nccc.\n"
+initial_cursor = [0, 0]
+keys = "y2ip"
+expected_buffer = "aaa.\nbbb.\nccc.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', ""]
+
+# `d3ip` over-run on the same buffer.
+[[cases]]
+name = "textobj_d3ip_single_paragraph_over_run_noop"
+initial_buffer = "aaa.\nbbb.\nccc.\n"
+initial_cursor = [0, 0]
+keys = "d3ip"
+expected_buffer = "aaa.\nbbb.\nccc.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', ""]
+
+# `d2ap` over-run: a single paragraph with no trailing blank line has no second
+# `ap` unit, so the object fails.
+[[cases]]
+name = "textobj_d2ap_single_paragraph_over_run_noop"
+initial_buffer = "aaa.\nbbb.\nccc.\n"
+initial_cursor = [0, 0]
+keys = "d2ap"
+expected_buffer = "aaa.\nbbb.\nccc.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', ""]
+
+# `v2ip` over-run: visual mode stays active with the cursor unmoved and no
+# selection (the object failed), rather than collapsing to a linewise selection.
+[[cases]]
+name = "textobj_v2ip_single_paragraph_over_run_noop"
+initial_buffer = "aaa.\nbbb.\nccc.\n"
+initial_cursor = [0, 0]
+keys = "v2ip"
+expected_buffer = "aaa.\nbbb.\nccc.\n"
+expected_cursor = [0, 0]
+expected_mode = "visual"
+
+# `v2ipy` over-run: the failed selection yanks the single character under the
+# cursor ("a") into the default register, then returns to normal mode — not the
+# whole buffer.
+[[cases]]
+name = "textobj_v2ipy_single_paragraph_over_run_noop"
+initial_buffer = "aaa.\nbbb.\nccc.\n"
+initial_cursor = [0, 0]
+keys = "v2ipy"
+expected_buffer = "aaa.\nbbb.\nccc.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "a"]
+
+# `d6ip` over-run with three paragraphs present: five `ip` units exist
+# (para, blank, para, blank, para), so a count of 6 fails rather than clamping.
+[[cases]]
+name = "textobj_d6ip_three_paragraph_over_run_noop"
+initial_buffer = "aaa.\n\nbbb.\n\nccc.\n"
+initial_cursor = [0, 0]
+keys = "d6ip"
+expected_buffer = "aaa.\n\nbbb.\n\nccc.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', ""]
+
+# `d4ap` over-run with three paragraphs: three `ap` units exist (the last
+# paragraph has no trailing blank), so a count of 4 fails.
+[[cases]]
+name = "textobj_d4ap_three_paragraph_over_run_noop"
+initial_buffer = "aaa.\n\nbbb.\n\nccc.\n"
+initial_cursor = [0, 0]
+keys = "d4ap"
+expected_buffer = "aaa.\n\nbbb.\n\nccc.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', ""]

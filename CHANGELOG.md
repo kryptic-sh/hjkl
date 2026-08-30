@@ -16,6 +16,10 @@ patch bumps.
   over-run caps at end-of-buffer instead of a best-effort extension. The
   sentence-object scan was rewritten as one shared port of vim's `current_sent`,
   replacing the duplicated windowed/full-buffer `rem` loops.
+- **Counted `ip`/`ap` fail (no-op) on over-run like nvim.** `d2ip`/`y2ip`/`v2ip`
+  on a buffer with fewer paragraph units than the count previously best-effort
+  extended to the whole buffer; the object now fails, so the operator aborts and
+  the selection stays put, matching nvim.
 
 ## [0.41.5] - 2026-08-30
 
