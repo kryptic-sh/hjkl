@@ -371,6 +371,40 @@ fn byte_col_to_char_col(line: &str, col: i64) -> usize {
     line[..byte_offset].chars().count()
 }
 
+/// Splice rows `[s, e)` out of `rope` and replace them with `new_lines`,
+/// preserving the exact bytes of every row outside the range (CRLF-safe).
+///
+/// The span is computed from ropey's native `line_to_byte(s)` /
+/// `line_to_byte(e)` offsets — never from `rope_line_str` lengths — so a CRLF
+/// row's trailing `\r` is not round-tripped through `rope_line_str` +
+/// `join("\n")` and reparsed as a line break. New lines are joined with `\n`
+/// (LF): hjkl tracks no fileformat, so LF separators for the inserted rows are
+/// the accepted behaviour while the `\r\n` of untouched rows survives
+/// byte-for-byte.
+fn splice_rows(rope: &ropey::Rope, s: usize, e: usize, new_lines: &[String]) -> String {
+    let line_count = rope.len_lines();
+    let joined = new_lines.join("\n");
+    // The byte span `[line_to_byte(s), line_to_byte(e))` covers rows `s..e`
+    // *and* their separators, so the junction separators must be re-added
+    // explicitly (or not, for a pure delete).
+    let start_byte = rope.line_to_byte(s);
+    let end_byte = rope.line_to_byte(e);
+    // `s == line_count` means the prefix is the whole buffer (whose final row
+    // has no trailing separator), so inserting there needs a leading `\n`.
+    // `e < line_count` means rows remain after the range, so the last new row
+    // needs a trailing `\n` to separate it from row `e`.
+    let need_leading = !joined.is_empty() && s == line_count;
+    let need_trailing = !joined.is_empty() && e < line_count;
+    let with = format!(
+        "{}{}{}",
+        if need_leading { "\n" } else { "" },
+        joined,
+        if need_trailing { "\n" } else { "" },
+    );
+    let full = rope.to_string();
+    format!("{}{}{}", &full[..start_byte], with, &full[end_byte..])
+}
+
 // ── nvim_call_function helpers ────────────────────────────────────────────────
 
 /// Convert a `QfEntry` into the `Value::Map` dict that `getqflist` /
@@ -876,20 +910,12 @@ fn dispatch(
                     Err(msg) => return err(stdout, msgid, &msg),
                 };
 
-                // Build new full content: prefix[0..s] + new_lines + suffix[e..]
-                let mut result: Vec<String> = Vec::new();
-                for i in 0..s {
-                    result.push(hjkl_buffer::rope_line_str(&rope, i));
-                }
-                result.extend(new_lines);
-                for i in e..line_count {
-                    result.push(hjkl_buffer::rope_line_str(&rope, i));
-                }
-
-                // Join WITHOUT a trailing newline. BufferEdit::replace_all uses
-                // split('\n') internally, so "hello\n" → ["hello", ""] (two rows)
-                // whereas "hello" → ["hello"] (one row, matching nvim semantics).
-                let content = result.join("\n");
+                // Splice the row range at the ROPE byte level, not through
+                // `rope_line_str` + `join("\n")`: that round-trip reparses a
+                // CRLF row's trailing `\r` as a line break (dropping the `\r`
+                // and spawning a phantom empty row). `splice_rows` keeps the
+                // untouched rows byte-exact.
+                let content = splice_rows(&rope, s, e, &new_lines);
                 app.active_editor_mut().set_content(&content);
                 // Apply modeline overrides so oracle cases that embed a `vim:`
                 // marker see the same options that a real file-open would apply.
@@ -918,15 +944,7 @@ fn dispatch(
                     Err(msg) => return err(stdout, msgid, &msg),
                 };
 
-                let mut result: Vec<String> = Vec::new();
-                for i in 0..s {
-                    result.push(hjkl_buffer::rope_line_str(&rope, i));
-                }
-                result.extend(new_lines);
-                for i in e..line_count {
-                    result.push(hjkl_buffer::rope_line_str(&rope, i));
-                }
-                let content = result.join("\n");
+                let content = splice_rows(&rope, s, e, &new_lines);
                 match app.nvim_slot_mut(buf_id) {
                     Some(ed) => ed.set_content(&content),
                     None => return err(stdout, msgid, "invalid buffer id"),
@@ -1719,43 +1737,27 @@ fn dispatch(
                 return validation_err(stdout, msgid, "'start' is higher than 'end'");
             }
 
-            let lines: Vec<String> = (0..rope.len_lines())
-                .map(|i| hjkl_buffer::rope_line_str(&rope, i))
-                .collect();
-
-            // Compute absolute byte positions by walking lines.
-            // Each line contributes its byte length + 1 for the joining '\n'.
-            let line_start_byte = |row: usize| -> usize {
-                lines[..row.min(lines.len())]
-                    .iter()
-                    .map(|l| l.len() + 1)
-                    .sum()
-            };
-
-            let full = lines.join("\n");
-            let full_len = full.len();
-
-            let abs_start = {
-                let ls = line_start_byte(start_row);
-                let line_bytes = lines.get(start_row).map_or(0, |l| l.len());
-                let col = start_col.min(line_bytes);
-                // Snap to valid UTF-8 boundary.
-                let s = ls + col;
-                (0..=s.min(full_len))
-                    .rev()
-                    .find(|&i| full.is_char_boundary(i))
-                    .unwrap_or(0)
-            };
-            let abs_end = {
-                let ls = line_start_byte(end_row);
-                let line_bytes = lines.get(end_row).map_or(0, |l| l.len());
-                let col = end_col.min(line_bytes);
-                let s = ls + col;
-                let s = s.min(full_len);
-                (s..=full_len)
-                    .find(|&i| full.is_char_boundary(i))
-                    .unwrap_or(full_len)
-            };
+            // Compute absolute byte positions from the rope, not by walking
+            // `rope_line_str` lengths. `rope_line_str` over-reads a CRLF row's
+            // trailing `\r` (keeps it in the row string), and the old walk
+            // summed `l.len() + 1` per row — assuming a 1-byte separator where
+            // ropey's `\r\n` break is 2 bytes — so each CRLF row shifted later
+            // offsets by one and the `\r` was reparsed as a line break.
+            // `line_to_byte(row)` is ropey's native start-of-row offset and
+            // `col` is already a byte column (see `resolve_text_col`), so the
+            // sum is the raw byte position in the rope.
+            let full = rope.to_string();
+            let abs_start_raw = rope.line_to_byte(start_row) + start_col;
+            let abs_end_raw = rope.line_to_byte(end_row) + end_col;
+            // Snap to valid UTF-8 boundaries (RPC cols are untrusted byte
+            // columns and may land mid-character).
+            let abs_start = (0..=abs_start_raw.min(full.len()))
+                .rev()
+                .find(|&i| full.is_char_boundary(i))
+                .unwrap_or(0);
+            let abs_end = (abs_end_raw.min(full.len())..=full.len())
+                .find(|&i| full.is_char_boundary(i))
+                .unwrap_or(full.len());
 
             // Reject an inverted range (start after end) like nvim does —
             // splicing with abs_start > abs_end would silently duplicate the
@@ -4500,6 +4502,137 @@ mod tests {
         if let Some(mgr) = app.lsp.take() {
             mgr.shutdown();
         }
+    }
+
+    // ── CRLF splice regression (nvim_buf_set_lines / nvim_buf_set_text) ──────
+
+    /// Helper: raw byte content of the active buffer's rope.
+    fn active_content(app: &crate::app::App) -> String {
+        app.active_editor().buffer().rope().to_string()
+    }
+
+    /// `nvim_buf_set_lines` on a CRLF buffer must not reparses the final `\r`
+    /// of a row as a line break: a full replace yields exactly one row, with no
+    /// phantom trailing empty row and no dropped `\r`.
+    #[test]
+    fn test_nvim_buf_set_lines_full_replace_crlf_single_row() {
+        let mut app = build_app(None).unwrap();
+        app.active_editor_mut().set_content("a\r\nb\r\nc\r\n");
+        let rope = app.active_editor().buffer().rope();
+        assert_eq!(
+            rope.len_lines(),
+            4,
+            "sanity: 3 CRLF rows + trailing empty row"
+        );
+
+        let buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        let resp = call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                buf,
+                Value::from(0i64),
+                Value::from(-1i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("x")]),
+            ],
+        );
+        assert_ok(resp);
+
+        assert_eq!(active_content(&app), "x");
+        assert_eq!(app.active_editor().buffer().rope().len_lines(), 1);
+    }
+
+    /// A partial `nvim_buf_set_lines` must leave the untouched CRLF rows' `\r`
+    /// byte-exact; only the replaced row's separator becomes LF.
+    #[test]
+    fn test_nvim_buf_set_lines_partial_replace_preserves_crlf() {
+        let mut app = build_app(None).unwrap();
+        app.active_editor_mut().set_content("a\r\nb\r\nc\r\n");
+
+        let buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        let resp = call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                buf,
+                Value::from(1i64),
+                Value::from(2i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("X")]),
+            ],
+        );
+        assert_ok(resp);
+
+        assert_eq!(active_content(&app), "a\r\nX\nc\r\n");
+        let rope = app.active_editor().buffer().rope();
+        assert_eq!(hjkl_buffer::rope_line_str(&rope, 0), "a\r");
+        assert_eq!(hjkl_buffer::rope_line_str(&rope, 1), "X");
+        assert_eq!(hjkl_buffer::rope_line_str(&rope, 2), "c\r");
+    }
+
+    /// `nvim_buf_set_text` computes byte offsets from the rope, so splicing
+    /// inside a CRLF row keeps the surrounding `\r\n` separators intact.
+    #[test]
+    fn test_nvim_buf_set_text_preserves_crlf() {
+        let mut app = build_app(None).unwrap();
+        app.active_editor_mut().set_content("a\r\nb\r\nc\r\n");
+
+        let buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        let resp = call(
+            &mut app,
+            "nvim_buf_set_text",
+            vec![
+                buf,
+                Value::from(1i64),
+                Value::from(0i64),
+                Value::from(1i64),
+                Value::from(1i64),
+                Value::Array(vec![Value::from("Z")]),
+            ],
+        );
+        assert_ok(resp);
+
+        assert_eq!(active_content(&app), "a\r\nZ\r\nc\r\n");
+        let rope = app.active_editor().buffer().rope();
+        assert_eq!(hjkl_buffer::rope_line_str(&rope, 0), "a\r");
+        assert_eq!(hjkl_buffer::rope_line_str(&rope, 1), "Z\r");
+        assert_eq!(hjkl_buffer::rope_line_str(&rope, 2), "c\r");
+    }
+
+    /// Plain-LF buffers are unchanged by the byte-level splice (no regression).
+    #[test]
+    fn test_nvim_buf_set_lines_lf_unchanged() {
+        let mut app = build_app(None).unwrap();
+        app.active_editor_mut().set_content("a\nb\nc");
+
+        let buf = {
+            let resp = call(&mut app, "nvim_get_current_buf", vec![]);
+            assert_ok(resp)
+        };
+        let resp = call(
+            &mut app,
+            "nvim_buf_set_lines",
+            vec![
+                buf,
+                Value::from(1i64),
+                Value::from(2i64),
+                Value::Boolean(false),
+                Value::Array(vec![Value::from("X")]),
+            ],
+        );
+        assert_ok(resp);
+
+        assert_eq!(active_content(&app), "a\nX\nc");
     }
 
     // ── nvim_get_option_value / nvim_set_option_value ─────────────────────────
