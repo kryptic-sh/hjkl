@@ -3058,24 +3058,7 @@ verified its findings against nvim 0.12.5 directly.
 
 ### Findings — ranked
 
-1. **MEDIUM — charwise operators on a closed fold act on one char/row; nvim
-   extends the operation linewise over the whole fold**
-   (`expand_linewise_over_closed_folds`,
-   `crates/hjkl-vim/src/vim/linewise.rs:15-45`, is applied only in linewise
-   paths — `linewise.rs:75`, `command.rs:733,795`; `do_char_delete`
-   `command.rs:199-260` and the `op_motion.rs` charwise operator path never
-   expand — verified against nvim 0.12.5).
-
-   ```
-   Repro: "abc\ndef\n" cursor (0,0), `zfj` then `x`
-   Expect (nvim): buf = "", reg = "abc\ndef\n" (fold deleted linewise)
-   Actual:        buf = "bc\ndef\n", reg = "a"
-   ```
-
-   Same for `dw`/`gUw`/`yw` with the cursor on a closed fold's start row.
-   `dd`/`>>`/`gUU`/`p`/`u` already agree.
-
-2. **MEDIUM — RPC splice paths rewrite a CRLF buffer's final `\r` into a line
+1. **MEDIUM — RPC splice paths rewrite a CRLF buffer's final `\r` into a line
    break** (`apps/hjkl/src/nvim_api.rs:892` `nvim_buf_set_lines` fast path,
    `:1735` `nvim_buf_set_text` — verified by trace). Both rebuild the buffer as
    `rope_line_str` rows + `join("\n")`; ropey splits on lone `\r`, and CRLF rows
@@ -3100,7 +3083,7 @@ verified its findings against nvim 0.12.5 directly.
    Fix: per-row splice (or a separator-preserving join), plus a `fileformat`
    decision — none exists today.
 
-3. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
+2. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
    vim's formatter preserves both**
    (`crates/hjkl-vim/src/vim/text_object_ops.rs:99-139`, `greedy_wrap`'s
    `split_whitespace()` — verified against nvim 0.12.5 with pinned `textwidth`).
@@ -3116,7 +3099,7 @@ verified its findings against nvim 0.12.5 directly.
    fix needs a whitespace-preserving wrap (tokenise word + gap runs, keep gaps
    within a line, drop the gap at a break) — a larger change than a one-liner.
 
-4. **LOW — `ap` with a blank-line cursor or a trailing blank run at EOF still
+3. **LOW — `ap` with a blank-line cursor or a trailing blank run at EOF still
    diverges (found 2026-08-30, during the counted-`ip`/`ap` fix).** The
    counted-`ip`/`ap` over-run guard above does not fire on these (they reach
    `rem == 0`), so they are a distinct `ap`-semantics gap, not the over-run
@@ -3141,7 +3124,7 @@ sentence-orientation item.
 
 - A: `nvim_buf_set_text`'s byte-column resolution is correct —
   `resolve_text_col` snaps to char boundaries (`nvim_api.rs:1712-1717`); the
-  CRLF defect (finding 2) is the whole-content rejoin, not the col math.
+  CRLF defect (finding 1) is the whole-content rejoin, not the col math.
 - A: completion `anchor_col` is char-based consistently
   (`lsp_glue.rs:1837-1863`, fixed by audit-r2 #7); the byte-vs-char cursor
   defect was in `accept_completion`'s `cursor_offset` math, not the anchor —
@@ -3152,7 +3135,7 @@ sentence-orientation item.
   over-run matches; `s`/`3s` fuzzer divergences are the deliberate
   `motion_sneak` default (corpus ships `:set nomotion_sneak` fallbacks); the
   fuzzer's `gq` buffer diffs are harness artifacts (nvim `gq` no-ops with
-  `textwidth` unset — finding 3 was verified by direct probes instead); the
+  `textwidth` unset — finding 2 was verified by direct probes instead); the
   printed `ye`/`dap`/`zfGx`/`3J`/`viwc` diffs replay as matches (output-format
   misreads); visual `*`/`#` match in all three modes; `search_prompt.rs` offset
   arithmetic traced sound; bracket-clamp and paragraph-extend guards correct.
