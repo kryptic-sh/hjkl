@@ -3058,32 +3058,7 @@ verified its findings against nvim 0.12.5 directly.
 
 ### Findings — ranked
 
-1. **MEDIUM — RPC splice paths rewrite a CRLF buffer's final `\r` into a line
-   break** (`apps/hjkl/src/nvim_api.rs:892` `nvim_buf_set_lines` fast path,
-   `:1735` `nvim_buf_set_text` — verified by trace). Both rebuild the buffer as
-   `rope_line_str` rows + `join("\n")`; ropey splits on lone `\r`, and CRLF rows
-   keep the `\r` as content by the workspace convention
-   (`crates/hjkl-buffer/src/buffer.rs:948-950`), so a CRLF buffer's LAST row
-   ends `…\r` and the reparse splits on it: a phantom empty row, `\r` dropped.
-   Interior rows survive. A plain load/save round-trips CRLF byte-exactly
-   (`apps/hjkl/src/app/mod.rs:894-896` strips only the final `\n`;
-   `apps/hjkl/src/app/ex_dispatch.rs:1275-1302` writes `content_joined()` +
-   `EolState` verbatim) — the defect is the whole-content round-trip through
-   `join("\n")`, which cannot distinguish CRLF content from a line break.
-   Corollary from the same trace: `trimmed_trailing_whitespace`
-   (`ex_dispatch.rs:33`, `trim_end_matches([' ', '\t'])`) can never trim a CRLF
-   line — the `\r` shields trailing spaces.
-
-   ```
-   Repro: CRLF buffer, nvim_buf_set_lines(buf, 0, count, false, ["x"])
-   Expect: one row "x"; buffer stays fileformat=dos semantics
-   Actual: rows ["x", ""] — the final row's `\r` reparsed as a line break
-   ```
-
-   Fix: per-row splice (or a separator-preserving join), plus a `fileformat`
-   decision — none exists today.
-
-2. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
+1. **LOW — `gq` squeezes interior space runs and strips trailing whitespace;
    vim's formatter preserves both**
    (`crates/hjkl-vim/src/vim/text_object_ops.rs:99-139`, `greedy_wrap`'s
    `split_whitespace()` — verified against nvim 0.12.5 with pinned `textwidth`).
@@ -3099,7 +3074,7 @@ verified its findings against nvim 0.12.5 directly.
    fix needs a whitespace-preserving wrap (tokenise word + gap runs, keep gaps
    within a line, drop the gap at a break) — a larger change than a one-liner.
 
-3. **LOW — `ap` with a blank-line cursor or a trailing blank run at EOF still
+2. **LOW — `ap` with a blank-line cursor or a trailing blank run at EOF still
    diverges (found 2026-08-30, during the counted-`ip`/`ap` fix).** The
    counted-`ip`/`ap` over-run guard above does not fire on these (they reach
    `rem == 0`), so they are a distinct `ap`-semantics gap, not the over-run
@@ -3109,6 +3084,13 @@ verified its findings against nvim 0.12.5 directly.
    - `d3ap` same buffer @ (1,0): nvim no-op, hjkl `"aaa.\n"`.
    - `dap` on `"a\n\n\n"` @ (0,0): nvim `""`, hjkl `"\n"`.
    - `d2ap` on `"a\n\n\n"` @ (0,0): nvim no-op, hjkl `""`.
+
+3. **LOW — `trimmed_trailing_whitespace` can't trim CRLF trailing whitespace
+   (corollary of the fixed CRLF-splice finding).**
+   `apps/hjkl/src/app/ex_dispatch.rs:33` uses `trim_end_matches([' ', '\t'])`;
+   on a CRLF row `"abc  \r"` the trailing `\r` shields the spaces, so they are
+   never trimmed. Trimming should strip `[ \t]` that precede a trailing `\r`
+   (vim's `:s/[ \t]\+$//` trims the spaces before the `\r\n`).
 
 ### Refinement of an already-open item (not counted)
 
@@ -3124,7 +3106,8 @@ sentence-orientation item.
 
 - A: `nvim_buf_set_text`'s byte-column resolution is correct —
   `resolve_text_col` snaps to char boundaries (`nvim_api.rs:1712-1717`); the
-  CRLF defect (finding 1) is the whole-content rejoin, not the col math.
+  CRLF corruption was the whole-content rejoin (fixed 2026-08-30), not the col
+  math.
 - A: completion `anchor_col` is char-based consistently
   (`lsp_glue.rs:1837-1863`, fixed by audit-r2 #7); the byte-vs-char cursor
   defect was in `accept_completion`'s `cursor_offset` math, not the anchor —
