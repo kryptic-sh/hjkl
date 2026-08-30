@@ -3058,18 +3058,7 @@ verified its findings against nvim 0.12.5 directly.
 
 ### Findings — ranked
 
-1. **LOW — `ap` with a blank-line cursor or a trailing blank run at EOF still
-   diverges (found 2026-08-30, during the counted-`ip`/`ap` fix).** The
-   counted-`ip`/`ap` over-run guard above does not fire on these (they reach
-   `rem == 0`), so they are a distinct `ap`-semantics gap, not the over-run
-   class. Verified against nvim 0.12.5:
-   - `d2ap` on `"aaa.\n\nbbb.\n\nccc.\n"` @ (1,0): nvim `"aaa.\n"`, hjkl
-     `"aaa.\nccc.\n"`.
-   - `d3ap` same buffer @ (1,0): nvim no-op, hjkl `"aaa.\n"`.
-   - `dap` on `"a\n\n\n"` @ (0,0): nvim `""`, hjkl `"\n"`.
-   - `d2ap` on `"a\n\n\n"` @ (0,0): nvim no-op, hjkl `""`.
-
-2. **LOW — two counted/word-end charwise-op divergences on a closed fold remain
+1. **LOW — two counted/word-end charwise-op divergences on a closed fold remain
    (found 2026-08-30, during the closed-fold charwise fix).** The whole-fold
    promotion now applies at column 0, but:
    - Counted `2dw`/`2yw` on a closed fold do not re-apply the count on top of
