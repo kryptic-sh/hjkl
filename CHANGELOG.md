@@ -36,6 +36,12 @@ patch bumps.
   `[ \t]` only on LF lines — a CRLF row's `\r` shielded the trailing whitespace,
   and the per-line round-trip dropped the final `\r`. It now strips `[ \t]` runs
   that precede a line break (or EOF) on the raw rope bytes, preserving CRLF.
+- **`ap` (around-paragraph) matches nvim for blank-line cursors and EOF.** `ap`
+  is now a faithful port of nvim's `current_par(include=true)`: a blank-line
+  cursor's counted `ap` walks whole blank-run + paragraph units (the last unit
+  stops at the paragraph), a paragraph whose trailing blank run reaches EOF
+  takes the whole run, and over-running is a no-op instead of a best-effort
+  clamp.
 
 ## [0.41.5] - 2026-08-30
 

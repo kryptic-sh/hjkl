@@ -507,3 +507,86 @@ expected_buffer = "aaa.\n\nbbb.\n\nccc.\n"
 expected_cursor = [0, 0]
 expected_mode = "normal"
 expected_register = ['"', ""]
+
+# ── `ap` blank-line cursor + trailing-blank-run-at-EOF semantics ─────────────
+#
+# `ap` is nvim's `current_par(include=true)`: the count drives a UNIFORM loop of
+# whole paragraph units (no separate "first unit"), and a unit with nowhere to
+# start FAILs (a no-op). Two gaps vs hjkl were pinned here:
+#   * a blank-line cursor's `Nap` walks blank-run + paragraph units; the LAST
+#     unit stops at the paragraph (does not take the following blank run), and
+#     running out of units is a no-op, not a whole-buffer clamp;
+#   * a paragraph whose trailing blank run reaches EOF takes the WHOLE blank run
+#     (then `Nap` over-runs), not a single trailing blank line.
+# Pinned from nvim 0.12.5; every expectation is the nvim-measured outcome.
+
+# `d2ap` from the blank line between two paragraphs: blank + bbb, then blank +
+# ccc — everything after "aaa." goes, the default register holds it linewise.
+[[cases]]
+name = "textobj_d2ap_blank_line_between_paragraphs"
+initial_buffer = "aaa.\n\nbbb.\n\nccc.\n"
+initial_cursor = [1, 0]
+keys = "d2ap"
+expected_buffer = "aaa.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "\nbbb.\n\nccc.\n"]
+
+# `d3ap` from the same blank line: only two `ap` units exist, so the object
+# over-runs and fails (buffer, cursor, register all unchanged).
+[[cases]]
+name = "textobj_d3ap_blank_line_between_paragraphs_over_run_noop"
+initial_buffer = "aaa.\n\nbbb.\n\nccc.\n"
+initial_cursor = [1, 0]
+keys = "d3ap"
+expected_buffer = "aaa.\n\nbbb.\n\nccc.\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', ""]
+
+# Single `ap` from a blank line: the blank run plus the following paragraph,
+# and NOT the blank run after it.
+[[cases]]
+name = "textobj_dap_blank_line_before_last_paragraph"
+initial_buffer = "aaa.\n\nbbb.\n\nccc.\n"
+initial_cursor = [3, 0]
+keys = "dap"
+expected_buffer = "aaa.\n\nbbb.\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+expected_register = ['"', "\nccc.\n"]
+
+# `dap` on a paragraph whose trailing blank run reaches EOF takes the WHOLE run
+# (both blank lines), emptying the buffer.
+[[cases]]
+name = "textobj_dap_trailing_blank_run_to_eof"
+initial_buffer = "a\n\n\n"
+initial_cursor = [0, 0]
+keys = "dap"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "a\n\n\n"]
+
+# `d2ap` over the same: the first unit consumes everything to EOF, so the second
+# unit fails and the object is a no-op.
+[[cases]]
+name = "textobj_d2ap_trailing_blank_run_to_eof_over_run_noop"
+initial_buffer = "a\n\n\n"
+initial_cursor = [0, 0]
+keys = "d2ap"
+expected_buffer = "a\n\n\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', ""]
+
+# `dap` on a trailing blank run with no paragraph after it is a no-op.
+[[cases]]
+name = "textobj_dap_blank_run_at_eof_noop"
+initial_buffer = "a\n\n"
+initial_cursor = [1, 0]
+keys = "dap"
+expected_buffer = "a\n\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', ""]

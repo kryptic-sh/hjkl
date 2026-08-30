@@ -1988,30 +1988,86 @@ pub fn paragraph_text_object<H: hjkl_engine::types::Host>(
         }
         rope_line_to_str(&rope, r).trim().is_empty()
     };
+    if !inner {
+        // `ap` ("around paragraph"): faithful port of nvim's `current_par()`
+        // operator path for `include == true` (src/nvim/textobject.c, nvim
+        // 0.12.5). Line numbers below are 1-based to mirror nvim, then shifted
+        // to hjkl's 0-based rows at the end.
+        //
+        // The count drives a UNIFORM loop over whole paragraph units — there is
+        // no separate "first unit" step. `end == n_lines` FAILs at the TOP of
+        // every iteration, so a unit with nowhere to start (a paragraph whose
+        // trailing blank run reaches EOF, or a counted `Nap` that runs out of
+        // paragraphs) is a no-op rather than a best-effort clamp. When the
+        // cursor starts on a blank run, the LAST unit ends at its paragraph
+        // instead of also taking the following blank run.
+        //
+        // `startPS()` (nroff-macro / form-feed paragraph starts) is ignored
+        // here exactly as the `ip` path below ignores it: hjkl models paragraph
+        // boundaries with `is_blank` (empty or whitespace-only lines) only.
+        let white = |lnum: usize| is_blank(lnum - 1);
+        let mut start = row + 1;
+        let white_in_front = white(start);
+        // Move back to the start of the paragraph or the white run.
+        while start > 1 {
+            if white_in_front {
+                if !white(start - 1) {
+                    break;
+                }
+            } else if white(start - 1) {
+                break;
+            }
+            start -= 1;
+        }
+        // Move past the end of any white lines, then step back one so `end`
+        // sits on the last line of the current (white or non-white) run.
+        let mut end = start;
+        while end <= n_lines && white(end) {
+            end += 1;
+        }
+        end -= 1;
+        let mut i = count;
+        while i > 0 {
+            i -= 1;
+            if end == n_lines {
+                return None;
+            }
+            // Skip to the end of the paragraph.
+            end += 1;
+            while end < n_lines && !white(end + 1) {
+                end += 1;
+            }
+            // Starting on a blank run, the LAST unit stops at the paragraph
+            // itself — it does not also take the following blank run.
+            if i == 0 && white_in_front {
+                break;
+            }
+            // Skip to the end of the white lines after the paragraph.
+            while end < n_lines && white(end + 1) {
+                end += 1;
+            }
+        }
+        // When the paragraph has no trailing blank lines, take the leading
+        // blank lines instead.
+        if !white_in_front && !white(end) {
+            while start > 1 && white(start - 1) {
+                start -= 1;
+            }
+        }
+        let end_col = rope_line_to_str(&rope, end - 1).chars().count();
+        return Some(((start - 1, 0), (end - 1, end_col)));
+    }
+
+    // `ip` ("inner paragraph"): the cursor's same-blankness run.
     let mut top = row;
     let mut bot = row;
     if is_blank(row) {
-        // B16: `:h ip`/`:h ap` on a blank line select the blank-line RUN
-        // (not a no-op). `ip` stops at the run's edges. `ap` additionally
-        // consumes the following non-blank paragraph, if one exists — but
-        // if the run touches EOF with no paragraph after it, `ap` is a
-        // no-op (verified against nvim: `dap` on a trailing blank run at
-        // EOF leaves the buffer untouched).
+        // `:h ip` on a blank line selects the blank-line RUN (not a no-op).
         while top > 0 && is_blank(top - 1) {
             top -= 1;
         }
         while bot + 1 < n_lines && is_blank(bot + 1) {
             bot += 1;
-        }
-        if !inner {
-            if bot + 1 < n_lines {
-                bot += 1;
-                while bot + 1 < n_lines && !is_blank(bot + 1) {
-                    bot += 1;
-                }
-            } else {
-                return None;
-            }
         }
     } else {
         while top > 0 && !is_blank(top - 1) {
@@ -2020,55 +2076,25 @@ pub fn paragraph_text_object<H: hjkl_engine::types::Host>(
         while bot + 1 < n_lines && !is_blank(bot + 1) {
             bot += 1;
         }
-        // For `ap`, include one trailing blank line if present.
-        if !inner && bot + 1 < n_lines && is_blank(bot + 1) {
-            bot += 1;
-        }
     }
-    // `Nip` / `Nap` extend across `count - 1` further units. For `ip` a unit is
-    // a single block — a maximal run of same-blankness lines — so counting
-    // alternates paragraph → blank gap → paragraph …. For `ap` a unit is a
-    // whole paragraph together with its trailing blank gap (vim `:help ap`),
-    // so `2ap` reaches the blank lines after the second paragraph too.
+    // `Nip` extends across `count - 1` further same-blankness runs,
+    // alternating paragraph → blank gap → paragraph ….
     let mut rem = count - 1;
     while rem > 0 && bot + 1 < n_lines {
-        if inner {
-            let blank_next = is_blank(bot + 1);
+        let blank_next = is_blank(bot + 1);
+        bot += 1;
+        while bot + 1 < n_lines && is_blank(bot + 1) == blank_next {
             bot += 1;
-            while bot + 1 < n_lines && is_blank(bot + 1) == blank_next {
-                bot += 1;
-            }
-        } else {
-            while bot + 1 < n_lines && !is_blank(bot + 1) {
-                bot += 1;
-            }
-            while bot + 1 < n_lines && is_blank(bot + 1) {
-                bot += 1;
-            }
         }
         rem -= 1;
     }
-    // When the buffer ends before all `count - 1` further units could be
+    // When the buffer ends before all `count - 1` further runs could be
     // consumed, `rem` is still positive: nvim treats the counted object as
     // FAILED (a no-op) rather than best-effort extending to the whole buffer.
     // Returning `None` propagates to a no-op in both the operator and visual
     // paths (see `text_object_range`).
     if rem > 0 {
         return None;
-    }
-    // vim `:h ap`: a paragraph object takes the trailing blank lines, or —
-    // when the paragraph runs to the end of the buffer with no blank line
-    // after it — the leading blank lines instead. `bot` sitting on a
-    // non-blank line at real EOF (`bot + 1 >= n_lines`, the phantom row
-    // already excluded above) means no trailing blank was available, so fall
-    // back to absorbing the whole leading blank run. When a trailing blank
-    // *was* taken `bot` is blank, so this is skipped and a middle-paragraph
-    // `dap` keeps its leading run intact. Checked after the `Nap` count loop
-    // so it reflects the final span.
-    if !inner && bot + 1 >= n_lines && !is_blank(bot) {
-        while top > 0 && is_blank(top - 1) {
-            top -= 1;
-        }
     }
     let end_col = rope_line_to_str(&rope, bot).chars().count();
     Some(((top, 0), (bot, end_col)))
