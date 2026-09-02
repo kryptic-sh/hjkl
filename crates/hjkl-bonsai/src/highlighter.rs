@@ -303,12 +303,12 @@ fn ensure_mimalloc_allocator() {
     }
 
     INIT.call_once(|| unsafe {
-        tree_sitter::set_allocator(
-            Some(ts_mi_malloc),
-            Some(ts_mi_calloc),
-            Some(ts_mi_realloc),
-            Some(ts_mi_free),
-        );
+        tree_sitter::set_allocator(Some(tree_sitter::Allocator {
+            malloc: ts_mi_malloc,
+            calloc: ts_mi_calloc,
+            realloc: ts_mi_realloc,
+            free: ts_mi_free,
+        }));
     });
 }
 
@@ -823,7 +823,7 @@ impl Highlighter {
             // directives that need them. For most highlight-only patterns
             // (Rust ~95% of matches) this branch is skipped entirely.
             let cap_pairs: Vec<(u32, tree_sitter::Node<'_>)> = if info.needs_cap_pairs() {
-                m.captures.iter().map(|c| (c.index, c.node)).collect()
+                m.captures().iter().map(|c| (c.index, c.node)).collect()
             } else {
                 Vec::new()
             };
@@ -935,7 +935,7 @@ impl Highlighter {
             };
 
             // Emit spans for each capture in the match.
-            for capture in m.captures {
+            for capture in m.captures() {
                 let node = capture.node;
                 let start = node.start_byte();
                 let end = node.end_byte();
@@ -1130,7 +1130,7 @@ impl Highlighter {
                 let mut lang_name: Option<String> = None;
                 let mut content_range: Option<Range<usize>> = None;
 
-                for cap in m.captures {
+                for cap in m.captures() {
                     if Some(cap.index) == lang_idx {
                         let s = cap.node.start_byte();
                         let e = cap.node.end_byte();
@@ -1327,7 +1327,7 @@ impl Highlighter {
                 let mut lang_name: Option<String> = None;
                 let mut content_range: Option<Range<usize>> = None;
 
-                for cap in m.captures {
+                for cap in m.captures() {
                     if Some(cap.index) == lang_idx {
                         let s = cap.node.start_byte();
                         let e = cap.node.end_byte();
@@ -1517,7 +1517,7 @@ impl Highlighter {
             let info = pattern_info.get(pattern_idx).copied().unwrap_or_default();
 
             let cap_pairs: Vec<(u32, tree_sitter::Node<'_>)> = if info.needs_cap_pairs() {
-                m.captures.iter().map(|c| (c.index, c.node)).collect()
+                m.captures().iter().map(|c| (c.index, c.node)).collect()
             } else {
                 Vec::new()
             };
@@ -1627,7 +1627,7 @@ impl Highlighter {
                 None
             };
 
-            for capture in m.captures {
+            for capture in m.captures() {
                 let node = capture.node;
                 let start = node.start_byte();
                 let end = node.end_byte();
@@ -1739,7 +1739,7 @@ impl Highlighter {
                 let mut lang_name: Option<String> = None;
                 let mut content_range: Option<Range<usize>> = None;
 
-                for cap in m.captures {
+                for cap in m.captures() {
                     if Some(cap.index) == lang_idx {
                         let s = cap.node.start_byte();
                         let e = cap.node.end_byte();
@@ -2370,7 +2370,7 @@ mod tests {
         let mut found_tag = false;
         while let Some(m) = matches_iter.next() {
             let cap_pairs: Vec<(u32, tree_sitter::Node<'_>)> =
-                m.captures.iter().map(|c| (c.index, c.node)).collect();
+                m.captures().iter().map(|c| (c.index, c.node)).collect();
             let mut skip = false;
             for pred in query.general_predicates(m.pattern_index) {
                 let op = pred.operator.as_ref();
@@ -2407,7 +2407,7 @@ mod tests {
                 }
             }
             if !skip {
-                for cap in m.captures {
+                for cap in m.captures() {
                     let name = &capture_names[cap.index as usize];
                     if &**name == "tag" {
                         found_tag = true;
@@ -2456,7 +2456,7 @@ mod tests {
         let mut found_tag = false;
         while let Some(m) = matches_iter.next() {
             let cap_pairs: Vec<(u32, tree_sitter::Node<'_>)> =
-                m.captures.iter().map(|c| (c.index, c.node)).collect();
+                m.captures().iter().map(|c| (c.index, c.node)).collect();
             let mut skip = false;
             for pred in query.general_predicates(m.pattern_index) {
                 let op = pred.operator.as_ref();
@@ -2487,7 +2487,7 @@ mod tests {
                 }
             }
             if !skip {
-                for cap in m.captures {
+                for cap in m.captures() {
                     let name = &capture_names[cap.index as usize];
                     if &**name == "tag" {
                         found_tag = true;

@@ -185,7 +185,7 @@ pub fn rainbow_spans(
     // Collect bracket nodes from the viewport.
     let mut bracket_nodes: Vec<tree_sitter::Node<'_>> = Vec::new();
     while let Some(m) = matches.next() {
-        for cap in m.captures {
+        for cap in m.captures() {
             if cap.index == bracket_idx {
                 bracket_nodes.push(cap.node);
             }
@@ -246,7 +246,7 @@ fn count_scope_depth(node: tree_sitter::Node<'_>, grammar: &Grammar, source: &[u
 
         let mut is_scope = false;
         while let Some(m) = matches.next() {
-            for cap in m.captures {
+            for cap in m.captures() {
                 if cap.index == scope_idx && cap.node.id() == parent.id() {
                     is_scope = true;
                     break;
@@ -332,7 +332,7 @@ pub fn rainbow_spans_rope(
 
     let mut bracket_nodes: Vec<tree_sitter::Node<'_>> = Vec::new();
     while let Some(m) = matches.next() {
-        for cap in m.captures {
+        for cap in m.captures() {
             if cap.index == bracket_idx {
                 bracket_nodes.push(cap.node);
             }
@@ -360,7 +360,7 @@ pub fn rainbow_spans_rope(
                     });
                 let mut is_scope = false;
                 while let Some(m) = anc_matches.next() {
-                    for cap in m.captures {
+                    for cap in m.captures() {
                         if cap.index == scope_idx && cap.node.id() == parent.id() {
                             is_scope = true;
                             break;

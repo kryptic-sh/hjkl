@@ -288,7 +288,7 @@ fn collect_folds_into(
             .get(m.pattern_index)
             .copied()
             .unwrap_or(false);
-        for cap in m.captures {
+        for cap in m.captures() {
             if cap.index != fold_idx {
                 continue;
             }
@@ -653,7 +653,7 @@ fn injection_regions(
         let mut lang_name: Option<String> = None;
         let mut content_range: Option<Range<usize>> = None;
 
-        for cap in m.captures {
+        for cap in m.captures() {
             if Some(cap.index) == lang_idx {
                 let (s, e) = (cap.node.start_byte(), cap.node.end_byte());
                 if s < e && e <= source.len() {
