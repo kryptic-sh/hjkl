@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.41.6] - 2026-09-02
+
+### Changed
+
+- **Dependency updates.** `hjkl-bonsai` bumps `tree-sitter` 0.26.13 → 0.27.0
+  (the `QueryMatch::captures` field becomes the `captures()` method and
+  `set_allocator` now takes a single `Allocator` struct); 48 transitive packages
+  roll forward within existing ranges and the 1.95 MSRV. No behavior change.
+
 ### Fixed
 
 - **Counted `is`/`as` walk body/separator units like nvim.** `y2is`/`d3is`
@@ -6005,7 +6014,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.5...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.6...HEAD
+[0.41.6]: https://github.com/kryptic-sh/hjkl/compare/v0.41.5...v0.41.6
 [0.41.5]: https://github.com/kryptic-sh/hjkl/compare/v0.41.4...v0.41.5
 [0.41.4]: https://github.com/kryptic-sh/hjkl/compare/v0.41.3...v0.41.4
 [0.41.3]: https://github.com/kryptic-sh/hjkl/compare/v0.41.2...v0.41.3
