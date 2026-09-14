@@ -13,7 +13,7 @@ homepage = "https://hjkl.kryptic.sh"
 readme = "README.md"
 
 [dependencies]
-dirs = "6"
+dirs = "7"
 thiserror = "2"
 
 [dev-dependencies]
