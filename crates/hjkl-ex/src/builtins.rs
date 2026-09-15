@@ -535,7 +535,7 @@ fn cd_handler<H: Host>(
     }
     let raw = args.trim();
     let target = if raw.is_empty() {
-        std::env::var("HOME").unwrap_or_else(|_| ".".to_string())
+        crate::complete::home_dir().unwrap_or_else(|| ".".to_string())
     } else {
         raw.to_string()
     };

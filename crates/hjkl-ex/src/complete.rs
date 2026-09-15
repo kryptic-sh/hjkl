@@ -361,16 +361,32 @@ static PATH_ENTRIES_CACHE: Mutex<Option<PathEntriesCache>> = Mutex::new(None);
 ///
 /// When `dirs_only` is true, non-directory entries are filtered out (`:cd`
 /// completion); directories still get their trailing `/`.
+/// The directory `~` and a bare `:cd` resolve to.
+pub fn home_dir() -> Option<String> {
+    home_dir_from(std::env::var("HOME").ok(), std::env::home_dir())
+}
+
+/// `$HOME` when set and non-empty — Git Bash and MSYS set it on Windows too,
+/// and vim honors it there — else the platform's profile directory (`profile`,
+/// from `std::env::home_dir`). Windows normally has no `HOME`, so reading it
+/// alone expanded `~` to nothing and sent a bare `:cd` to `.`.
+fn home_dir_from(home_env: Option<String>, profile: Option<std::path::PathBuf>) -> Option<String> {
+    home_env
+        .filter(|h| !h.is_empty())
+        .or_else(|| profile.map(|p| p.to_string_lossy().into_owned()))
+}
+
 fn complete_path_entries(prefix: &str, cwd: &std::path::Path, dirs_only: bool) -> Vec<String> {
     // A bare `~` scans the home dir with entries prefixed `~/`.
     let prefix = if prefix == "~" { "~/" } else { prefix };
-    // Split prefix at the last '/' into (dir_part, file_part).
-    let (dir_part, file_part) = match prefix.rfind('/') {
+    // Split prefix at the last separator into (dir_part, file_part) — `/`, and
+    // `\` too on Windows, where `C:\Us` is the natural thing to type.
+    let (dir_part, file_part) = match prefix.rfind(std::path::is_separator) {
         Some(idx) => (&prefix[..=idx], &prefix[idx + 1..]),
         None => ("", prefix),
     };
     // Expand `~`/`$VAR` in the dir part for the scan; candidates keep `dir_part`.
-    let home = std::env::var("HOME").unwrap_or_default();
+    let home = home_dir().unwrap_or_default();
     let expanded_dir = expand_path_prefix(dir_part, &home, |k| std::env::var(k).ok());
     let scan_dir = if expanded_dir.is_empty() {
         cwd.to_path_buf()
@@ -1739,6 +1755,36 @@ mod tests {
         let get = |k: &str| (k == "SUB").then(|| "docs".to_string());
         // Leading `~` expands first, then the `$VAR` in the tail.
         assert_eq!(expand_path_prefix("~/$SUB/", home, get), "/home/me/docs/");
+    }
+
+    #[test]
+    fn home_dir_prefers_home_env_then_the_profile_dir() {
+        let profile = Some(std::path::PathBuf::from("profile"));
+        assert_eq!(
+            home_dir_from(Some("env-home".into()), profile.clone()).as_deref(),
+            Some("env-home")
+        );
+        // Windows normally has no HOME: fall back to the profile directory.
+        assert_eq!(
+            home_dir_from(None, profile.clone()).as_deref(),
+            Some("profile")
+        );
+        assert_eq!(
+            home_dir_from(Some(String::new()), profile).as_deref(),
+            Some("profile")
+        );
+        assert_eq!(home_dir_from(None, None), None);
+    }
+
+    /// The platform's own separator splits the prefix — `\` on Windows.
+    #[test]
+    fn complete_path_entries_splits_on_the_native_separator() {
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir(cwd.path().join("sub")).unwrap();
+        std::fs::write(cwd.path().join("sub").join("file.txt"), b"x").unwrap();
+        let sep = std::path::MAIN_SEPARATOR;
+        let found = complete_path_entries(&format!("sub{sep}fi"), cwd.path(), false);
+        assert_eq!(found, vec![format!("sub{sep}file.txt")]);
     }
 
     #[test]

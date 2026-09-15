@@ -10,6 +10,14 @@ patch bumps.
 
 ### Fixed
 
+- `~` in path completion and a bare `:cd` fall back to the profile directory
+  when `HOME` is unset, as it normally is on Windows; `~` expanded to nothing
+  and `:cd` went to `.`. Path completion also splits on `\` on Windows.
+- `%:p` on Windows is a plain absolute path (`C:\…`), not the verbatim
+  `\\?\C:\…` form `canonicalize` returns there, which cmd.exe and many tools
+  reject.
+- `<cfile>` takes `\` and the drive `:` on Windows, as vim's Windows `isfname`
+  does, so `C:\src\main.rs` is one filename rather than its last fragment.
 - `:!cmd`, `:[range]!cmd` and `:r !cmd` run through cmd.exe on Windows instead
   of a hardcoded `sh -c`, which does not exist on a stock Windows `PATH`, so
   every shell-out failed with "program not found".

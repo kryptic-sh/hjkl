@@ -29,4 +29,11 @@ and this project adheres to
 
 - Added changelog.
 
+### Fixed
+
+- Hunk stage, unstage and revert build the `git apply` patch with `/` in the
+  file path. The path came from a native relative path, `src\main.rs` on
+  Windows, which `git apply` takes literally, so any file in a subdirectory
+  failed there.
+
 [unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...HEAD

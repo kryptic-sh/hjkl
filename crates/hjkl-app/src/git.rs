@@ -553,7 +553,14 @@ impl std::error::Error for HunkApplyError {}
 /// `git apply` needs the `a/`,`b/` path headers to know which file the hunk
 /// targets; the `@@` header + body come straight from [`Hunk`].
 fn build_patch(rel: &Path, hunk: &Hunk) -> String {
-    let p = rel.to_string_lossy();
+    // Git paths always use `/`. `rel` comes from a native path, which on
+    // Windows is `src\main.rs`, and `git apply` takes a backslash literally —
+    // staging a hunk in any subdirectory failed there.
+    let p = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
     format!(
         "diff --git a/{p} b/{p}\n--- a/{p}\n+++ b/{p}\n{}\n{}",
         hunk.header, hunk.body
@@ -1348,6 +1355,26 @@ mod tests {
             .output()
             .expect("git diff --cached");
         String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// The patch header names the file with `/` on every platform — a native
+    /// Windows path (`src\main.rs`) is taken literally by `git apply`.
+    #[test]
+    fn build_patch_uses_forward_slashes() {
+        let hunk = Hunk {
+            old_start: 1,
+            old_lines: 1,
+            new_start: 1,
+            new_lines: 1,
+            header: "@@ -1 +1 @@".to_string(),
+            body: "-a\n+b".to_string(),
+        };
+        let rel = Path::new("src").join("deep").join("main.rs");
+        assert_eq!(
+            build_patch(&rel, &hunk),
+            "diff --git a/src/deep/main.rs b/src/deep/main.rs\n\
+             --- a/src/deep/main.rs\n+++ b/src/deep/main.rs\n@@ -1 +1 @@\n-a\n+b"
+        );
     }
 
     #[test]

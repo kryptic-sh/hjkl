@@ -27,9 +27,13 @@ pub struct ExpandContext<'a> {
 /// Mirrors vim's `isfname` intent: letters, digits, and the path-punctuation
 /// set `/ . - _ ~ $ + , #`. Kept deliberately narrow — brackets, spaces, and
 /// quotes are excluded so a `<cfile>` on `see src/main.rs here` stops at the
-/// surrounding whitespace.
+/// surrounding whitespace. On Windows the class also takes `\` and the drive
+/// `:`, as vim's Windows `isfname` default does, so `C:\src\main.rs` is one
+/// filename rather than its last fragment.
 fn is_fname_char(c: char) -> bool {
-    c.is_alphanumeric() || matches!(c, '/' | '.' | '-' | '_' | '~' | '$' | '+' | ',' | '#')
+    c.is_alphanumeric()
+        || matches!(c, '/' | '.' | '-' | '_' | '~' | '$' | '+' | ',' | '#')
+        || (cfg!(windows) && matches!(c, '\\' | ':'))
 }
 
 /// vim keyword character class for `<cword>`: alphanumerics plus `_`. (vim's
@@ -78,6 +82,23 @@ pub fn big_word_under_cursor(line: &str, col: usize) -> Option<String> {
     token_around(line, col, |c| !c.is_whitespace())
 }
 
+/// Normalize the absolute path `abs` for `:p`.
+///
+/// Unix resolves it through the filesystem, falling back to the lexical join
+/// for a file that does not exist yet. Windows normalizes it lexically with
+/// `std::path::absolute`: `canonicalize` there returns the verbatim
+/// `\\?\C:\…` form, which cmd.exe and many tools reject once `%:p` reaches a
+/// `:!` command. (vim's `:p` does not resolve symlinks on any platform.)
+#[cfg(windows)]
+fn full_path(abs: PathBuf) -> PathBuf {
+    std::path::absolute(&abs).unwrap_or(abs)
+}
+
+#[cfg(not(windows))]
+fn full_path(abs: PathBuf) -> PathBuf {
+    abs.canonicalize().unwrap_or(abs)
+}
+
 /// Apply a single modifier (`:p`, `:h`, `:t`) to a path string.
 ///
 /// `cwd` supplies the base directory for `:p` (making a relative path
@@ -96,9 +117,7 @@ fn apply_modifier(s: &str, modifier: &str, cwd: Option<&Path>) -> Option<String>
             } else {
                 cwd.join(p)
             };
-            // canonicalize may fail if the file doesn't exist yet — fall back to lexical join.
-            let result = abs.canonicalize().unwrap_or(abs);
-            Some(result.display().to_string())
+            Some(full_path(abs).display().to_string())
         }
         "h" => {
             let p = Path::new(s);
@@ -425,6 +444,20 @@ mod tests {
         assert_eq!(filename_under_cursor(line, col), None);
     }
 
+    /// Windows paths are one `<cfile>`; elsewhere `\` and `:` stay separators
+    /// of the token, as in vim's Unix `isfname`.
+    #[test]
+    fn filename_under_cursor_windows_path() {
+        let line = r"see C:\src\main.rs here";
+        let col = line.find("main").unwrap();
+        let expected = if cfg!(windows) {
+            r"C:\src\main.rs"
+        } else {
+            "main.rs"
+        };
+        assert_eq!(filename_under_cursor(line, col).as_deref(), Some(expected));
+    }
+
     #[test]
     fn filename_under_cursor_rich_char_class() {
         // Exercise the full path punctuation set: `/`, `.`, `-`, `_`, `~`.
@@ -524,6 +557,32 @@ mod tests {
         assert_eq!(
             expand_filename(&ctx, "%:p"),
             Some("/nonexistent-cwd-abc/rel.txt".to_string())
+        );
+    }
+
+    /// `:p` of an existing file through `..` is a plain normalized absolute
+    /// path — never Windows' verbatim `\\?\` form, which tools reject.
+    #[test]
+    fn percent_colon_p_is_normalized_and_not_verbatim() {
+        let cwd = tempfile::tempdir().unwrap();
+        std::fs::create_dir(cwd.path().join("sub")).unwrap();
+        std::fs::write(cwd.path().join("f.txt"), b"x").unwrap();
+        let rel = Path::new("sub").join("..").join("f.txt");
+        let ctx = ExpandContext {
+            current_path: Some(&rel),
+            cwd: Some(cwd.path()),
+            ..Default::default()
+        };
+        let full = expand_filename(&ctx, "%:p").unwrap();
+        assert!(!full.starts_with(r"\\?\"), "verbatim path: {full}");
+        let full = Path::new(&full);
+        assert!(full.is_absolute(), "{full:?}");
+        assert!(full.ends_with("f.txt"), "{full:?}");
+        assert!(
+            !full
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir)),
+            "`..` left in {full:?}"
         );
     }
 

@@ -580,7 +580,7 @@ fn expand_expr(app: &crate::app::App, expr: &str) -> String {
             // has no extension). A dot inside a directory name, e.g.
             // `foo.bar/baz`, must be left untouched.
             let s = path.to_string_lossy();
-            let file_start = s.rfind('/').map_or(0, |i| i + 1);
+            let file_start = s.rfind(std::path::is_separator).map_or(0, |i| i + 1);
             match s[file_start..].rfind('.') {
                 // Dot strictly after the component start (relative index > 0).
                 Some(rel) if rel > 0 => s[..file_start + rel].to_owned(),
@@ -3517,6 +3517,13 @@ mod tests {
             root_of(&mut app, "/home/user/.bashrc"),
             "/home/user/.bashrc"
         );
+        // The same with the platform's own separator — `\` on Windows.
+        let native = if cfg!(windows) {
+            r"C:\home\proj.v2\main"
+        } else {
+            "/home/proj.v2/main"
+        };
+        assert_eq!(root_of(&mut app, native), native);
     }
 
     // ── line(".") and col(".") are 1-based ────────────────────────────────────
