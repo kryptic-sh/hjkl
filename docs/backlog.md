@@ -428,10 +428,11 @@ Design and measured violation classes are in §5.
 
 #### Needs an owner decision, not more work
 
-| Item                                                | Where                                                  | Decision needed                                                                                                                                                                                                               |
-| --------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Anvil TOFU sidecar survives uninstall               | `apps/hjkl/src/app/ex_dispatch.rs` (`anvil_uninstall`) | Keeping it is safer (a changed artifact still trips `ChecksumMismatch`) but a user uninstalling to recover from a bad install cannot clear it. Delete on uninstall, or add `:Anvil forget`.                                   |
-| `hjkl-quickfix` / `hjkl-app` have no `CHANGELOG.md` | those two crates                                       | Both are published and both shipped BREAKING changes in 0.40.0, documented only in the root changelog. BCTP says do not create changelog files unasked — but these are the two crates a consumer checks after a failed build. |
+| Item                                                | Where                                                  | Decision needed                                                                                                                                                                                                                                                                                                                                                                                             |
+| --------------------------------------------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Anvil TOFU sidecar survives uninstall               | `apps/hjkl/src/app/ex_dispatch.rs` (`anvil_uninstall`) | Keeping it is safer (a changed artifact still trips `ChecksumMismatch`) but a user uninstalling to recover from a bad install cannot clear it. Delete on uninstall, or add `:Anvil forget`.                                                                                                                                                                                                                 |
+| `hjkl-quickfix` / `hjkl-app` have no `CHANGELOG.md` | those two crates                                       | Both are published and both shipped BREAKING changes in 0.40.0, documented only in the root changelog. BCTP says do not create changelog files unasked — but these are the two crates a consumer checks after a failed build.                                                                                                                                                                               |
+| cssparser 0.38 (dependabot #333, left open)         | `crates/hjkl-css` (`parse.rs`, `error.rs`)             | 0.38 rewrites the parser API: `ParserInput` is gone, `Parser` and `ParseError` drop a lifetime, `new_custom_error` is renamed, and `BasicParseErrorKind::UnexpectedToken` / `AtRuleInvalid` no longer carry the token, so error messages lose the offending text. 70 compile errors; `hjkl-css` is published and read by pikr. Port it (a breaking minor for hjkl-css) or stay on 0.37 and ignore the bump. |
 
 #### Deferred refactors
 
@@ -759,6 +760,22 @@ with ripgrep installed are unaffected.
   passes for the wrong reason) in CI would look like flake. Check what the job
   actually reports before trusting either side.
 
+- **Most `#[ignore]`d grammar tests are in no CI job, and seven of them fail.**
+  `grammar_tests` selects by name (fold tests plus bonsai's `_real_` tests), so
+  the other ignored tests in `hjkl-bonsai` and `hjkl-syntax` never run. Run on
+  Linux on 2026-09-15 with
+  `cargo nextest run --run-ignored only -p hjkl-bonsai -p hjkl-syntax -E 'not test(/fold/)'`:
+  49 passed, 7 failed. `highlighter::tests::html_set_directive_metadata_applied`
+  dies with SIGSEGV;
+  `edit_size_dispatch::large_edit_incremental_parse_still_produces_spans` and
+  five `hjkl-syntax` tests (`parse_and_render_small_rust_buffer`,
+  `incremental_path_matches_cold_for_small_edit`, `forget_drops_buffer_state`,
+  `diagnostics_emit_sign_for_syntax_error`,
+  `diagnostics_signs_correct_when_scrolled`) fail. Not investigated: whether
+  they rotted or depend on grammars already installed in the user data dir. Read
+  the SIGSEGV first: a safe-Rust test crashing the process is a soundness bug
+  somewhere below it. Once they pass, widen the job's filter.
+
 ### 1.10 Left open by the 2026-08-04 code review
 
 (The default-scope `:g`/`:v` phantom-row and `replace_all` change-log items
@@ -941,6 +958,17 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
 - `hjkl-fs` `dir.rs`'s Windows directory-symlink branch in `remove_path_all` has
   no runtime coverage: its symlink tests are `#[cfg(unix)]` (creating a symlink
   on Windows needs Developer Mode or elevation).
+- Hunk stage/unstage/revert on Windows: `build_patch_uses_forward_slashes`
+  checks the patch text, but every test that runs `git apply`
+  (`stage_hunk_applies_to_index` and its siblings in `hjkl-app` `git.rs`) is
+  `#[ignore]`d for the #115 flake, so no CI leg applies a patch for a file in a
+  subdirectory.
+- `hjkl-ex` `shell.rs`: `shell_range_filter_sorts_lines` and
+  `shell_filter_large_payload_does_not_deadlock` are `#[cfg(unix)]` (`sort`,
+  `cat`). On Windows the range filter is covered by the CRLF and empty-output
+  tests; the pipe-deadlock regression is not covered there.
+- The `~\` completion fix (`expand_path_prefix`) is red/green only on a Windows
+  leg: on Unix `\` is a filename character, so the tests pin the literal case.
 - Not exercised: a non-US keyboard layout, conhost, ARM64 Windows.
 
 **Recorded behaviour, not bugs.**
