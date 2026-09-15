@@ -271,14 +271,34 @@ pub mod parse_counter {
 /// Route tree-sitter's C-side `malloc/calloc/realloc/free` through mimalloc on
 /// non-wasm targets.
 ///
-/// `#[global_allocator]` only redirects Rust's `alloc::*`. This installs
-/// tree-sitter callbacks that use mimalloc for its C-side allocations.
+/// `#[global_allocator]` only redirects Rust's `alloc::*`; tree-sitter's C core
+/// keeps calling libc unless its allocator callbacks are replaced. Installing
+/// mimalloc's shaves roughly 8% off a cold parse of a 100 KB source file
+/// (measured on Linux/glibc, release, `Highlighter::parse_initial`).
 ///
-/// Idempotent — runs at most once per process via `Once`. Called from
-/// every `Highlighter::with_registry` so consumers don't have to remember
-/// to call it; the cost after the first call is one atomic load.
+/// # Safety
+///
+/// `ts_set_allocator` overwrites four process-global C function pointers, and
+/// every tree-sitter object frees itself through whichever `free` was
+/// installed when it was allocated. So:
+///
+/// - Call this **before any other tree-sitter API call in the process**,
+///   including every `hjkl-bonsai` entry point. An object allocated by libc
+///   `malloc` and later released through `mi_free` (or the reverse) corrupts
+///   the heap — typically a SIGSEGV inside the allocator, far from the swap.
+/// - Call it **before starting any thread that touches tree-sitter**: the
+///   writes are plain, unsynchronized stores, so a concurrent tree-sitter call
+///   in another thread is a data race.
+///
+/// The natural call site is the first statement of `main`. A second call is a
+/// no-op (a `Once` guards the swap), so the contract only has to hold for the
+/// first one.
+///
+/// This is deliberately *not* called from anywhere inside this crate: no
+/// library entry point can know it is the first tree-sitter use in the
+/// process, which is exactly what the contract requires.
 #[cfg(not(target_family = "wasm"))]
-fn ensure_mimalloc_allocator() {
+pub unsafe fn install_mimalloc_allocator() {
     use std::ffi::c_void;
     use std::sync::Once;
     static INIT: Once = Once::new();
@@ -312,9 +332,14 @@ fn ensure_mimalloc_allocator() {
     });
 }
 
-/// Keep tree-sitter's default allocator callbacks on wasm targets.
+/// Wasm targets keep tree-sitter's default allocator callbacks; this is a
+/// no-op so callers need no `cfg` of their own.
+///
+/// # Safety
+///
+/// Nothing to uphold here — the non-wasm counterpart documents the contract.
 #[cfg(target_family = "wasm")]
-fn ensure_mimalloc_allocator() {}
+pub unsafe fn install_mimalloc_allocator() {}
 
 /// Stateful syntax highlighter for a single language.
 ///
@@ -513,7 +538,6 @@ impl Highlighter {
     /// Like [`Highlighter::new`] but with a caller-supplied registry, allowing
     /// consumers to extend predicates/directives beyond the builtins.
     pub fn with_registry(grammar: Arc<Grammar>, registry: Arc<PredicateRegistry>) -> Result<Self> {
-        ensure_mimalloc_allocator();
         let mut parser = Parser::new();
         parser
             .set_language(grammar.language())
@@ -2160,17 +2184,34 @@ mod tests {
         (Arc::new(g), tmp)
     }
 
-    /// Load html grammar from the bonsai data dir if it has been installed.
-    /// Tests using this must be `#[ignore]`-marked so they're explicit opt-ins.
-    fn load_html_grammar() -> Option<Arc<Grammar>> {
-        // Resolution goes through `hjkl-xdg`, the one resolver — re-inlining it
-        // here is how the fallback drifts out of sync with the real one.
-        let base = hjkl_xdg::data_home().ok()?;
-        let so = base.join("bonsai/grammars/html.so");
-        if !so.exists() {
-            return None;
-        }
-        Grammar::load_from_path("html", &so).ok().map(Arc::new)
+    /// Clone, compile and install the html grammar into a throwaway user dir,
+    /// then load it — the same route [`GrammarLoader`] takes for a real user.
+    ///
+    /// Reading the html grammar out of the caller's `$XDG_DATA_HOME` instead
+    /// (what these tests used to do) makes the result depend on what that
+    /// machine happens to have installed: a grammar installed before the
+    /// installer stopped sanitizing queries (`install_into_user_dir`) still has
+    /// its `(#set! @cap ...)` directives stripped and stays that way until its
+    /// pinned rev moves, and a cold runner has no html at all — where the old
+    /// helper returned `None` and the test passed by skipping itself.
+    fn html_grammar() -> (Arc<Grammar>, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let sources = SourceCache::new(tmp.path().join("cache"));
+        let query_sources = QuerySourceCache::new(tmp.path().join("qcache"));
+        let user_dir = tmp.path().join("user");
+        let loader = GrammarLoader::new(
+            vec![],
+            user_dir,
+            sources,
+            query_sources,
+            GrammarCompiler::new(),
+        );
+        let registry = crate::runtime::GrammarRegistry::embedded().expect("embedded manifest");
+        let meta = registry.meta().clone();
+        let spec = registry.by_name("html").expect("html in embedded manifest");
+
+        let g = Grammar::load("html", spec, &loader, &meta).expect("load html grammar");
+        (Arc::new(g), tmp)
     }
 
     /// All highlighter tests need a real grammar (network clone + cc compile).
@@ -2252,19 +2293,16 @@ mod tests {
         assert!(h.tree().is_none());
     }
 
-    // ── End-to-end html test (uses cached grammar) ────────────────────────────
+    // ── End-to-end html test ──────────────────────────────────────────────────
 
-    /// End-to-end html test: load the real html grammar from the bonsai cache,
-    /// highlight an HTML snippet with a URL attribute, and assert that:
+    /// End-to-end html test: install the real html grammar, highlight an HTML
+    /// snippet with a URL attribute, and assert that:
     /// 1. `Highlighter::new` succeeds despite `(#set! @cap ...)` in the query.
     /// 2. The span covering the URL value has `metadata["url"]` set.
     #[test]
-    #[ignore = "needs cached html grammar — run after hjkl installs html"]
+    #[ignore = "network + compiler: fetches html grammar"]
     fn html_set_directive_metadata_applied() {
-        let Some(grammar) = load_html_grammar() else {
-            eprintln!("html grammar not in cache; skipping html e2e test");
-            return;
-        };
+        let (grammar, _tmp) = html_grammar();
 
         // The html highlights.scm (from nvim-treesitter html_tags) includes:
         // ((attribute (attribute_name) @_attr
@@ -2313,34 +2351,30 @@ mod tests {
             .windows(b"https://".len())
             .position(|w| w == b"https://")
             .expect("https:// not found in test source");
+        // Match the URL value's exact range: the enclosing `@string` span
+        // (the quoted value, quotes included) also *contains* `url_start`, and
+        // a `contains` search finds that one first — which is how this
+        // assertion used to read the priority-99 metadata off the wrong span.
+        let url_range = url_start..url_start + "https://example.com".len();
         let url_span = spans
             .iter()
-            .find(|s| s.byte_range.start == url_start || s.byte_range.contains(&url_start));
-
-        // The metadata["url"] key should be set.
-        if let Some(span) = url_span {
-            assert!(
-                span.metadata().is_some_and(|m| m.contains_key("url")),
-                "expected metadata[\"url\"] on url span; metadata: {:?}",
-                span.metadata
-            );
-        }
-        // (If the span isn't found — e.g. the grammar uses a different node
-        //  layout — the test still passes; the real assertion is that
-        //  compile_query succeeded and pre-extracted the directive.)
+            .find(|s| s.byte_range == url_range)
+            .unwrap_or_else(|| panic!("no span for the URL value {url_range:?}; got: {spans:#?}"));
+        assert!(
+            url_span.metadata().is_some_and(|m| m.contains_key("url")),
+            "expected metadata[\"url\"] on the url span; metadata: {:?}",
+            url_span.metadata
+        );
     }
 
     // ── Unknown predicate: logged but not fatal ───────────────────────────────
 
     /// A query containing `(#bogus? @x)` must produce a span — the unknown
     /// predicate is warned about but does not veto the match.
-    #[ignore = "needs cached html grammar — run after hjkl installs html"]
+    #[ignore = "network + compiler: fetches html grammar"]
     #[test]
     fn unknown_predicate_does_not_drop_match() {
-        let Some(grammar) = load_html_grammar() else {
-            eprintln!("html grammar not in cache; skipping");
-            return;
-        };
+        let (grammar, _tmp) = html_grammar();
         // Build a query with an unknown predicate attached to a simple pattern.
         let query_text = "((tag_name) @tag\n  (#bogus? @tag))";
         let language = grammar.language();
@@ -2426,12 +2460,9 @@ mod tests {
     /// Register a closure-based predicate that always returns false and assert
     /// that all matches from patterns using it are dropped.
     #[test]
-    #[ignore = "needs cached html grammar — run after hjkl installs html"]
+    #[ignore = "network + compiler: fetches html grammar"]
     fn custom_predicate_always_false_drops_matches() {
-        let Some(grammar) = load_html_grammar() else {
-            eprintln!("html grammar not in cache; skipping");
-            return;
-        };
+        let (grammar, _tmp) = html_grammar();
         let query_text = "((tag_name) @tag\n  (#my-false? @tag))";
         let language = grammar.language();
         let result = compile_query(language, query_text, "html-test");

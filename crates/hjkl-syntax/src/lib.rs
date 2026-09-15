@@ -1795,16 +1795,57 @@ mod tests {
 
     // --- Network-dependent tests (grammar needed) ---
 
+    /// Attach the grammar for `path` to `id` and return once it is usable.
+    ///
+    /// `set_language_for_path` may only START a load: with a warm
+    /// `~/.cache/bonsai` the grammar is attached before the call returns, but
+    /// on a cold machine — CI, which fetches and compiles it — the buffer has
+    /// no grammar until a later `poll_pending_loads` completes the load, and
+    /// until then `render_viewport` answers `None`. Rendering straight after
+    /// `set_language_for_path` therefore passes locally and fails in the
+    /// `grammar tests` lane, which is how these tests shipped red.
+    ///
+    /// A load that FAILS removes itself from the pending list and emits
+    /// `LoadEvent::Failed`, after which nothing is in flight and no later poll
+    /// will ever report readiness — so fail here, with the cause, instead of
+    /// spinning to the deadline and reporting an ambiguous timeout.
+    fn attach_grammar_when_ready(layer: &mut SyntaxLayer, id: BufferId, path: &str) {
+        let outcome = layer.set_language_for_path(id, Path::new(path));
+        assert!(
+            outcome.is_known(),
+            "no grammar is registered for {path} — the test can never succeed"
+        );
+        if matches!(outcome, SetLanguageOutcome::Ready) {
+            return;
+        }
+        let deadline = std::time::Duration::from_secs(300);
+        let start = std::time::Instant::now();
+        loop {
+            for event in layer.poll_pending_loads() {
+                match event {
+                    LoadEvent::Failed { name, error, .. } => {
+                        panic!("grammar load for `{name}` ({path}) failed: {error}")
+                    }
+                    LoadEvent::Ready { id: ready, .. } if ready == id => return,
+                    LoadEvent::Ready { .. } => {}
+                }
+            }
+            assert!(
+                start.elapsed() < deadline,
+                "grammar for {path} never became ready within {deadline:?}, \
+                 and no load reported a failure — it is still building, or \
+                 nothing was ever queued"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
     #[test]
     #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
     fn parse_and_render_small_rust_buffer() {
         let buf = View::from_str("fn main() { let x = 1; }\n");
         let mut layer = default_layer();
-        assert!(
-            layer
-                .set_language_for_path(TID, Path::new("a.rs"))
-                .is_known()
-        );
+        attach_grammar_when_ready(&mut layer, TID, "a.rs");
         let out = layer
             .render_viewport(TID, &buf, 0, 10)
             .expect("render output");
@@ -1819,7 +1860,7 @@ mod tests {
     fn diagnostics_emit_sign_for_syntax_error() {
         let buf = View::from_str("fn main() {\nlet x = ;\n}\n");
         let mut layer = default_layer();
-        layer.set_language_for_path(TID, Path::new("a.rs"));
+        attach_grammar_when_ready(&mut layer, TID, "a.rs");
         let out = layer.render_viewport(TID, &buf, 0, 10).unwrap();
         assert!(
             !out.signs.is_empty(),
@@ -1849,7 +1890,7 @@ mod tests {
         src.push_str("fn broken() {\nlet x = ;\n}\n");
         let buf = View::from_str(&src);
         let mut layer = default_layer();
-        layer.set_language_for_path(TID, Path::new("a.rs"));
+        attach_grammar_when_ready(&mut layer, TID, "a.rs");
         let out = layer.render_viewport(TID, &buf, 45, 20).unwrap();
         assert!(
             out.signs
@@ -1872,7 +1913,7 @@ mod tests {
     fn incremental_path_matches_cold_for_small_edit() {
         let pre = View::from_str("fn main() { let x = 1; }");
         let mut layer = default_layer();
-        layer.set_language_for_path(TID, Path::new("a.rs"));
+        attach_grammar_when_ready(&mut layer, TID, "a.rs");
         let _ = layer.render_viewport(TID, &pre, 0, 10).unwrap();
         layer.apply_edits(
             TID,
@@ -1888,7 +1929,7 @@ mod tests {
         let post = View::from_str("fn Ymain() { let x = 1; }");
         let inc = layer.render_viewport(TID, &post, 0, 10).unwrap();
         let mut cold_layer = default_layer();
-        cold_layer.set_language_for_path(TID, Path::new("a.rs"));
+        attach_grammar_when_ready(&mut cold_layer, TID, "a.rs");
         let cold = cold_layer.render_viewport(TID, &post, 0, 10).unwrap();
         assert_eq!(inc.spans, cold.spans);
     }
@@ -1935,11 +1976,11 @@ mod tests {
         path: &str,
         rows: usize,
     ) -> Vec<(usize, usize)> {
-        let outcome = layer.set_language_for_path(id, Path::new(path));
-        assert!(
-            outcome.is_known(),
-            "no grammar is registered for {path} — the test can never succeed"
-        );
+        attach_grammar_when_ready(layer, id, path);
+        // The host grammar is attached; injected grammars (a fenced ```rust
+        // block inside markdown) load on their own and surface only as
+        // extraction answering `None`, so keep polling and re-rendering until
+        // it answers.
         let deadline = std::time::Duration::from_secs(300);
         let start = std::time::Instant::now();
         loop {
@@ -2353,7 +2394,7 @@ mod tests {
     fn forget_drops_buffer_state() {
         let buf = View::from_str("fn main() {}");
         let mut layer = default_layer();
-        layer.set_language_for_path(TID, Path::new("a.rs"));
+        attach_grammar_when_ready(&mut layer, TID, "a.rs");
         let _ = layer.render_viewport(TID, &buf, 0, 10).unwrap();
         assert!(layer.clients.contains_key(&TID));
         layer.forget(TID);

@@ -6,6 +6,20 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **Routing tree-sitter's C allocations through mimalloc is now the caller's
+  explicit `unsafe { install_mimalloc_allocator() }`**, called once before any
+  other tree-sitter use. It used to happen implicitly inside
+  `Highlighter::with_registry`, which cannot be correct in a library:
+  tree-sitter frees each object through whichever `free` was installed when it
+  was allocated, so anything built earlier (a `Query` from `compile_query`, a
+  `builtin_folds` cursor) was malloc'd by libc and freed by mimalloc — a heap
+  corruption that showed up as a SIGSEGV inside the allocator. The swap also
+  raced any other thread already in tree-sitter. A consumer that wants the
+  routing (~8% off a cold 100 KB parse, Linux/glibc) must now make the call
+  itself; one that does nothing keeps tree-sitter's default allocator.
+
 ### Fixed
 
 - Grammars compile on Windows (MSVC targets). `GrammarCompiler` drove

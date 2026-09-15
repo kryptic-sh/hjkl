@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A tree-sitter heap corruption that could crash the editor.** `hjkl-bonsai`
+  swapped tree-sitter's C allocator to mimalloc lazily, the first time a
+  `Highlighter` was built — but tree-sitter objects created before that point
+  (queries, fold cursors) were allocated by libc and later freed through
+  mimalloc, and the swap itself raced any other thread already parsing. `hjkl`
+  now installs the allocator as the first statement of `main`, before anything
+  touches tree-sitter. Reproduced as a SIGSEGV in a grammar test; no user report
+  is known to match it.
+
 ### Changed
 
 - **`hjkl-css` builds on `cssparser` 0.38** (Servo's parser; was 0.37), which

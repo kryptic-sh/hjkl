@@ -3,8 +3,9 @@
 // mimalloc as the global Rust allocator. Tree-sitter parsing dominates
 // the hot path and is heavily allocation-bound (every subtree node is a
 // short-lived `malloc`); mimalloc's segmented free-list outperforms
-// glibc's ptmalloc on this exact workload. The TS C core is routed
-// through mimalloc separately by `hjkl_bonsai::ensure_mimalloc_allocator()`.
+// glibc's ptmalloc on this exact workload. The TS C core allocates
+// through its own callbacks, which `main` reroutes to mimalloc with
+// `hjkl_bonsai::install_mimalloc_allocator`.
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
@@ -500,6 +501,15 @@ fn prepend_anvil_path() {
 }
 
 fn main() -> Result<()> {
+    // Route tree-sitter's C-side allocations through mimalloc. This must be
+    // the first statement: it overwrites process-global allocator callbacks,
+    // and any tree-sitter object allocated before the swap would later be
+    // freed through the new `free`.
+    //
+    // SAFETY: nothing in this process has called tree-sitter yet, and no
+    // thread has been started.
+    unsafe { hjkl_bonsai::install_mimalloc_allocator() };
+
     // Prepend the anvil bin dir to PATH before any threads (tracing, LSP) start.
     prepend_anvil_path();
 

@@ -120,9 +120,11 @@ fn large_edit_incremental_parse_still_produces_spans() {
     let mut h = Highlighter::new(grammar).expect("create highlighter");
     h.parse_initial(pre);
 
-    // Build a large replacement (≥1024 bytes inserted).
+    // Build a large replacement (≥1024 bytes inserted). The loop count is what
+    // the assertion below polices: 40 lines of this shape fall short of 1KB, so
+    // the "large edit" this test is named for was never actually large.
     let mut large_insert = String::from("fn main() {\n");
-    for i in 0..40 {
+    for i in 0..64 {
         let _ = writeln!(large_insert, "    let var_{i} = {i} * 2;");
     }
     large_insert.push('}');

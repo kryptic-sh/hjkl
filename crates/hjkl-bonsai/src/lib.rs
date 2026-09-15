@@ -89,6 +89,7 @@ pub use folds::{
     extract_marker_fold_ranges_rope, extract_marker_fold_ranges_rope_multi,
 };
 pub use hex_color::{HEX_BG_KEY, HEX_COLOR_CAPTURE, HEX_FG_KEY, HexColorPass};
+pub use highlighter::install_mimalloc_allocator;
 pub use highlighter::parse_counter;
 pub use highlighter::{HighlightSpan, Highlighter, ParseError, Syntax};
 pub use predicate::{
