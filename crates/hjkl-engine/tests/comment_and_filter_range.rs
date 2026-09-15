@@ -193,6 +193,31 @@ fn filter_error_leaves_buffer_untouched() {
     assert_eq!(content_of(&e), before);
 }
 
+/// Prints rows `a` and `b` with CRLF endings, in each platform's shell
+/// (cmd.exe's `echo` always ends its line in CRLF).
+fn crlf_rows_command() -> &'static str {
+    if cfg!(windows) {
+        "echo a& echo b"
+    } else {
+        r"printf 'a\r\nb\r\n'"
+    }
+}
+
+/// Line endings follow the filtered rows, not the tool: CRLF output into LF
+/// rows lands as LF, and CRLF rows keep their CR.
+#[test]
+fn filter_output_line_endings_follow_the_input_rows() {
+    let mut e = plain_editor("x\ny\nz");
+    let result = e.filter_range(0, 1, crlf_rows_command(), None);
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(content_of(&e), "a\nb\nz");
+
+    let mut e = plain_editor("x\r\ny\r\nz");
+    let result = e.filter_range(0, 1, crlf_rows_command(), None);
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(content_of(&e), "a\r\nb\r\nz");
+}
+
 // ── Perf-shaped guard (audit D1) ──────────────────────────────────────────
 
 /// `gcc` on ONE line of a large buffer must be fast — the whole point of

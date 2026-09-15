@@ -13,6 +13,10 @@ patch bumps.
 - `:!cmd`, `:[range]!cmd` and `:r !cmd` run through cmd.exe on Windows instead
   of a hardcoded `sh -c`, which does not exist on a stock Windows `PATH`, so
   every shell-out failed with "program not found".
+- `:[range]!cmd` no longer leaves a `\r` on each replaced row when the tool
+  emits CRLF (everything run through cmd.exe) into LF rows; CRLF rows keep their
+  CR. A filter that prints nothing now deletes the range, as in vim, instead of
+  leaving one blank row.
 
 ## [0.40.0] - 2026-08-01
 

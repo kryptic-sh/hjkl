@@ -11,6 +11,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - `policy::shell_command` builds the platform shell invocation for a user-typed
   shell-out: `sh -c` on Unix, `%COMSPEC% /S /C "<command>"` on Windows. Every
   shell-out site uses it, so they all run the same shell.
+- `policy::filter_output_rows` splits a range filter's output into replacement
+  rows, with line endings that follow the filtered rows.
+
+### Changed
+
+- `Editor::filter_range` keeps the CR of filtered CRLF rows. It split the output
+  with `str::lines`, which dropped every `\r`, so filtering a CRLF buffer turned
+  the replaced rows into LF rows.
 
 ### Fixed
 

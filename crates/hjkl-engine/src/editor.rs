@@ -5169,7 +5169,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
 
         // Write stdin on a thread to avoid deadlock when output > pipe buffer.
         let mut stdin = child.stdin.take().ok_or("no stdin handle")?;
-        let input_bytes = input_text.into_bytes();
+        // A copy: `input_text` is still needed to shape the output rows.
+        let input_bytes = input_text.clone().into_bytes();
         thread::spawn(move || {
             let _ = stdin.write_all(&input_bytes);
             // stdin drops here, signalling EOF to the child.
@@ -5237,11 +5238,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
 
         // Replace rows `top..=bot` with the stdout lines — a single
         // bounded splice (audit D4), not a whole-document rebuild.
-        // `stdout.lines()` already drops the trailing-newline sentinel —
-        // this preserves vim's "no trailing-newline trim" spec because a
-        // trailing '\n' from the command means the last replacement line
-        // is the line BEFORE the newline, not an empty line after it.
-        let new_lines: Vec<String> = stdout.lines().map(|l| l.to_owned()).collect();
+        let new_lines = crate::policy::filter_output_rows(&input_text, &stdout);
 
         self.push_undo();
         self.splice_row_range(top, bot, &new_lines);

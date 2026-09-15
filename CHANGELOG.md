@@ -22,8 +22,14 @@ patch bumps.
   failed with "program not found"; the `!{motion}` filter already used cmd.exe
   but mangled quotes through std's argument escaping. All four now share
   `hjkl_engine::policy::shell_command`: `sh -c` on Unix, and on Windows
-  `%COMSPEC% /S /C "<command>"` with the command passed verbatim, vim's
-  defaults there.
+  `%COMSPEC% /S /C "<command>"` with the command passed verbatim, vim's defaults
+  there.
+- **Filter output line endings follow the filtered rows.** Tools run through
+  cmd.exe emit CRLF, so `:%!sort` on Windows left a `\r` on every replaced row;
+  meanwhile `!{motion}` dropped the CR of a CRLF buffer's rows. Both filters now
+  share one rule: CRLF rows stay CRLF, LF rows stay LF. `:{range}!` with empty
+  output now deletes the range like vim and `!{motion}`, instead of leaving a
+  blank row.
 
 ## [0.41.6] - 2026-09-02
 

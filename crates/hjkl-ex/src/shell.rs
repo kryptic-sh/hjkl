@@ -105,7 +105,10 @@ pub fn shell_filter_handler<H: Host>(
     if start > bot {
         return ExEffect::Ok;
     }
-    let payload = all_lines[start..=bot].join("\n");
+    let input = all_lines[start..=bot].join("\n");
+    // A copy for the writer thread: `input` is still needed to shape the
+    // output rows.
+    let payload = input.clone();
     let mut child = match hjkl_engine::policy::shell_command(cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -153,8 +156,7 @@ pub fn shell_filter_handler<H: Host>(
     let Ok(stdout) = String::from_utf8(output.stdout) else {
         return ExEffect::Error("filter output was not UTF-8".into());
     };
-    let trimmed = stdout.strip_suffix('\n').unwrap_or(&stdout);
-    let new_rows: Vec<String> = trimmed.split('\n').map(String::from).collect();
+    let new_rows = hjkl_engine::policy::filter_output_rows(&input, &stdout);
 
     editor.push_undo();
     let after: Vec<String> = all_lines.split_off(bot + 1);
@@ -169,7 +171,45 @@ pub fn shell_filter_handler<H: Host>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_util::make_editor_with_lines;
+    use crate::test_util::{buf_lines, make_editor_with_lines};
+
+    /// Prints rows `a` and `b` with CRLF endings, in each platform's shell
+    /// (cmd.exe's `echo` always ends its line in CRLF).
+    fn crlf_rows_command() -> &'static str {
+        if cfg!(windows) {
+            "echo a& echo b"
+        } else {
+            r"printf 'a\r\nb\r\n'"
+        }
+    }
+
+    #[test]
+    fn shell_range_filter_crlf_output_into_lf_rows_stays_lf() {
+        let mut editor = make_editor_with_lines(&["x", "y", "z"]);
+        let range = LineRange::new(1, 2);
+        let result = shell_filter_handler(&mut editor, crlf_rows_command(), Some(range));
+        assert_eq!(result, ExEffect::Ok, "got: {result:?}");
+        assert_eq!(buf_lines(&editor), ["a", "b", "z"]);
+    }
+
+    #[test]
+    fn shell_range_filter_crlf_rows_stay_crlf() {
+        let mut editor = make_editor_with_lines(&["x\r", "y\r", "z"]);
+        let range = LineRange::new(1, 2);
+        let result = shell_filter_handler(&mut editor, crlf_rows_command(), Some(range));
+        assert_eq!(result, ExEffect::Ok, "got: {result:?}");
+        assert_eq!(buf_lines(&editor), ["a\r", "b\r", "z"]);
+    }
+
+    /// vim: a filter that prints nothing deletes the range (`:2!true`).
+    #[test]
+    fn shell_range_filter_empty_output_deletes_range() {
+        let mut editor = make_editor_with_lines(&["a", "b", "c"]);
+        let range = LineRange::new(2, 2);
+        let result = shell_filter_handler(&mut editor, "exit 0", Some(range));
+        assert_eq!(result, ExEffect::Ok, "got: {result:?}");
+        assert_eq!(buf_lines(&editor), ["a", "c"]);
+    }
 
     #[test]
     fn shell_no_range_returns_info() {

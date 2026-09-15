@@ -56,6 +56,36 @@ pub fn shell_command(command: &str) -> std::process::Command {
     }
 }
 
+/// Split a shell filter's `stdout` into the rows that replace the filtered
+/// range, where `input` is the range's rows joined by `\n` as fed to the
+/// command. Every range filter uses it, so they all agree on line endings.
+///
+/// A trailing newline ends the last row rather than starting an empty one, so
+/// empty output replaces the range with no rows (vim: `:%!true` deletes them).
+///
+/// Line endings follow the input. When no input row ended in `\r`, each output
+/// row's trailing `\r` is dropped: tools run through cmd.exe emit CRLF, which
+/// would otherwise turn an LF buffer's rows into CRLF ones. When the input had
+/// CRLF rows, the output rows are kept byte-for-byte, so a CRLF buffer stays
+/// CRLF through a filter.
+pub fn filter_output_rows(input: &str, stdout: &str) -> Vec<String> {
+    if stdout.is_empty() {
+        return Vec::new();
+    }
+    let input_has_cr = input.split('\n').any(|row| row.ends_with('\r'));
+    let body = stdout.strip_suffix('\n').unwrap_or(stdout);
+    body.split('\n')
+        .map(|row| {
+            if input_has_cr {
+                row
+            } else {
+                row.strip_suffix('\r').unwrap_or(row)
+            }
+        })
+        .map(String::from)
+        .collect()
+}
+
 /// When `true`, file I/O paths are confined to the current working directory
 /// subtree: absolute paths and paths containing a `..` component are refused.
 /// Default `false` (unrestricted, as in vim). The RPC entry points enable this
@@ -125,6 +155,36 @@ mod tests {
     fn shell_command_passes_inner_quotes_verbatim() {
         let expected = if cfg!(windows) { "\"a  b\"" } else { "a  b" };
         assert_eq!(run(r#"echo "a  b""#), expected);
+    }
+
+    fn rows(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn filter_output_rows_strips_cr_when_input_is_lf() {
+        assert_eq!(filter_output_rows("b\na", "a\r\nb\r\n"), rows(&["a", "b"]));
+    }
+
+    #[test]
+    fn filter_output_rows_keeps_cr_when_input_is_crlf() {
+        assert_eq!(
+            filter_output_rows("b\r\na\r", "a\r\nb\r\n"),
+            rows(&["a\r", "b\r"])
+        );
+    }
+
+    #[test]
+    fn filter_output_rows_trailing_newline_ends_the_last_row() {
+        assert_eq!(filter_output_rows("x", "a\n"), rows(&["a"]));
+        assert_eq!(filter_output_rows("x", "a"), rows(&["a"]));
+        assert_eq!(filter_output_rows("x", "a\n\n"), rows(&["a", ""]));
+        assert_eq!(filter_output_rows("x", "\n"), rows(&[""]));
+    }
+
+    #[test]
+    fn filter_output_rows_empty_output_is_no_rows() {
+        assert!(filter_output_rows("x", "").is_empty());
     }
 
     #[test]
