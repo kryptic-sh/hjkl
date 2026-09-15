@@ -854,6 +854,104 @@ compatibility decision:
    `hjkl-app -> hjkl-lang`; awaiting user approval rather than retaining two
    parsers that can drift.
 
+### 1.14 Windows support — left open by the 2026-09-15 audit
+
+The first session run on a Windows host (Windows 11, MSVC toolchain). The full
+workspace nextest suite passes there, and the `grammar tests` CI command passes
+locally (clone + MSVC compile + load). Fixed in that session and not repeated
+here: key releases handled as presses, `sh -c` shell-outs, filter output line
+endings, npm `.cmd` shims for formatters and LSP servers, MSVC grammar builds +
+git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
+`<cfile>` and RPC `expand("%:r")`. Findings came from a read-only audit;
+"confirmed" below means the code path was read end to end, not run on Windows.
+
+1. **Anvil cannot finish any install on Windows — deferred by the user.**
+   Confirmed by code read. The final link step, `atomic_symlink` →
+   `hjkl_fs::symlink_atomic`, returns `Unsupported` off Unix and surfaces as
+   `InstallError::Archive("… TODO: implement copy fallback")`, both at the end
+   of the GitHub path and in `finalize_install_locked` (cargo, npm, pip, go).
+   The GitHub path has already moved the package tree by then, so a failure
+   leaves it without a bin link or `.rev`. Also: `find_bin` and the cargo/go bin
+   checks look for `<bin>` without `.exe`; `Command::new("npm")` cannot spawn
+   `npm.cmd` (resolve it with `which` as `hjkl-mangler` and `hjkl-lsp` now do);
+   pip runs `python3` and uses `venv/bin`, where a Windows venv has `Scripts\`;
+   `anvil.toml` has no `x86_64-pc-windows-msvc` entries, and some upstream asset
+   names differ (suspected: lua-language-server `win32-x64.zip`, rust-analyzer
+   `.zip`). Every full-pipeline test in `installer.rs` and
+   `tests/install_tests.rs` is `#[cfg(unix)]`. Needs a copy (or hard-link)
+   fallback, `std::env::consts::EXE_SUFFIX`, the `Scripts` dir, a Python
+   launcher choice, Windows manifest entries with shas, and un-gated tests.
+2. **AltGr characters may type nothing in Insert mode — suspected, not run.**
+   crossterm on Windows reports AltGr as CONTROL|ALT; `crossterm_to_input`
+   (`hjkl-engine-tui`) sets `ctrl`, and `step_insert` (`hjkl-vim` `insert.rs`)
+   swallows ctrl+Char. On German/French/Nordic layouts `@ { [ ] \ | ~` would be
+   lost, and AltGr+`]` would act as `<C-]>`. Reproduce on a non-US layout before
+   changing anything.
+3. **Bracketed paste probably never arrives on Windows — suspected.**
+   crossterm's Windows reader parses console input records and does not emit
+   `Event::Paste`, so pastes arrive as keystrokes: autoindent/autopair cascade,
+   and `App::handle_paste`'s CRLF normalization is bypassed. Separately, the
+   `EnableBracketedPaste` `execute!` in `main.rs` terminal setup could fail on a
+   legacy console after raw mode and the alternate screen are already on,
+   leaving the terminal unrestored. Check in Windows Terminal and conhost.
+4. **Windows clipboard read keeps CRLF — confirmed by code read.**
+   `read_clipboard` (`apps/hjkl/src/host.rs`) passes `CF_UNICODETEXT` through,
+   so `"+p` of text copied from a Windows app inserts rows ending in `\r`;
+   `set_text` writes LF-only. `ClipboardOpen::new` makes a single
+   `OpenClipboard` attempt with no retry while another app holds it, and
+   `write_clipboard` ignores the error. Decision needed: normalize on read (as
+   `handle_paste` does) or keep bytes. Related: §8 #19.
+5. **Atomic save fails while another process holds the file — suspected.**
+   `write_atomic_with` (`hjkl-fs` `atomic.rs`) falls back to a non-atomic write
+   only on `CrossesDevices`; renaming over a file opened without
+   `FILE_SHARE_DELETE` (indexer, antivirus, another editor) errors and `:w`
+   fails. Needs a retry/fallback policy.
+6. **Directory fsync is a silent no-op on Windows — confirmed by code read.**
+   `sync_parent` (`hjkl-fs` `atomic.rs`) uses `File::open(dir)`, which fails
+   without `FILE_FLAG_BACKUP_SEMANTICS`, so rename durability for save, swap,
+   undo and trash is skipped. Open with the flag via `OpenOptionsExt`.
+7. **Config write-lock liveness is Linux-only.** `pid_liveness` (`hjkl-config`
+   `write.rs`) returns `None` off Linux, so after a crash `write_key_at` fails
+   until the staleness window passes. `hjkl-app` `swap.rs` `pid_is_alive`
+   already has a Windows `OpenProcess` implementation to share.
+8. **The `findstr` grep fallbacks disagree.** `quickfix.rs` passes `/c:{pat}`
+   with a relative `*` and no `.git` exclusion; `hjkl-picker` `source/rg.rs`
+   passes the raw query (a pattern starting with `/` parses as a findstr option)
+   plus `root\*`. Only reached when `rg` is missing.
+9. **Replacing a loaded grammar DLL — suspected.** `publish_path` renames over
+   `<name>.dll`; Windows refuses while another hjkl process has it loaded. Only
+   on a grammar revision bump with two instances running.
+10. **Explorer git status under case or 8.3-name differences — suspected.** The
+    status map is keyed by git2's workdir joined with the relative path
+    (`explorer_key_for`); a cwd spelled with different case never matches.
+    `git_repo_dd_tracked_stays_red` is `#[cfg(not(target_os = "windows"))]`.
+11. **`path_to_file_uri` treats a verbatim `\\?\C:\` path as UNC**
+    (`hjkl-clipboard` `uri.rs`). Only reachable with a canonicalized path.
+
+**Coverage gaps.**
+
+- The pty e2e suite (`apps/hjkl/tests/e2e.rs`) is `#[cfg(unix)]`: under ConPTY
+  cursor reads return 0,0. Nothing drives a real Windows console end to end; the
+  key-release fix is tested at `App::handle_key_event` with synthetic
+  Windows-shaped event pairs.
+- `hjkl-engine/tests/comment_and_filter_range.rs` and
+  `is_tool_installed_returns_true_for_sh` need POSIX tools (`awk`, `cat`, `tr`,
+  `sh`) on `PATH`. CI's Windows runners have Git's `usr\bin`; a stock PowerShell
+  environment does not, and the two `awk` tests fail there.
+- `hjkl-fs` `dir.rs`'s Windows directory-symlink branch in `remove_path_all` has
+  no runtime coverage: its symlink tests are `#[cfg(unix)]` (creating a symlink
+  on Windows needs Developer Mode or elevation).
+- Not exercised: a non-US keyboard layout, conhost, ARM64 Windows.
+
+**Recorded behaviour, not bugs.**
+
+- `%:p` on Windows does not resolve symlinks (`std::path::absolute`); Unix
+  canonicalizes. vim's `:p` does not resolve links on any platform.
+- Filter output line endings follow the filtered rows — the user's call on
+  2026-09-15, chosen over always stripping `\r` or leaving the output as-is.
+- `:make` runs `makeprg` as an argv with no shell by design, so it is not a
+  shell-out and was deliberately left out of `policy::shell_command`.
+
 ## 2. Blocked on platform access
 
 | Finding                                                      | Location                                                         | Blocker                                                                             |
@@ -861,7 +959,7 @@ compatibility decision:
 | INCR transfer timeout signalled as completion                | `x11_thread.rs` (`prune_expired_incr_sends`), Wayland equivalent | Needs a live session; truncated transfer remains indistinguishable from completion. |
 | `SELECTION_NOTIFY` refusal arm ignores selection             | `x11_thread.rs` refusal arm                                      | Needs a live X server; unrelated selection refusal can be read as ours.             |
 | `CString::new(..).expect(..)` panics on NUL in a type string | `hjkl-clipboard/src/backend/macos.rs`                            | Needs a Mac.                                                                        |
-| Windows FFI paths lack runtime coverage                      | `hjkl-fs/src/identity.rs`, `hjkl-fs/src/dir.rs`                  | Needs a Windows host.                                                               |
+| Windows directory-symlink branch lacks runtime coverage      | `hjkl-fs/src/dir.rs` (`remove_path_all`)                         | Needs Developer Mode or elevation to create a symlink; see §1.14.                   |
 
 ## 3. Deferred security design
 
@@ -962,10 +1060,18 @@ crates pulling tree-sitter, mimalloc, or aws-lc-sys require CI runners.
   with one `-c 'normal! …'` per case makes a failed first motion look like "nvim
   left the buffer unchanged", i.e. like agreement with a hjkl no-op. Split the
   probe into separate `-c 'normal! …'` calls, or drive it through `nvim_input`.
-- macOS and Windows are the two platforms local work never exercises: filename
-  encoding, path separators, and symlink permissions all differ there. Gate on
-  the capability (probe and skip) rather than on `cfg(unix)`, which includes
-  macOS.
+- macOS is never exercised by local work, and Windows only rarely (the
+  2026-09-15 session ran on a Windows host): filename encoding, path separators,
+  and symlink permissions all differ there. Gate on the capability (probe and
+  skip) rather than on `cfg(unix)`, which includes macOS.
+- **On Windows, Git Bash is not the user's environment.** It puts `sh`, `awk`
+  and `cat` on `PATH` and sets `HOME`; hjkl started from PowerShell or Windows
+  Terminal has none of them. A shell-out, `~` or tool-resolution check run from
+  Git Bash passes for the wrong reason — run it from PowerShell.
+- **Prettier is for markdown here, not YAML.** Run on `ci.yml` it rewrapped
+  expressions inside `>-` blocks and changed the value of two release-upload
+  `if:` conditions. After touching a workflow, compare the parsed YAML against
+  `HEAD`, not the text.
 
 ## 5. Supporting evidence
 
