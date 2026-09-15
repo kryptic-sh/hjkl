@@ -4,8 +4,8 @@
 //! are supported.
 
 use cssparser::{
-    AtRuleParser, CowRcStr, DeclarationParser, ParseError as CssParseError, Parser, ParserInput,
-    ParserState, QualifiedRuleParser, RuleBodyItemParser, RuleBodyParser, StyleSheetParser, Token,
+    AtRuleParser, CowRcStr, DeclarationParser, ParseError as CssParseError, Parser, ParserState,
+    QualifiedRuleParser, RuleBodyItemParser, RuleBodyParser, StyleSheetParser, Token,
     match_ignore_ascii_case,
 };
 
@@ -16,8 +16,7 @@ use crate::error::{ParseError, ParseErrorOwned};
 use crate::value::{Color, Length, SideValue, Value};
 
 pub fn parse(input: &str) -> Result<Stylesheet, ParseError> {
-    let mut parser_input = ParserInput::new(input);
-    let mut parser = Parser::new(&mut parser_input);
+    let mut parser = Parser::new(input);
     let mut rule_parser = StylesheetRuleParser;
     let mut rules = Vec::new();
     let iter = StyleSheetParser::new(&mut parser, &mut rule_parser);
@@ -44,19 +43,19 @@ impl<'i> QualifiedRuleParser<'i> for StylesheetRuleParser {
     type QualifiedRule = Option<Rule>;
     type Error = ParseErrorOwned;
 
-    fn parse_prelude<'t>(
+    fn parse_prelude(
         &mut self,
-        parser: &mut Parser<'i, 't>,
-    ) -> Result<Self::Prelude, CssParseError<'i, Self::Error>> {
+        parser: &mut Parser<'i>,
+    ) -> Result<Self::Prelude, CssParseError<Self::Error>> {
         parse_selector_list(parser)
     }
 
-    fn parse_block<'t>(
+    fn parse_block(
         &mut self,
         selectors: Self::Prelude,
         _start: &ParserState,
-        parser: &mut Parser<'i, 't>,
-    ) -> Result<Self::QualifiedRule, CssParseError<'i, Self::Error>> {
+        parser: &mut Parser<'i>,
+    ) -> Result<Self::QualifiedRule, CssParseError<Self::Error>> {
         let mut declarations = Vec::new();
         let mut decl_parser = DeclParser;
         let body = RuleBodyParser::new(parser, &mut decl_parser);
@@ -88,11 +87,11 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
     // will skip the body. v1 doesn't implement any at-rule semantics, but
     // we swallow them so a real-world stylesheet with `@charset` /
     // `@media` doesn't blow up the whole parse.
-    fn parse_prelude<'t>(
+    fn parse_prelude(
         &mut self,
         _name: CowRcStr<'i>,
-        parser: &mut Parser<'i, 't>,
-    ) -> Result<Self::Prelude, CssParseError<'i, Self::Error>> {
+        parser: &mut Parser<'i>,
+    ) -> Result<Self::Prelude, CssParseError<Self::Error>> {
         while parser.next().is_ok() {}
         Ok(())
     }
@@ -105,12 +104,12 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
         Ok(None)
     }
 
-    fn parse_block<'t>(
+    fn parse_block(
         &mut self,
         _prelude: Self::Prelude,
         _start: &ParserState,
-        parser: &mut Parser<'i, 't>,
-    ) -> Result<Self::AtRule, CssParseError<'i, Self::Error>> {
+        parser: &mut Parser<'i>,
+    ) -> Result<Self::AtRule, CssParseError<Self::Error>> {
         // Drain the block — its contents (nested rules or declarations)
         // are intentionally discarded in v1.
         while parser.next().is_ok() {}
@@ -118,9 +117,9 @@ impl<'i> AtRuleParser<'i> for StylesheetRuleParser {
     }
 }
 
-fn parse_selector_list<'i, 't>(
-    parser: &mut Parser<'i, 't>,
-) -> Result<Vec<Selector>, CssParseError<'i, ParseErrorOwned>> {
+fn parse_selector_list<'i>(
+    parser: &mut Parser<'i>,
+) -> Result<Vec<Selector>, CssParseError<ParseErrorOwned>> {
     let mut selectors = Vec::new();
     loop {
         selectors.push(parse_compound_selector(parser)?);
@@ -142,10 +141,10 @@ fn parse_selector_list<'i, 't>(
 /// since the combinator was already consumed. The only case that disallows
 /// a type selector is a non-first part reached via the whitespace/descendant
 /// path, where the Ident has already been put back by the caller.
-fn parse_simple_selector<'i, 't>(
-    parser: &mut Parser<'i, 't>,
+fn parse_simple_selector<'i>(
+    parser: &mut Parser<'i>,
     allow_type: bool,
-) -> Result<SimpleSelector, CssParseError<'i, ParseErrorOwned>> {
+) -> Result<SimpleSelector, CssParseError<ParseErrorOwned>> {
     let mut sel = SimpleSelector::default();
     let mut saw_anything = false;
     loop {
@@ -164,12 +163,12 @@ fn parse_simple_selector<'i, 't>(
             Ok(Token::Colon) => {
                 let ident = parser.expect_ident_cloned()?;
                 let Some(pseudo) = PseudoClass::from_ident(&ident) else {
-                    return Err(parser.new_custom_error(ParseErrorOwned(format!(
+                    return Err(CssParseError::custom(ParseErrorOwned(format!(
                         "unknown pseudo-class :{ident}"
                     ))));
                 };
                 if sel.pseudo.is_some() {
-                    return Err(parser.new_custom_error(ParseErrorOwned(
+                    return Err(CssParseError::custom(ParseErrorOwned(
                         "multiple pseudo-classes per selector are not supported".to_string(),
                     )));
                 }
@@ -183,7 +182,9 @@ fn parse_simple_selector<'i, 't>(
         }
     }
     if !saw_anything {
-        return Err(parser.new_custom_error(ParseErrorOwned("empty selector".to_string())));
+        return Err(CssParseError::custom(ParseErrorOwned(
+            "empty selector".to_string(),
+        )));
     }
     Ok(sel)
 }
@@ -191,9 +192,9 @@ fn parse_simple_selector<'i, 't>(
 /// Parse a compound selector: one or more [`SimpleSelector`]s joined by
 /// [`Combinator`]s. Handles ` ` (descendant), `>` (child), `+`
 /// (adjacent sibling), `~` (general sibling).
-fn parse_compound_selector<'i, 't>(
-    parser: &mut Parser<'i, 't>,
-) -> Result<Selector, CssParseError<'i, ParseErrorOwned>> {
+fn parse_compound_selector<'i>(
+    parser: &mut Parser<'i>,
+) -> Result<Selector, CssParseError<ParseErrorOwned>> {
     // Skip leading whitespace before the selector starts — cssparser keeps
     // the whitespace token between e.g. `,` and the next selector.
     parser.skip_whitespace();
@@ -295,12 +296,12 @@ impl<'i> DeclarationParser<'i> for DeclParser {
     type Declaration = Declaration;
     type Error = ParseErrorOwned;
 
-    fn parse_value<'t>(
+    fn parse_value(
         &mut self,
         name: CowRcStr<'i>,
-        parser: &mut Parser<'i, 't>,
+        parser: &mut Parser<'i>,
         _start: &ParserState,
-    ) -> Result<Self::Declaration, CssParseError<'i, Self::Error>> {
+    ) -> Result<Self::Declaration, CssParseError<Self::Error>> {
         let prop = name.to_string();
         let (value, important) = parse_value(&prop, parser)?;
         Ok(Declaration {
@@ -332,20 +333,20 @@ impl<'i> RuleBodyItemParser<'i, Declaration, ParseErrorOwned> for DeclParser {
     }
 }
 
-fn parse_value<'i, 't>(
+fn parse_value<'i>(
     prop: &str,
-    parser: &mut Parser<'i, 't>,
-) -> Result<(Value, bool), CssParseError<'i, ParseErrorOwned>> {
+    parser: &mut Parser<'i>,
+) -> Result<(Value, bool), CssParseError<ParseErrorOwned>> {
     let value = parse_value_inner(prop, parser)?;
     let important = consume_important(parser);
     parser.expect_exhausted()?;
     Ok((value, important))
 }
 
-fn parse_value_inner<'i, 't>(
+fn parse_value_inner<'i>(
     prop: &str,
-    parser: &mut Parser<'i, 't>,
-) -> Result<Value, CssParseError<'i, ParseErrorOwned>> {
+    parser: &mut Parser<'i>,
+) -> Result<Value, CssParseError<ParseErrorOwned>> {
     // Per-property value type: each recognised property accepts only the
     // value shape it actually means. This stops `color: nonsense` from
     // silently parsing as a keyword and reaching the adapter.
@@ -368,35 +369,36 @@ fn parse_value_inner<'i, 't>(
                 }
             }
             if lengths.is_empty() {
-                return Err(parser
-                    .new_custom_error(ParseErrorOwned(format!("expected length for `{prop}`"))));
+                return Err(CssParseError::custom(ParseErrorOwned(format!(
+                    "expected length for `{prop}`"
+                ))));
             }
             Ok(Value::LengthSet(lengths))
         }
         PropertyKind::SideLengthsOrAuto => parse_side_lengths_or_auto(prop, parser),
         PropertyKind::Keyword(allowed) => {
             let ident = parser.try_parse(|p| p.expect_ident_cloned()).map_err(|_| {
-                parser.new_custom_error(ParseErrorOwned(format!("expected keyword for `{prop}`")))
+                CssParseError::custom(ParseErrorOwned(format!("expected keyword for `{prop}`")))
             })?;
             let kw = ident.to_ascii_lowercase();
             if allowed.contains(&kw.as_str()) {
                 Ok(Value::Keyword(kw))
             } else {
-                Err(parser.new_custom_error(ParseErrorOwned(format!(
+                Err(CssParseError::custom(ParseErrorOwned(format!(
                     "unknown keyword `{kw}` for `{prop}`"
                 ))))
             }
         }
         PropertyKind::Number => {
             let n = parser.try_parse(|p| p.expect_number()).map_err(|_| {
-                parser.new_custom_error(ParseErrorOwned(format!("expected number for `{prop}`")))
+                CssParseError::custom(ParseErrorOwned(format!("expected number for `{prop}`")))
             })?;
             // `flex-grow` / `flex-shrink` are spec-required to be >= 0;
             // every property using `PropertyKind::Number` today inherits
             // that constraint. If a future property needs signed numbers,
             // split into a separate `SignedNumber` kind.
             if n < 0.0 {
-                return Err(parser.new_custom_error(ParseErrorOwned(format!(
+                return Err(CssParseError::custom(ParseErrorOwned(format!(
                     "negative number not allowed for `{prop}`"
                 ))));
             }
@@ -407,14 +409,13 @@ fn parse_value_inner<'i, 't>(
             // A dimension token like `24px` is NOT a plain Number in
             // cssparser, so `expect_number` won't consume it — try in order.
             if let Ok(n) = parser.try_parse(|p| {
-                let loc = p.current_source_location();
                 let tok = p.next()?.clone();
                 match tok {
                     // Accept only a pure Number token (no unit).
                     Token::Number { value, .. } => Ok(value),
-                    other => Err(loc.new_custom_error::<ParseErrorOwned, ParseErrorOwned>(
-                        ParseErrorOwned(format!("not a plain number: {other:?}")),
-                    )),
+                    other => Err(CssParseError::<ParseErrorOwned>::custom(ParseErrorOwned(
+                        format!("not a plain number: {other:?}"),
+                    ))),
                 }
             }) {
                 Ok(Value::Number(f64::from(n)))
@@ -427,14 +428,14 @@ fn parse_value_inner<'i, 't>(
                 let n = f64::from(n);
                 // CSS spec: font-weight numeric values must be integers in 1..=1000.
                 if n.fract() != 0.0 || !(1.0..=1000.0).contains(&n) {
-                    return Err(parser.new_custom_error(ParseErrorOwned(format!(
+                    return Err(CssParseError::custom(ParseErrorOwned(format!(
                         "font-weight numeric value `{n}` is out of range (must be integer 1–1000)"
                     ))));
                 }
                 Ok(Value::Number(n))
             } else {
                 let ident = parser.try_parse(|p| p.expect_ident_cloned()).map_err(|_| {
-                    parser.new_custom_error(ParseErrorOwned(
+                    CssParseError::custom(ParseErrorOwned(
                         "expected number or keyword for `font-weight`".to_string(),
                     ))
                 })?;
@@ -442,7 +443,7 @@ fn parse_value_inner<'i, 't>(
                 if ["normal", "bold"].contains(&kw.as_str()) {
                     Ok(Value::Keyword(kw))
                 } else {
-                    Err(parser.new_custom_error(ParseErrorOwned(format!(
+                    Err(CssParseError::custom(ParseErrorOwned(format!(
                         "unknown keyword `{kw}` for `font-weight`"
                     ))))
                 }
@@ -466,7 +467,7 @@ fn parse_value_inner<'i, 't>(
                 // with each other.
                 return Ok(Value::Keyword(ident.to_ascii_lowercase()));
             }
-            Err(parser.new_custom_error(ParseErrorOwned(format!(
+            Err(CssParseError::custom(ParseErrorOwned(format!(
                 "could not parse value for `{prop}`"
             ))))
         }
@@ -475,10 +476,10 @@ fn parse_value_inner<'i, 't>(
 
 // -- side-lengths-or-auto ----------------------------------------------------
 
-fn parse_side_lengths_or_auto<'i, 't>(
+fn parse_side_lengths_or_auto<'i>(
     prop: &str,
-    parser: &mut Parser<'i, 't>,
-) -> Result<Value, CssParseError<'i, ParseErrorOwned>> {
+    parser: &mut Parser<'i>,
+) -> Result<Value, CssParseError<ParseErrorOwned>> {
     let mut sides: Vec<SideValue> = Vec::new();
     loop {
         if sides.len() == 4 {
@@ -493,7 +494,7 @@ fn parse_side_lengths_or_auto<'i, 't>(
         }
     }
     if sides.is_empty() {
-        return Err(parser.new_custom_error(ParseErrorOwned(format!(
+        return Err(CssParseError::custom(ParseErrorOwned(format!(
             "expected length or auto for `{prop}`"
         ))));
     }
@@ -518,9 +519,7 @@ fn parse_side_lengths_or_auto<'i, 't>(
 
 // -- font-family -------------------------------------------------------------
 
-fn parse_font_family<'i, 't>(
-    parser: &mut Parser<'i, 't>,
-) -> Result<Value, CssParseError<'i, ParseErrorOwned>> {
+fn parse_font_family<'i>(parser: &mut Parser<'i>) -> Result<Value, CssParseError<ParseErrorOwned>> {
     let mut families: Vec<String> = Vec::new();
     let mut pending_comma = false;
     loop {
@@ -566,8 +565,9 @@ fn parse_font_family<'i, 't>(
                 // `font-family: "Hack",` — comma not followed by another
                 // family name. Reject so the malformed declaration is
                 // dropped.
-                return Err(parser
-                    .new_custom_error(ParseErrorOwned("trailing comma in font-family".into())));
+                return Err(CssParseError::custom(ParseErrorOwned(
+                    "trailing comma in font-family".into(),
+                )));
             }
             break;
         }
@@ -577,17 +577,19 @@ fn parse_font_family<'i, 't>(
         pending_comma = true;
     }
     if families.is_empty() {
-        return Err(parser.new_custom_error(ParseErrorOwned("expected font-family value".into())));
+        return Err(CssParseError::custom(ParseErrorOwned(
+            "expected font-family value".into(),
+        )));
     }
     Ok(Value::FontFamilyList(families))
 }
 
 // -- border shorthand --------------------------------------------------------
 
-fn parse_border_shorthand<'i, 't>(
+fn parse_border_shorthand<'i>(
     prop: &str,
-    parser: &mut Parser<'i, 't>,
-) -> Result<Value, CssParseError<'i, ParseErrorOwned>> {
+    parser: &mut Parser<'i>,
+) -> Result<Value, CssParseError<ParseErrorOwned>> {
     // Accept `<length> [solid|none] <color>` in any order.
     // `style` token if present must be `solid` or `none`; others reject.
     // All three are required (width + color mandatory; style optional).
@@ -640,7 +642,7 @@ fn parse_border_shorthand<'i, 't>(
         width.unwrap_or(Length::Px(0.0))
     } else {
         width.ok_or_else(|| {
-            parser.new_custom_error(ParseErrorOwned(format!("missing width in `{prop}`")))
+            CssParseError::custom(ParseErrorOwned(format!("missing width in `{prop}`")))
         })?
     };
     // `border: none` (no color) is the most common CSS reset. Allow it
@@ -650,9 +652,9 @@ fn parse_border_shorthand<'i, 't>(
         Some(c) => c,
         None if saw_none_style => Color::rgba(0, 0, 0, 0),
         None => {
-            return Err(
-                parser.new_custom_error(ParseErrorOwned(format!("missing color in `{prop}`")))
-            );
+            return Err(CssParseError::custom(ParseErrorOwned(format!(
+                "missing color in `{prop}`"
+            ))));
         }
     };
 
@@ -661,16 +663,13 @@ fn parse_border_shorthand<'i, 't>(
 
 // -- helpers -----------------------------------------------------------------
 
-fn expect_auto<'i, 't>(
-    parser: &mut Parser<'i, 't>,
-) -> Result<(), CssParseError<'i, ParseErrorOwned>> {
-    let loc = parser.current_source_location();
+fn expect_auto<'i>(parser: &mut Parser<'i>) -> Result<(), CssParseError<ParseErrorOwned>> {
     let tok = parser.next()?.clone();
     match &tok {
         Token::Ident(name) if name.eq_ignore_ascii_case("auto") => Ok(()),
-        other => {
-            Err(loc.new_custom_error(ParseErrorOwned(format!("expected `auto`, got {other:?}"))))
-        }
+        other => Err(CssParseError::custom(ParseErrorOwned(format!(
+            "expected `auto`, got {other:?}"
+        )))),
     }
 }
 
@@ -758,78 +757,71 @@ fn property_kind(name: &str) -> PropertyKind {
 /// [`crate::Stylesheet::resolve`] — important declarations beat any
 /// non-important declaration regardless of specificity, with source
 /// order breaking ties within either tier.
-fn consume_important(parser: &mut Parser<'_, '_>) -> bool {
+fn consume_important(parser: &mut Parser<'_>) -> bool {
     parser
-        .try_parse(|p| -> Result<(), CssParseError<'_, ParseErrorOwned>> {
+        .try_parse(|p| -> Result<(), CssParseError<ParseErrorOwned>> {
             p.expect_delim('!')?;
             let ident = p.expect_ident_cloned()?;
             if ident.eq_ignore_ascii_case("important") {
                 Ok(())
             } else {
-                Err(p.new_custom_error(ParseErrorOwned("not !important".to_string())))
+                Err(CssParseError::custom(ParseErrorOwned(
+                    "not !important".to_string(),
+                )))
             }
         })
         .is_ok()
 }
 
-fn parse_length<'i, 't>(
-    parser: &mut Parser<'i, 't>,
-) -> Result<Length, CssParseError<'i, ParseErrorOwned>> {
-    let location = parser.current_source_location();
+fn parse_length<'i>(parser: &mut Parser<'i>) -> Result<Length, CssParseError<ParseErrorOwned>> {
     let token = parser.next()?.clone();
     match token {
         Token::Dimension { value, unit, .. } => match unit.as_ref() {
             "px" => Ok(Length::Px(f64::from(value))),
-            other => Err(location.new_custom_error(ParseErrorOwned(format!(
+            other => Err(CssParseError::custom(ParseErrorOwned(format!(
                 // `em` / `rem` deferred to a later phase.
                 "unsupported length unit `{other}`"
             )))),
         },
         Token::Percentage { unit_value, .. } => Ok(Length::Percent(f64::from(unit_value) * 100.0)),
         Token::Number { value, .. } => Ok(Length::Px(f64::from(value))),
-        other => {
-            Err(location
-                .new_custom_error(ParseErrorOwned(format!("expected length, got {other:?}"))))
-        }
+        other => Err(CssParseError::custom(ParseErrorOwned(format!(
+            "expected length, got {other:?}"
+        )))),
     }
 }
 
-fn parse_color<'i, 't>(
-    parser: &mut Parser<'i, 't>,
-) -> Result<Color, CssParseError<'i, ParseErrorOwned>> {
-    let location = parser.current_source_location();
+fn parse_color<'i>(parser: &mut Parser<'i>) -> Result<Color, CssParseError<ParseErrorOwned>> {
     let token = parser.next()?.clone();
     match token {
         // cssparser emits `Hash` when the value starts with a digit
         // (e.g. `#1a2b3c`) and `IDHash` otherwise — both are valid CSS
         // colour syntax, so collapse them into a single arm.
-        Token::IDHash(h) | Token::Hash(h) => parse_hex(h.as_ref()).ok_or_else(|| {
-            location.new_custom_error(ParseErrorOwned(format!("bad hex color `#{h}`")))
-        }),
+        Token::IDHash(h) | Token::Hash(h) => parse_hex(h.as_ref())
+            .ok_or_else(|| CssParseError::custom(ParseErrorOwned(format!("bad hex color `#{h}`")))),
         Token::Ident(name) => named_color(name.as_ref()).ok_or_else(|| {
-            location.new_custom_error(ParseErrorOwned(format!("unknown color name `{name}`")))
+            CssParseError::custom(ParseErrorOwned(format!("unknown color name `{name}`")))
         }),
         Token::Function(name) => {
             let name_lc = name.to_ascii_lowercase();
             parser.parse_nested_block(|p| match name_lc.as_str() {
                 "rgb" => parse_rgb_args(p, false),
                 "rgba" => parse_rgb_args(p, true),
-                other => Err(p.new_custom_error(ParseErrorOwned(format!(
+                other => Err(CssParseError::custom(ParseErrorOwned(format!(
                     "unsupported color function `{other}`"
                 )))),
             })
         }
-        other => {
-            Err(location
-                .new_custom_error(ParseErrorOwned(format!("expected color, got {other:?}"))))
-        }
+        other => Err(CssParseError::custom(ParseErrorOwned(format!(
+            "expected color, got {other:?}"
+        )))),
     }
 }
 
-fn parse_rgb_args<'i, 't>(
-    parser: &mut Parser<'i, 't>,
+fn parse_rgb_args<'i>(
+    parser: &mut Parser<'i>,
     expect_alpha: bool,
-) -> Result<Color, CssParseError<'i, ParseErrorOwned>> {
+) -> Result<Color, CssParseError<ParseErrorOwned>> {
     let r = parse_u8_channel(parser)?;
     parser.expect_comma()?;
     let g = parse_u8_channel(parser)?;
@@ -846,17 +838,15 @@ fn parse_rgb_args<'i, 't>(
     Ok(Color::rgba(r, g, b, a))
 }
 
-fn parse_u8_channel<'i, 't>(
-    parser: &mut Parser<'i, 't>,
-) -> Result<u8, CssParseError<'i, ParseErrorOwned>> {
-    let location = parser.current_source_location();
+fn parse_u8_channel<'i>(parser: &mut Parser<'i>) -> Result<u8, CssParseError<ParseErrorOwned>> {
     let token = parser.next()?.clone();
     let n = match token {
         Token::Number { value, .. } => value,
         Token::Percentage { unit_value, .. } => unit_value * 255.0,
         other => {
-            return Err(location
-                .new_custom_error(ParseErrorOwned(format!("expected channel, got {other:?}"))));
+            return Err(CssParseError::custom(ParseErrorOwned(format!(
+                "expected channel, got {other:?}"
+            ))));
         }
     };
     Ok(n.clamp(0.0, 255.0).round() as u8)

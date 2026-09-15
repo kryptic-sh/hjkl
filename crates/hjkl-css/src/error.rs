@@ -1,4 +1,3 @@
-use cssparser::{BasicParseErrorKind, ParseErrorKind};
 use thiserror::Error;
 
 /// Failure modes for [`crate::parse`]. The current implementation is
@@ -17,38 +16,8 @@ pub enum ParseError {
     },
 }
 
-impl<'i> From<cssparser::ParseError<'i, ParseErrorOwned>> for ParseError {
-    fn from(err: cssparser::ParseError<'i, ParseErrorOwned>) -> Self {
-        let location = err.location;
-        let message = match err.kind {
-            ParseErrorKind::Basic(BasicParseErrorKind::UnexpectedToken(t)) => {
-                format!("unexpected token: {t:?}")
-            }
-            ParseErrorKind::Basic(BasicParseErrorKind::EndOfInput) => {
-                "unexpected end of input".to_string()
-            }
-            ParseErrorKind::Basic(BasicParseErrorKind::AtRuleInvalid(s)) => {
-                format!("invalid @-rule: {s}")
-            }
-            ParseErrorKind::Basic(BasicParseErrorKind::AtRuleBodyInvalid) => {
-                "invalid @-rule body".to_string()
-            }
-            ParseErrorKind::Basic(BasicParseErrorKind::QualifiedRuleInvalid) => {
-                "invalid rule".to_string()
-            }
-            ParseErrorKind::Custom(c) => c.0,
-        };
-        Self::Syntax {
-            line: location.line,
-            column: location.column,
-            message,
-        }
-    }
-}
-
-/// Internal error type for the cssparser parser plumbing. Wraps a message
-/// so the `'i` lifetime stays clean. Not part of the public API — leaks
-/// out only inside `cssparser::ParseError`, which we convert to
-/// [`ParseError`] at the boundary.
+/// Internal error type for the cssparser parser plumbing: the message of a
+/// custom `cssparser::ParseError`. Not part of the public API — `parse`
+/// drops every rule and declaration error, so it never leaves the crate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParseErrorOwned(pub String);

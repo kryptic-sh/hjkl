@@ -8,6 +8,12 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- **`hjkl-css` builds on `cssparser` 0.38** (Servo's parser; was 0.37), which
+  also moves `phf` to 0.14. Stylesheet parsing is unchanged, and none of
+  `hjkl-css`'s callable public API changed.
+
 ## [0.41.7] - 2026-09-15
 
 ### Changed

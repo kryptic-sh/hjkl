@@ -5,6 +5,19 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Built on `cssparser` 0.38** (was 0.37), Servo's rewrite that drops the
+  parser's second lifetime and `ParserInput`. Parsing behavior is unchanged:
+  malformed rules and declarations are still dropped per spec, and `parse` still
+  never returns an error.
+
+### Removed
+
+- The `From<cssparser::ParseError<'_, _>>` impl for `ParseError`. Its error type
+  parameter was crate-private, so nothing outside `hjkl-css` could call it, and
+  0.38 errors no longer carry the line and column it filled in.
+
 ## [0.4.0] - 2026-05-18
 
 ### Changed (breaking)
