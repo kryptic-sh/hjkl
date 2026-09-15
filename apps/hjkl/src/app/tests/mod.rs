@@ -572,6 +572,7 @@ pub mod diff;
 pub mod ex;
 pub mod formatter;
 pub mod hop;
+pub mod key_event_kind;
 pub mod keymap;
 pub mod lsp;
 pub mod marks_registers;

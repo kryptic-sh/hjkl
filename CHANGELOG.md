@@ -8,6 +8,16 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- **Keys are no longer handled twice on Windows.** The Windows console reports a
+  key release for every key-up, and the event loop acted on releases as if they
+  were presses: `:qa` typed `::qqaa`, Backspace deleted two chars, and every
+  Normal-mode command ran twice. Both event-loop read arms now route through one
+  `App::handle_key_event` that drops releases before dispatch; held-key repeats
+  still act. `hjkl_kitty::normalize_legacy` also now preserves the event's
+  `kind` and `state`, so a Ctrl+[ release no longer becomes a fresh Esc press.
+
 ## [0.41.6] - 2026-09-02
 
 ### Changed

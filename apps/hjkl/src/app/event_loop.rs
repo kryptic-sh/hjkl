@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crossterm::{
     cursor::SetCursorStyle,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     execute,
 };
 use hjkl_engine::{CursorShape, Host, VimMode};
@@ -533,6 +533,33 @@ impl App {
             diag_hash,
             diag_count,
         )
+    }
+
+    /// Handle one raw terminal key event, as read by both `run()` read arms:
+    /// drop key releases, normalize kitty-disambiguated keys, route through
+    /// [`Self::handle_keypress`], and dispatch to the engine on fall-through.
+    ///
+    /// Releases must be dropped here, before anything acts on the key: the
+    /// Windows console reports a `Release` for every key-up (crossterm sets
+    /// `kind` there unconditionally), so without this filter every keystroke
+    /// on Windows is handled twice — `:qa` types `::qqaa`. `Repeat` is kept:
+    /// it is a held key and must keep acting.
+    ///
+    /// Returns [`KeyOutcome::FallThrough`] when the key reached the engine
+    /// dispatch; only [`KeyOutcome::Break`] needs handling by the caller.
+    pub(crate) fn handle_key_event(&mut self, key: KeyEvent) -> KeyOutcome {
+        if key.kind == KeyEventKind::Release {
+            return KeyOutcome::Continue;
+        }
+        // Under DISAMBIGUATE_ESCAPE_CODES, Ctrl+[ ≠ Esc, Ctrl+I ≠ Tab,
+        // Ctrl+M ≠ Enter at the terminal level. Normalize back to the legacy
+        // aliases vim expects.
+        let key = hjkl_kitty::normalize_legacy(key);
+        let outcome = self.handle_keypress(key);
+        if let KeyOutcome::FallThrough = outcome {
+            self.dispatch_fallthrough_key(key);
+        }
+        outcome
     }
 
     /// Handle a single key event. Returns a [`KeyOutcome`] that tells `run()`
@@ -2232,25 +2259,10 @@ impl App {
                     // Record keystroke time for the idle swap-write timer (#185).
                     self.last_input_at = std::time::Instant::now();
 
-                    // ── Kitty keyboard normalization ────────
-                    // Under DISAMBIGUATE_ESCAPE_CODES, Ctrl+[ ≠ Esc, Ctrl+I ≠ Tab,
-                    // Ctrl+M ≠ Enter at the terminal level. Normalize back to the
-                    // legacy aliases vim expects.
-                    let key = hjkl_kitty::normalize_legacy(key);
-
-                    let consumed_inline = match self.handle_keypress(key) {
-                        KeyOutcome::Break => break,
-                        // Insert-mode arms handle the keystroke fully and
-                        // set `pending_recompute = true` themselves. Skip
-                        // the FallThrough cleanup but still hit the drain
-                        // loop below so a burst of inline-consumed keys
-                        // folds into one recompute + draw.
-                        KeyOutcome::Continue => true,
-                        KeyOutcome::FallThrough => false,
-                    };
-
-                    if !consumed_inline {
-                        self.dispatch_fallthrough_key(key);
+                    // Inline-consumed keys still hit the drain loop below so
+                    // a burst of them folds into one recompute + draw.
+                    if let KeyOutcome::Break = self.handle_key_event(key) {
+                        break;
                     }
                 }
                 Event::Mouse(me) => {
@@ -2283,22 +2295,13 @@ impl App {
                 drained += 1;
                 if let Ok(extra) = event::read() {
                     match extra {
+                        // Drain-loop mirror of the primary key arm above —
+                        // routes through the same shared method so the two
+                        // paths cannot drift out of sync again.
                         Event::Key(k) => {
-                            // Kitty-protocol legacy normalization (drain-loop
-                            // mirror of the primary path): map disambiguated
-                            // Ctrl+[ / Ctrl+I / Ctrl+M back to Esc / Tab / Enter
-                            // so muscle-memory survives.
-                            let k = hjkl_kitty::normalize_legacy(k);
-                            match self.handle_keypress(k) {
-                                KeyOutcome::Break => {
-                                    self.exit_requested = true;
-                                    break;
-                                }
-                                KeyOutcome::Continue => continue,
-                                // Drain-loop mirror of the primary key arm above —
-                                // routes through the same shared method so the two
-                                // fall-through paths cannot drift out of sync again.
-                                KeyOutcome::FallThrough => self.dispatch_fallthrough_key(k),
+                            if let KeyOutcome::Break = self.handle_key_event(k) {
+                                self.exit_requested = true;
+                                break;
                             }
                         }
                         Event::Mouse(me2) => {

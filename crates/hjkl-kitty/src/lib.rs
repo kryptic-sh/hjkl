@@ -98,24 +98,26 @@ pub fn disable<W: std::io::Write>(w: &mut W) -> std::io::Result<()> {
 /// should pass the raw event through so that Ctrl+[ can be bound to outdent,
 /// Ctrl+I to something else, etc.
 ///
+/// The event's `kind` and `state` are preserved, so a mapped key's release
+/// stays a release rather than turning into a fresh press.
+///
 /// All other keys are returned unchanged.
 pub fn normalize_legacy(key: KeyEvent) -> KeyEvent {
     if key.modifiers == KeyModifiers::CONTROL {
-        match key.code {
+        let code = match key.code {
             // Ctrl+[ → Esc (vim: exit insert / return to normal)
-            KeyCode::Char('[') => {
-                return KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-            }
+            KeyCode::Char('[') => KeyCode::Esc,
             // Ctrl+I / Ctrl+Shift+I → Tab
-            KeyCode::Char('i') | KeyCode::Char('I') => {
-                return KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
-            }
+            KeyCode::Char('i') | KeyCode::Char('I') => KeyCode::Tab,
             // Ctrl+M / Ctrl+Shift+M → Enter
-            KeyCode::Char('m') | KeyCode::Char('M') => {
-                return KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-            }
-            _ => {}
-        }
+            KeyCode::Char('m') | KeyCode::Char('M') => KeyCode::Enter,
+            _ => return key,
+        };
+        return KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            ..key
+        };
     }
     key
 }
@@ -148,7 +150,7 @@ pub fn is_supported() -> std::io::Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     // ── normalize_legacy ────────────────────────────────────────────────────
 
@@ -207,6 +209,24 @@ mod tests {
         let out = normalize_legacy(key);
         assert_eq!(out.code, KeyCode::Char('a'));
         assert_eq!(out.modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn normalize_preserves_kind_and_state() {
+        // The Windows console reports a Release for every key-up; a mapped
+        // release must stay a release or the app acts on the key twice.
+        for kind in [KeyEventKind::Release, KeyEventKind::Repeat] {
+            let key = KeyEvent::new_with_kind_and_state(
+                KeyCode::Char('['),
+                KeyModifiers::CONTROL,
+                kind,
+                KeyEventState::KEYPAD,
+            );
+            let out = normalize_legacy(key);
+            assert_eq!(out.code, KeyCode::Esc);
+            assert_eq!(out.kind, kind);
+            assert_eq!(out.state, KeyEventState::KEYPAD);
+        }
     }
 
     #[test]
