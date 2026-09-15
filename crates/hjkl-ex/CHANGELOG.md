@@ -12,7 +12,8 @@ patch bumps.
 
 - `~` in path completion and a bare `:cd` fall back to the profile directory
   when `HOME` is unset, as it normally is on Windows; `~` expanded to nothing
-  and `:cd` went to `.`. Path completion also splits on `\` on Windows.
+  and `:cd` went to `.`. Path completion also splits on `\` and expands `~\` on
+  Windows.
 - `%:p` on Windows is a plain absolute path (`C:\…`), not the verbatim
   `\\?\C:\…` form `canonicalize` returns there, which cmd.exe and many tools
   reject.

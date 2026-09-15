@@ -44,7 +44,8 @@ patch bumps.
   which git takes literally. `~` and a bare `:cd` read only `HOME`, which
   Windows does not set; they now fall back to the profile directory. `%:p`
   returned the verbatim `\\?\C:\…` form that cmd.exe rejects. `<cfile>` stopped
-  at `\` and `:`, and RPC `expand("%:r")` and path completion split only on `/`.
+  at `\` and `:`, and RPC `expand("%:r")` and path completion split only on `/`
+  (and completion did not expand `~\`).
 - **Filter output line endings follow the filtered rows.** Tools run through
   cmd.exe emit CRLF, so `:%!sort` on Windows left a `\r` on every replaced row;
   meanwhile `!{motion}` dropped the CR of a CRLF buffer's rows. Both filters now

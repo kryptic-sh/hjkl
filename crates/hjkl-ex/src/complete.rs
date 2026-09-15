@@ -263,10 +263,10 @@ pub fn first_word_end(line: &str) -> (usize, bool) {
 
 /// Expand a leading `~` and any `$VAR` / `${VAR}` occurrences in `s` for the
 /// purpose of a directory scan. Pure/testable: `home` substitutes a leading
-/// bare `~` or `~/`, and `getenv` resolves variables.
+/// bare `~` or `~` plus a separator, and `getenv` resolves variables.
 ///
-/// - Leading `~` (bare) or `~/…` → `home` (`~/x` → `<home>/x`). `~user` is left
-///   untouched (no passwd lookup).
+/// - Leading `~` (bare) or `~/…` → `home` (`~/x` → `<home>/x`); on Windows `~\…`
+///   too, as vim expands it there. `~user` is left untouched (no passwd lookup).
 /// - `$NAME` / `${NAME}` anywhere → `getenv(NAME)`. Unknown variables are left
 ///   literally in place, so the resulting path simply won't exist and the scan
 ///   yields nothing rather than erroring.
@@ -274,13 +274,12 @@ pub fn first_word_end(line: &str) -> (usize, bool) {
 /// This expands ONLY for the scan; callers keep the original typed prefix on the
 /// returned candidates so accepting one preserves the `~` / `$VAR` the user typed.
 fn expand_path_prefix(s: &str, home: &str, getenv: impl Fn(&str) -> Option<String>) -> String {
-    // Expand a leading `~` (bare or `~/`) to `home`. `~user` is left as-is.
-    let tilde_expanded = if s == "~" {
-        home.to_string()
-    } else if let Some(rest) = s.strip_prefix("~/") {
-        format!("{home}/{rest}")
-    } else {
-        s.to_string()
+    // Expand a leading `~` (bare, or before a platform separator) to `home`.
+    // `~user` is left as-is.
+    let tilde_expanded = match s.strip_prefix('~') {
+        Some("") => home.to_string(),
+        Some(rest) if rest.starts_with(std::path::is_separator) => format!("{home}{rest}"),
+        _ => s.to_string(),
     };
 
     // Expand `$NAME` / `${NAME}`; unknown vars are left literal.
@@ -351,16 +350,6 @@ struct PathEntriesCache {
 }
 static PATH_ENTRIES_CACHE: Mutex<Option<PathEntriesCache>> = Mutex::new(None);
 
-/// Scan `cwd` for entries whose names begin with `file_part` (respecting the
-/// `dir_part` prefix).  Appends `/` to directories.  Hidden entries (starting
-/// with `.`) are skipped unless `file_part` itself starts with `.`.
-///
-/// A leading `~` / `~/` and `$VAR` / `${VAR}` in the directory portion are
-/// expanded for the scan only; the returned candidates keep the original typed
-/// `dir_part`, so accepting one preserves the `~` / `$VAR` the user typed.
-///
-/// When `dirs_only` is true, non-directory entries are filtered out (`:cd`
-/// completion); directories still get their trailing `/`.
 /// The directory `~` and a bare `:cd` resolve to.
 pub fn home_dir() -> Option<String> {
     home_dir_from(std::env::var("HOME").ok(), std::env::home_dir())
@@ -376,6 +365,16 @@ fn home_dir_from(home_env: Option<String>, profile: Option<std::path::PathBuf>) 
         .or_else(|| profile.map(|p| p.to_string_lossy().into_owned()))
 }
 
+/// Scan `cwd` for entries whose names begin with `file_part` (respecting the
+/// `dir_part` prefix).  Appends `/` to directories.  Hidden entries (starting
+/// with `.`) are skipped unless `file_part` itself starts with `.`.
+///
+/// A leading `~` / `~/` and `$VAR` / `${VAR}` in the directory portion are
+/// expanded for the scan only; the returned candidates keep the original typed
+/// `dir_part`, so accepting one preserves the `~` / `$VAR` the user typed.
+///
+/// When `dirs_only` is true, non-directory entries are filtered out (`:cd`
+/// completion); directories still get their trailing `/`.
 fn complete_path_entries(prefix: &str, cwd: &std::path::Path, dirs_only: bool) -> Vec<String> {
     // A bare `~` scans the home dir with entries prefixed `~/`.
     let prefix = if prefix == "~" { "~/" } else { prefix };
@@ -1731,6 +1730,14 @@ mod tests {
         assert_eq!(expand_path_prefix("~bob/x/", home, none), "~bob/x/");
         // A `~` not at the start is a literal char, not a home marker.
         assert_eq!(expand_path_prefix("a/~/", home, none), "a/~/");
+        // `~\` is home on Windows, where `\` separates; elsewhere `\` is a
+        // filename char and `~\x` a literal name.
+        let expected = if cfg!(windows) {
+            r"/home/me\sub\"
+        } else {
+            r"~\sub\"
+        };
+        assert_eq!(expand_path_prefix(r"~\sub\", home, none), expected);
     }
 
     #[test]
@@ -1816,6 +1823,11 @@ mod tests {
         // Filtering on a partial tail keeps the `~/` prefix too.
         let docs = complete_path_entries("~/Doc", cwd.path(), false);
         assert_eq!(docs, vec!["~/Documents/".to_string()]);
+
+        // `~` before the platform's own separator — `~\Doc` on Windows.
+        let sep = std::path::MAIN_SEPARATOR;
+        let docs = complete_path_entries(&format!("~{sep}Doc"), cwd.path(), false);
+        assert_eq!(docs, vec![format!("~{sep}Documents/")]);
 
         // A `$HOME/`-style prefix expands and preserves the typed `$HOME/`.
         let via_var = complete_path_entries("$HOME/no", cwd.path(), false);
