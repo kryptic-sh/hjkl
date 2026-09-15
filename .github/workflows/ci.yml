@@ -110,13 +110,14 @@ jobs:
       - run: rustup update --no-self-update stable
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@nextest
-      # `--run-ignored all` opts the grammar tests in; `-E` selects them by
-      # name: the fold tests, and bonsai's `*_real_*` clone/compile/load tests
-      # — the only ones that check a compiled grammar exports its entry symbol
-      # (MSVC `dllexport`) and leaves no build products behind.
+      # `--run-ignored only` runs exactly the opted-out tests — the hermetic
+      # ones already ran in the `test` lane. Every ignored test in the two
+      # grammar crates, plus the app's fold tests: a narrower name filter is
+      # how most of these went unrun, and rotted, for months.
       - run:
-          cargo nextest run --run-ignored all --no-fail-fast -p hjkl-bonsai -p
-          hjkl-syntax -p hjkl -E 'test(/fold/) | (package(hjkl-bonsai) & test(/_real_/))'
+          cargo nextest run --run-ignored only --no-fail-fast -p hjkl-bonsai -p
+          hjkl-syntax -p hjkl -E 'package(hjkl-bonsai) | package(hjkl-syntax) |
+          (package(hjkl) & test(/fold/))'
 
   no_std:
     name: no_std + wasm smoke
