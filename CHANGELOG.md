@@ -8,6 +8,14 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- **Dependency updates.** `hjkl-xdg` bumps `dirs` 6 → 7, whose only change is
+  `preference_dir` on Windows (Roaming instead of Local AppData); hjkl-xdg reads
+  only `home_dir`, so nothing moves. Within existing ranges: `bitflags` 2.13.2,
+  `crossbeam-channel` 0.5.17, `reqwest` 0.13.5 (which adds `base64` 0.23 beside
+  0.22), `toml` 1.1.6 and `toml_edit` 0.25.15. No behavior change.
+
 ### Fixed
 
 - **Keys are no longer handled twice on Windows.** The Windows console reports a
