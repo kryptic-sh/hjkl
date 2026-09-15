@@ -759,21 +759,18 @@ with ripgrep installed are unaffected.
   passes for the wrong reason) in CI would look like flake. Check what the job
   actually reports before trusting either side.
 
-- **Most `#[ignore]`d grammar tests are in no CI job, and seven of them fail.**
-  `grammar_tests` selects by name (fold tests plus bonsai's `_real_` tests), so
-  the other ignored tests in `hjkl-bonsai` and `hjkl-syntax` never run. Run on
-  Linux on 2026-09-15 with
-  `cargo nextest run --run-ignored only -p hjkl-bonsai -p hjkl-syntax -E 'not test(/fold/)'`:
-  49 passed, 7 failed. `highlighter::tests::html_set_directive_metadata_applied`
-  dies with SIGSEGV;
-  `edit_size_dispatch::large_edit_incremental_parse_still_produces_spans` and
-  five `hjkl-syntax` tests (`parse_and_render_small_rust_buffer`,
-  `incremental_path_matches_cold_for_small_edit`, `forget_drops_buffer_state`,
-  `diagnostics_emit_sign_for_syntax_error`,
-  `diagnostics_signs_correct_when_scrolled`) fail. Not investigated: whether
-  they rotted or depend on grammars already installed in the user data dir. Read
-  the SIGSEGV first: a safe-Rust test crashing the process is a soundness bug
-  somewhere below it. Once they pass, widen the job's filter.
+- **A grammar installed before the query-sanitizer was removed never
+  re-installs.** `is_user_install_fresh` (`hjkl-bonsai` `runtime/loader.rs`)
+  compares grammar rev, query rev and ABI only, so an install predating
+  `e62b7bd9` keeps the `.scm` it was given — with every capture-form
+  `(#set! @cap ...)` directive stripped — until its pinned rev moves. Verified
+  on this machine 2026-09-16: `~/.local/share/bonsai/grammars/html.scm`
+  (installed 2026-07-24) has the `@string.special.url` `#set!` line missing, and
+  a `html.query_sanitized` marker sits beside it that `install_into_user_dir`'s
+  own test now asserts must never be written. Options: treat that marker (or the
+  pre-`e62b7bd9` layout) as stale and force one re-install, or leave it and let
+  the next rev bump fix it — the no-back-compat-before-1.0 rule argues for
+  leaving it, so it is recorded, not fixed.
 
 ### 1.10 Left open by the 2026-08-04 code review
 
