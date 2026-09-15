@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `policy::shell_command` builds the platform shell invocation for a user-typed
+  shell-out: `sh -c` on Unix, `%COMSPEC% /S /C "<command>"` on Windows. Every
+  shell-out site uses it, so they all run the same shell.
+
+### Fixed
+
+- `Editor::filter_range` on Windows passes the command to cmd.exe verbatim. It
+  went through std's argument escaping, which cmd.exe does not understand: inner
+  quotes arrived backslash-escaped and a quoted program path failed to run.
+
 ## [0.41.0] - 2026-08-04
 
 ### Added

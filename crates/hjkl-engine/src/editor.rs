@@ -5118,7 +5118,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
 
     /// Filter rows `top_row..=bot_row` through an external shell command.
     ///
-    /// Spawns `sh -c "<command>"` (or `cmd /C "<command>"` on Windows), pipes
+    /// Spawns the command through [`crate::policy::shell_command`], pipes
     /// the selected lines (joined by `\n`) to stdin, and waits up to
     /// `timeout_secs` seconds (default 10) for the process to finish.
     ///
@@ -5135,7 +5135,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         timeout_secs: Option<u64>,
     ) -> Result<(), String> {
         use std::io::Write;
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
         use std::thread;
         use std::time::Instant;
 
@@ -5160,18 +5160,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             "filter_range: spawning shell command"
         );
 
-        #[cfg(not(windows))]
-        let mut child = Command::new("sh")
-            .args(["-c", command])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("spawn failed: {e}"))?;
-
-        #[cfg(windows)]
-        let mut child = Command::new("cmd")
-            .args(["/C", command])
+        let mut child = crate::policy::shell_command(command)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

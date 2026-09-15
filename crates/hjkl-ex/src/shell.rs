@@ -6,7 +6,9 @@
 //!
 //! # Security: `:!` is intentional unrestricted shell access
 //!
-//! This module passes user-typed text directly to `sh -c` with no sanitization.
+//! This module passes user-typed text directly to the platform shell
+//! ([`hjkl_engine::policy::shell_command`]: `sh -c`, or cmd.exe on Windows)
+//! with no sanitization.
 //! That is **by design** — full vim parity — and is not a vulnerability:
 //!
 //! * In interactive TUI mode the user is the local operator typing their own
@@ -15,7 +17,7 @@
 //!   by default** via `policy::disable_shell()` at startup. The
 //!   `shell_disabled()` gate below returns an error before `Command` is ever
 //!   built. Hosts must pass an explicit `--allow-shell` flag to opt back in.
-//! * No amount of metacharacter filtering would make `sh -c` "safe" — a
+//! * No amount of metacharacter filtering would make a shell "safe" — a
 //!   user-restricted shell is a lower-privilege shell, not a sandbox — so the
 //!   defense is architectural (off-by-default in non-interactive modes) rather
 //!   than input-validation-based.
@@ -53,11 +55,11 @@ pub fn shell_filter_handler<H: Host>(
         );
     }
     use std::io::Write as IoWrite;
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
 
     if range.is_none() {
         // Bare `:!cmd` — run, no buffer change, surface stdout via Info.
-        let output = Command::new("sh").arg("-c").arg(cmd).output();
+        let output = hjkl_engine::policy::shell_command(cmd).output();
         return match output {
             Ok(out) if out.status.success() => {
                 let stdout = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
@@ -104,9 +106,7 @@ pub fn shell_filter_handler<H: Host>(
         return ExEffect::Ok;
     }
     let payload = all_lines[start..=bot].join("\n");
-    let mut child = match Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
+    let mut child = match hjkl_engine::policy::shell_command(cmd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -171,19 +171,8 @@ mod tests {
     use super::*;
     use crate::test_util::make_editor_with_lines;
 
-    fn sh_available() -> bool {
-        std::process::Command::new("sh")
-            .arg("-c")
-            .arg("exit 0")
-            .output()
-            .is_ok()
-    }
-
     #[test]
     fn shell_no_range_returns_info() {
-        if !sh_available() {
-            return;
-        }
         let mut editor = make_editor_with_lines(&["hello"]);
         let result = shell_filter_handler(&mut editor, "echo hello", None);
         match result {
@@ -202,9 +191,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn shell_filter_large_payload_does_not_deadlock() {
-        if !sh_available() {
-            return;
-        }
         // Regression: stdin was written on this thread before draining stdout;
         // once payload + streamed output exceeded the pipe buffers (~64KiB
         // each), writer and child blocked on each other forever. `cat` streams
@@ -221,9 +207,6 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn shell_range_filter_sorts_lines() {
-        if !sh_available() {
-            return;
-        }
         let mut editor = make_editor_with_lines(&["banana", "apple", "cherry"]);
         let range = LineRange::new(1, 3);
         let result = shell_filter_handler(&mut editor, "sort", Some(range));

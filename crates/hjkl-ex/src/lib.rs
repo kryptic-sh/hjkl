@@ -1915,7 +1915,6 @@ mod tests {
         assert!(lines.contains(&"inserted".to_string()), "lines: {lines:?}");
     }
 
-    #[cfg(unix)]
     #[test]
     fn dispatch_r_shell_cmd_inserts_output() {
         let reg = default_registry::<DefaultHost>();

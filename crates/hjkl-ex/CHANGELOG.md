@@ -8,6 +8,12 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- `:!cmd`, `:[range]!cmd` and `:r !cmd` run through cmd.exe on Windows instead
+  of a hardcoded `sh -c`, which does not exist on a stock Windows `PATH`, so
+  every shell-out failed with "program not found".
+
 ## [0.40.0] - 2026-08-01
 
 ### Fixed

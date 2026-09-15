@@ -123,7 +123,7 @@ fn read_handler_impl<H: Host>(
         return None;
     }
 
-    // `:r !cmd` — run `cmd` through `sh -c` and capture stdout.
+    // `:r !cmd` — run `cmd` through the platform shell and capture stdout.
     let content = if let Some(cmd) = path.strip_prefix('!') {
         let cmd = cmd.trim();
         if cmd.is_empty() {
@@ -134,7 +134,7 @@ fn read_handler_impl<H: Host>(
                 "shell commands are disabled in this mode (pass --allow-shell to enable)".into(),
             ));
         }
-        match std::process::Command::new("sh").arg("-c").arg(cmd).output() {
+        match hjkl_engine::policy::shell_command(cmd).output() {
             Ok(out) if out.status.success() => match String::from_utf8(out.stdout) {
                 Ok(s) => s,
                 Err(_) => return Some(ExEffect::Error("command output was not UTF-8".into())),
@@ -4704,22 +4704,32 @@ mod tests {
     #[test]
     fn read_handler_shell_cmd_nonzero_exit_returns_error() {
         let mut ed = make_editor_with_lines(&["first"]);
-        // `false` always exits 1
-        let result = read_handler(&mut ed, "!false", None);
-        assert!(
-            matches!(result, Some(ExEffect::Error(_))),
-            "got: {result:?}"
-        );
+        // `exit 1` means the same in sh and cmd.exe. Match the exit message, not
+        // just `Error`: a shell that fails to spawn is an `Error` too.
+        let result = read_handler(&mut ed, "!exit 1", None);
+        match result {
+            Some(ExEffect::Error(msg)) => {
+                assert!(msg.starts_with("command exited 1"), "got: {msg}");
+            }
+            other => panic!("expected Error, got {other:?}"),
+        }
     }
 
     #[test]
     fn read_handler_shell_cmd_stderr_included_in_error() {
         let mut ed = make_editor_with_lines(&["first"]);
-        // Output to stderr then exit non-zero so we can observe it in the error
-        let result = read_handler(&mut ed, "!sh -c 'echo boom >&2; exit 1'", None);
+        // Output to stderr then exit non-zero so we can observe it in the error.
+        let cmd = if cfg!(windows) {
+            "!echo boom>&2& exit 1"
+        } else {
+            "!echo boom >&2; exit 1"
+        };
+        let result = read_handler(&mut ed, cmd, None);
         match result {
+            // The spawn-failure message echoes the command text, which also
+            // contains "boom" — require the exit message around it.
             Some(ExEffect::Error(msg)) => {
-                assert!(msg.contains("boom"), "expected stderr in error, got: {msg}");
+                assert_eq!(msg, "command exited 1 (boom)");
             }
             other => panic!("expected Error, got {other:?}"),
         }

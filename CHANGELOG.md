@@ -17,6 +17,13 @@ patch bumps.
   `App::handle_key_event` that drops releases before dispatch; held-key repeats
   still act. `hjkl_kitty::normalize_legacy` also now preserves the event's
   `kind` and `state`, so a Ctrl+[ release no longer becomes a fresh Esc press.
+- **Shell-outs work on Windows.** `:!cmd`, `:[range]!cmd` and `:r !cmd`
+  hardcoded `sh -c`, which a stock Windows `PATH` does not have, so they all
+  failed with "program not found"; the `!{motion}` filter already used cmd.exe
+  but mangled quotes through std's argument escaping. All four now share
+  `hjkl_engine::policy::shell_command`: `sh -c` on Unix, and on Windows
+  `%COMSPEC% /S /C "<command>"` with the command passed verbatim, vim's
+  defaults there.
 
 ## [0.41.6] - 2026-09-02
 
