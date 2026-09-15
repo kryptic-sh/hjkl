@@ -919,19 +919,13 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    only on `CrossesDevices`; renaming over a file opened without
    `FILE_SHARE_DELETE` (indexer, antivirus, another editor) errors and `:w`
    fails. Needs a retry/fallback policy.
-6. **The `findstr` grep fallbacks disagree.** `quickfix.rs` passes `/c:{pat}`
-   with a relative `*` and no `.git` exclusion; `hjkl-picker` `source/rg.rs`
-   passes the raw query (a pattern starting with `/` parses as a findstr option)
-   plus `root\*`. Only reached when `rg` is missing.
-7. **Replacing a loaded grammar DLL — suspected.** `publish_path` renames over
+6. **Replacing a loaded grammar DLL — suspected.** `publish_path` renames over
    `<name>.dll`; Windows refuses while another hjkl process has it loaded. Only
    on a grammar revision bump with two instances running.
-8. **Explorer git status under case or 8.3-name differences — suspected.** The
+7. **Explorer git status under case or 8.3-name differences — suspected.** The
    status map is keyed by git2's workdir joined with the relative path
    (`explorer_key_for`); a cwd spelled with different case never matches.
    `git_repo_dd_tracked_stays_red` is `#[cfg(not(target_os = "windows"))]`.
-9. **`path_to_file_uri` treats a verbatim `\\?\C:\` path as UNC**
-   (`hjkl-clipboard` `uri.rs`). Only reachable with a canonicalized path.
 
 **Coverage gaps.**
 
@@ -951,10 +945,11 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
   (`stage_hunk_applies_to_index` and its siblings in `hjkl-app` `git.rs`) is
   `#[ignore]`d for the #115 flake, so no CI leg applies a patch for a file in a
   subdirectory.
-- `hjkl-ex` `shell.rs`: `shell_range_filter_sorts_lines` and
-  `shell_filter_large_payload_does_not_deadlock` are `#[cfg(unix)]` (`sort`,
-  `cat`). On Windows the range filter is covered by the CRLF and empty-output
-  tests; the pipe-deadlock regression is not covered there.
+- `hjkl-ex` `shell.rs`: `shell_range_filter_sorts_lines` stays `#[cfg(unix)]` —
+  cmd.exe's `sort.exe` orders by codepage and collation, which is not worth
+  asserting blind. The range filter is covered on Windows by the CRLF and
+  empty-output tests, and the pipe-deadlock test now runs there through
+  `findstr "^"`.
 - The `~\` completion fix (`expand_path_prefix`) is red/green only on a Windows
   leg: on Unix `\` is a filename character, so the tests pin the literal case.
 - Not exercised: a non-US keyboard layout, conhost, ARM64 Windows.
