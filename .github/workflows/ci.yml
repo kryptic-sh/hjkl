@@ -243,6 +243,12 @@ jobs:
           target: ${{ matrix.target }}
           components: clippy, rustfmt
           cache: false
+          # v2 defaults CARGO_BUILD_WARNINGS=deny, which (unlike the workflow's
+          # `-D warnings`) also denies `linker_messages`: zig's linker warns
+          # "ignoring deprecated linker optimization setting" linking hjkl, so
+          # every zigbuild target failed. The clippy and test jobs already gate
+          # warnings; release builds must not re-gate them.
+          build-warnings: ''
       - run: rustup update --no-self-update stable
 
       - name: Cache cargo build
@@ -751,6 +757,9 @@ jobs:
         with:
           toolchain: stable
           cache: false
+          # As in `build`: warnings are gated before release, and a publish
+          # that fails partway leaves some crates released and others not.
+          build-warnings: ''
       - run: rustup update --no-self-update stable
 
       - name: Cache cargo build
