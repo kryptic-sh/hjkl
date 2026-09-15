@@ -520,6 +520,11 @@ fn clone_into(dir: &Path, url: &str, rev: &str) -> Result<()> {
 
 fn run_git(cwd: &Path, args: &[&str]) -> Result<()> {
     let out = Command::new("git")
+        // Git for Windows caps paths at MAX_PATH (260) unless told otherwise;
+        // a cache dir under a long profile path plus `.git/objects/xx/<38 hex>`
+        // crosses it, and every fetch then fails "Filename too long". Other
+        // platforms' git has no such cap and accepts the unused setting.
+        .args(["-c", "core.longpaths=true"])
         .args(args)
         .current_dir(cwd)
         .output()

@@ -6,6 +6,18 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- Grammars compile on Windows (MSVC targets). `GrammarCompiler` drove
+  `cc -fPIC -shared` by hand, and a stock Windows machine has no `cc`, so every
+  on-demand grammar failed with "spawn compiler cc". MSVC targets now find
+  `cl.exe` (or `clang-cl`) and its environment through the `cc` crate and build
+  the DLL with `-LD`, leaving no objects, import library or export file beside
+  it. Unix compilation is unchanged.
+- Grammar and query-source git fetches pass `-c core.longpaths=true`. Git for
+  Windows caps paths at `MAX_PATH` otherwise, so a cache under a long profile or
+  `XDG_CACHE_HOME` path failed every fetch with "Filename too long".
+
 ## [0.41.0] - 2026-08-04
 
 ### Added

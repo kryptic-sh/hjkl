@@ -16,7 +16,8 @@
 //!    to clone the remote repository named in the manifest (plus the curated
 //!    helix / nvim-treesitter query repos).
 //! 2. **Compiles** that freshly-downloaded C/C++ source by invoking the
-//!    system C/C++ compiler (`$CC` / `$CXX`, else `cc` / `c++`).
+//!    system C/C++ compiler (`$CC` / `$CXX`, else `cc` / `c++`; on MSVC
+//!    targets, the Visual Studio `cl.exe`).
 //! 3. **Loads and runs** the resulting shared library via `dlopen`
 //!    ([`libloading::Library::new`]) and calls into it to parse buffers.
 //!

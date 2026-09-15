@@ -9,20 +9,23 @@
 //! root docs for the trust model.
 //!
 //! Honors `$CC` / `$CXX` if set, otherwise falls back to `cc` / `c++` on
-//! `PATH`. The compiled `<name>.{so|dylib|dll}` is written **in-place
-//! inside the source clone** (e.g.
+//! `PATH`. MSVC targets instead find `cl.exe` through the `cc` crate's Visual
+//! Studio discovery — it is not on `PATH` outside a developer prompt — which
+//! also honors `$CC` / `$CXX`. The compiled `<name>.{so|dylib|dll}` is
+//! written **in-place inside the source clone** (e.g.
 //! `~/.cache/hjkl/grammars/<name>-<rev>/<name>.so`) — sources and their
 //! built parser stay together so the cache dir is one self-contained
 //! tree per grammar revision. The durable user-data install (the parser
 //! that the loader actually picks up across runs) is the
 //! [`GrammarLoader`]'s responsibility.
 //!
-//! `cc-rs` is intentionally avoided: its compiler-discovery path expects
-//! build-script environment (OPT_LEVEL, HOST, TARGET, …) we don't have here.
-//! For MSVC support down the road we'd reach for it, but Unix compilers are
-//! fine driven by hand.
+//! Unix compilers are driven by hand. `cc-rs` is used only on MSVC targets,
+//! for compiler discovery and its environment (`INCLUDE`, `LIB`, `PATH`); the
+//! build-script inputs it normally reads (`TARGET`, `HOST`, `OPT_LEVEL`) are
+//! set explicitly.
 
 use std::path::{Path, PathBuf};
+#[cfg(not(target_env = "msvc"))]
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
@@ -122,35 +125,118 @@ fn compile_into(spec: &LangSpec, source_root: &Path, out_file: &Path) -> Result<
         sources.push(p);
     }
 
-    let compiler = pick_compiler(any_cpp);
     let include = source_root.join("src");
+    run_compiler(any_cpp, &include, &sources, out_file)
+}
+
+/// gcc / clang: one driver invocation compiles and links the shared library.
+#[cfg(not(target_env = "msvc"))]
+fn run_compiler(cpp: bool, include: &Path, sources: &[PathBuf], out_file: &Path) -> Result<()> {
+    let compiler = pick_compiler(cpp);
     let mut cmd = Command::new(&compiler);
     // Speed > size for parser code; -fPIC required for shared libs on ELF.
-    cmd.arg("-O2").arg("-fPIC").arg("-I").arg(&include);
-    if any_cpp {
+    cmd.arg("-O2").arg("-fPIC").arg("-I").arg(include);
+    if cpp {
         cmd.arg("-std=c++14");
     } else {
         cmd.arg("-std=c11");
     }
-    for src in &sources {
-        cmd.arg(src);
-    }
+    cmd.args(sources);
     cmd.arg("-shared").arg("-o").arg(out_file);
 
     let out = cmd
         .output()
         .with_context(|| format!("spawn compiler {compiler}"))?;
+    check_compile_output(&out, out_file)
+}
+
+/// MSVC (`cl.exe`, or `clang-cl`): `-LD` compiles and links a DLL. Object
+/// files go to a scratch directory beside the output — `cl.exe` otherwise
+/// drops them in its working directory — and the linker skips the import
+/// library and export file, which nothing loads.
+#[cfg(target_env = "msvc")]
+fn run_compiler(cpp: bool, include: &Path, sources: &[PathBuf], out_file: &Path) -> Result<()> {
+    let tool = cc::Build::new()
+        .cargo_metadata(false)
+        .cargo_warnings(false)
+        .emit_rerun_if_env_changed(false)
+        .target(MSVC_TARGET)
+        .host(MSVC_TARGET)
+        .opt_level(2)
+        .debug(false)
+        .cpp(cpp)
+        .try_get_compiler()
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "no MSVC C compiler found (install Visual Studio Build Tools with \
+                 the C++ workload): {e}"
+            )
+        })?;
+    if !tool.is_like_msvc() {
+        bail!(
+            "compiler {} is not MSVC-compatible; grammars on this target need \
+             cl.exe or clang-cl",
+            tool.path().display()
+        );
+    }
+
+    let obj_dir = out_file.with_extension("obj.d");
+    std::fs::create_dir_all(&obj_dir).with_context(|| format!("create {}", obj_dir.display()))?;
+
+    let mut cmd = tool.to_command();
+    cmd.arg("-utf-8").arg("-I").arg(include);
+    if cpp {
+        cmd.arg("-std:c++14");
+    }
+    cmd.args(sources);
+    let mut fo = obj_dir.clone().into_os_string();
+    fo.push("\\");
+    cmd.arg({
+        let mut arg = std::ffi::OsString::from("-Fo");
+        arg.push(fo);
+        arg
+    });
+    cmd.arg({
+        let mut arg = std::ffi::OsString::from("-Fe");
+        arg.push(out_file);
+        arg
+    });
+    cmd.arg("-LD").arg("-link").arg("-NOIMPLIB").arg("-NOEXP");
+
+    let out = cmd.output();
+    let _ = std::fs::remove_dir_all(&obj_dir);
+    let out = out.with_context(|| format!("spawn compiler {}", tool.path().display()))?;
+    check_compile_output(&out, out_file)
+}
+
+/// The Rust target `cc` resolves the MSVC toolchain for — the one this binary
+/// was built for. Nothing else supplies it outside a build script.
+#[cfg(all(target_env = "msvc", target_arch = "x86_64"))]
+const MSVC_TARGET: &str = "x86_64-pc-windows-msvc";
+#[cfg(all(target_env = "msvc", target_arch = "aarch64"))]
+const MSVC_TARGET: &str = "aarch64-pc-windows-msvc";
+#[cfg(all(target_env = "msvc", target_arch = "x86"))]
+const MSVC_TARGET: &str = "i686-pc-windows-msvc";
+
+fn check_compile_output(out: &std::process::Output, out_file: &Path) -> Result<()> {
     if !out.status.success() {
+        // cl.exe reports diagnostics on stdout, gcc/clang on stderr.
         let stderr = String::from_utf8_lossy(&out.stderr);
+        let stdout = String::from_utf8_lossy(&out.stdout);
         bail!(
             "compile failed for {}: {}",
             out_file.display(),
-            stderr.trim()
+            [stderr.trim(), stdout.trim()]
+                .into_iter()
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n")
         );
     }
     Ok(())
 }
 
+#[cfg(not(target_env = "msvc"))]
 fn pick_compiler(cpp: bool) -> String {
     let env_key = if cpp { "CXX" } else { "CC" };
     if let Some(v) = std::env::var_os(env_key)
@@ -245,6 +331,25 @@ mod tests {
         assert_eq!(so.parent().unwrap(), root);
         let meta = std::fs::metadata(&so).unwrap();
         assert!(meta.len() > 1024, "artifact suspiciously small");
+        // The compiler's by-products (MSVC objects, import library, export
+        // file) and the staging file must not be left beside the artifact.
+        let so_name = so.file_name().unwrap().to_owned();
+        let strays: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .filter(|n| {
+                let n = n.to_string_lossy();
+                *n != *so_name.to_string_lossy()
+                    && (n.starts_with("c.") || n.ends_with(".obj") || n.ends_with(".exp"))
+            })
+            .collect();
+        assert!(strays.is_empty(), "stray build products: {strays:?}");
+        // The artifact must load and export the grammar's entry symbol — on
+        // Windows that takes `dllexport`, which linking alone does not prove.
+        let lib = unsafe { libloading::Library::new(&so) }.expect("compiled grammar must load");
+        let entry: Result<libloading::Symbol<'_, unsafe extern "C" fn() -> *const ()>, _> =
+            unsafe { lib.get(b"tree_sitter_c") };
+        assert!(entry.is_ok(), "missing tree_sitter_c: {:?}", entry.err());
 
         // Second compile is idempotent.
         let so2 = compiler.compile("c", &spec, &root).unwrap();

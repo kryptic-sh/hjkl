@@ -40,7 +40,8 @@ privileges**:
    repository (and the curated helix / nvim-treesitter query repos) named in the
    manifest.
 2. **Compile** — it runs the system C/C++ compiler (`$CC` / `$CXX`, else `cc` /
-   `c++`) over that freshly-downloaded source.
+   `c++`; on Windows, the Visual Studio `cl.exe` from Build Tools with the C++
+   workload) over that freshly-downloaded source.
 3. **Load & run** — it `dlopen`s the resulting shared library and calls into it
    to parse your buffers.
 

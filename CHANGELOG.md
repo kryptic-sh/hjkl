@@ -31,6 +31,14 @@ patch bumps.
   `vscode-json-language-server` never started. `hjkl-mangler` and `hjkl-lsp` now
   resolve commands through `PATH` with the `which` crate, which honors
   `PATHEXT`.
+- **Syntax highlighting grammars build on Windows.** On-demand tree-sitter
+  grammars were compiled with `cc -fPIC -shared`, which a stock Windows machine
+  does not have, so no grammar could build and nothing was highlighted.
+  `hjkl-bonsai` now finds the Visual Studio `cl.exe` through the `cc` crate on
+  MSVC targets (install Build Tools with the C++ workload), and CI runs the
+  grammar tests on Windows alongside Linux and macOS. Grammar fetches also pass
+  git `core.longpaths`, so a cache under a long path no longer fails with
+  "Filename too long".
 - **Filter output line endings follow the filtered rows.** Tools run through
   cmd.exe emit CRLF, so `:%!sort` on Windows left a `\r` on every replaced row;
   meanwhile `!{motion}` dropped the CR of a CRLF buffer's rows. Both filters now
