@@ -10,6 +10,16 @@ patch bumps.
 
 ### Fixed
 
+- **Windows search fallbacks and file URIs.** With ripgrep absent, the grep
+  picker passed the query to `findstr` unbound, so a query starting with `/` was
+  read as a command-line option and one with spaces became several alternative
+  patterns; `:grep` bound its query correctly but searched the process's working
+  directory instead of the project root. Both now share one invocation. A
+  canonicalized Windows path (`\\?\C:\...`) also produced a malformed `file://`
+  URI naming `?` as the host.
+
+### Fixed
+
 - **Two durability and recovery gaps off Linux.** The directory `fsync` that
   makes a rename durable — for `:w`, swap files, undofiles and trash — was
   silently skipped on Windows, because the directory could not be opened without

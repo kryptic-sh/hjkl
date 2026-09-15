@@ -100,35 +100,16 @@ fn hex_val(b: u8) -> Option<u8> {
 /// - Unix: `/foo/bar baz` → `file:///foo/bar%20baz`
 /// - Windows drive: `C:\foo\bar` → `file:///C:/foo/bar`
 /// - Windows UNC: `\\server\share\foo` → `file://server/share/foo`
+/// - Windows verbatim (`\\?\…`, what `std::fs::canonicalize` returns): same
+///   URI as the ordinary spelling of the same path — see
+///   [`windows_path_to_file_uri`].
 ///
 /// Returns [`ClipboardError::InvalidUri`] if the path is relative.
 pub(crate) fn path_to_file_uri(path: &Path) -> Result<String, ClipboardError> {
     let path_str = path.to_str().ok_or(ClipboardError::InvalidUri)?;
 
     if cfg!(windows) {
-        // Detect UNC: starts with \\ or // (after str conversion on Windows
-        // PathBuf always uses backslashes, but accept both here for robustness).
-        if path_str.starts_with("\\\\") || path_str.starts_with("//") {
-            // Strip the leading \\ or //, then normalise the rest to forward slashes.
-            let without_prefix = path_str
-                .strip_prefix("\\\\")
-                .or_else(|| path_str.strip_prefix("//"))
-                .unwrap_or_else(|| &path_str[2..]);
-            let normalised = without_prefix.replace('\\', "/");
-            // Percent-encode each segment but keep the separating '/' bare.
-            let encoded = encode_path_segments(&normalised);
-            return Ok(format!("file://{encoded}"));
-        }
-
-        // Detect drive letter: e.g. `C:\foo` or `C:/foo`.
-        if path_str.len() >= 2 && path_str.as_bytes()[1] == b':' {
-            let normalised = path_str.replace('\\', "/");
-            let encoded = encode_path_segments(&normalised);
-            return Ok(format!("file:///{encoded}"));
-        }
-
-        // Relative — reject.
-        return Err(ClipboardError::InvalidUri);
+        return windows_path_to_file_uri(path_str);
     }
 
     // Unix: must start with '/'.
@@ -140,6 +121,58 @@ pub(crate) fn path_to_file_uri(path: &Path) -> Result<String, ClipboardError> {
     // We already checked `to_str()` succeeds, so the bytes are valid UTF-8.
     let encoded = percent_encode(path_str.as_bytes());
     Ok(format!("file://{encoded}"))
+}
+
+/// The Windows half of [`path_to_file_uri`], kept free of `#[cfg]` so it is
+/// compiled — and tested — on every platform.
+///
+/// Classification order matters. `std::fs::canonicalize` hands back *verbatim*
+/// paths on Windows (`\\?\C:\dir\f.rs`), and those begin with two backslashes
+/// just like a UNC path does, so the UNC arm would otherwise claim them and
+/// emit a URI whose host is the escaped `?`. The prefix is therefore removed
+/// first, and the two verbatim forms map differently:
+///
+/// - `\\?\UNC\server\share\x` really *is* a UNC path — `UNC\` is the verbatim
+///   stand-in for the leading `\\` — so it keeps the UNC mapping and yields
+///   `file://server/share/x`.
+/// - `\\?\C:\dir\x` is a plain drive path wearing the prefix, so the prefix is
+///   simply dropped and it yields `file:///C:/dir/x`.
+///
+/// Only the backslash spelling of the prefix is recognised: forward slashes are
+/// not legal inside a verbatim path — suppressing Win32's separator rewriting
+/// is the whole point of the prefix — so `//?/…` is not a path this can receive.
+fn windows_path_to_file_uri(path_str: &str) -> Result<String, ClipboardError> {
+    if let Some(rest) = path_str.strip_prefix(r"\\?\UNC\") {
+        return Ok(unc_file_uri(rest));
+    }
+    let path_str = path_str.strip_prefix(r"\\?\").unwrap_or(path_str);
+
+    // Detect UNC: starts with \\ or // (after str conversion on Windows
+    // PathBuf always uses backslashes, but accept both here for robustness).
+    if let Some(rest) = path_str
+        .strip_prefix("\\\\")
+        .or_else(|| path_str.strip_prefix("//"))
+    {
+        return Ok(unc_file_uri(rest));
+    }
+
+    // Detect drive letter: e.g. `C:\foo` or `C:/foo`.
+    if path_str.len() >= 2 && path_str.as_bytes()[1] == b':' {
+        let normalised = path_str.replace('\\', "/");
+        let encoded = encode_path_segments(&normalised);
+        return Ok(format!("file:///{encoded}"));
+    }
+
+    // Relative — reject.
+    Err(ClipboardError::InvalidUri)
+}
+
+/// Build `file://server/share/x` from the body of a UNC path — everything
+/// after the leading `\\`, which the caller has already stripped.
+fn unc_file_uri(without_prefix: &str) -> String {
+    let normalised = without_prefix.replace('\\', "/");
+    // Percent-encode each segment but keep the separating '/' bare.
+    format!("file://{}", encode_path_segments(&normalised))
 }
 
 /// Percent-encode each path segment individually, keeping `/` separators bare.
@@ -340,6 +373,63 @@ mod tests {
         assert!(
             path_to_file_uri(path).is_err(),
             "relative path should be rejected"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // windows_path_to_file_uri — the Windows classifier, compiled everywhere
+    // so these run on every platform's runner, not just the Windows one.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn windows_classifier_drive_and_unc() {
+        assert_eq!(
+            windows_path_to_file_uri(r"C:\foo\bar.txt").unwrap(),
+            "file:///C:/foo/bar.txt"
+        );
+        assert_eq!(
+            windows_path_to_file_uri(r"\\server\share\x.txt").unwrap(),
+            "file://server/share/x.txt"
+        );
+        assert!(
+            windows_path_to_file_uri(r"relative\path").is_err(),
+            "relative path should be rejected"
+        );
+    }
+
+    /// A verbatim drive path — what `std::fs::canonicalize` returns on Windows
+    /// — must produce the SAME URI as the ordinary spelling. It starts with two
+    /// backslashes, so the UNC arm used to claim it and name `?` as the host.
+    #[test]
+    fn windows_verbatim_drive_path_is_not_unc() {
+        let uri = windows_path_to_file_uri(r"\\?\C:\dir\f.rs").unwrap();
+        assert_eq!(uri, "file:///C:/dir/f.rs");
+        assert_eq!(uri, windows_path_to_file_uri(r"C:\dir\f.rs").unwrap());
+        assert!(
+            !uri.contains("%3F"),
+            "the `?` must never survive into the URI: {uri}"
+        );
+    }
+
+    /// `\\?\UNC\` is the verbatim spelling of a real UNC path (`UNC\` stands in
+    /// for the leading `\\`), so it keeps the UNC mapping — host, then share.
+    #[test]
+    fn windows_verbatim_unc_path_stays_unc() {
+        let uri = windows_path_to_file_uri(r"\\?\UNC\server\share\x.txt").unwrap();
+        assert_eq!(uri, "file://server/share/x.txt");
+        assert_eq!(
+            uri,
+            windows_path_to_file_uri(r"\\server\share\x.txt").unwrap(),
+            "both spellings of the same UNC path must agree"
+        );
+    }
+
+    /// Segments are still percent-encoded after the prefix is stripped.
+    #[test]
+    fn windows_verbatim_path_with_spaces() {
+        assert_eq!(
+            windows_path_to_file_uri(r"\\?\D:\path with spaces\x.png").unwrap(),
+            "file:///D:/path%20with%20spaces/x.png"
         );
     }
 

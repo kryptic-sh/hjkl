@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -73,6 +74,36 @@ fn probe_grep_backend() -> GrepBackend {
         return GrepBackend::Findstr;
     }
     GrepBackend::Neither
+}
+
+/// Build the argument vector for the `findstr` fallback backend, searching
+/// `root` recursively for `pattern`.
+///
+/// Every caller goes through this so the grep picker and `:grep` cannot drift
+/// apart on it again — they previously passed different path arguments and only
+/// one of them bound the pattern safely.
+///
+/// The pattern is always handed over as `/c:<pattern>`, which is the part that
+/// has to be right: `/c:` declares the rest of that argument to be the search
+/// string, so a query beginning with `/` reaches findstr as a pattern instead
+/// of being parsed as an option, and a query containing spaces stays one search
+/// string instead of being split into several. `/s` recurses, `/n` prefixes
+/// each hit with its line number — making the output `path:line:text`, which
+/// [`parse_grep_line`] already reads — and `/r` asks for the regular-expression
+/// interpretation of the search string that findstr documents as its default,
+/// so queries behave as close to the `rg`/`grep` backends as findstr allows.
+///
+/// findstr has no ignore-file support and no exclusion flag, so unlike the
+/// other two backends this one searches everything under `root`, `.git`
+/// included.
+pub fn findstr_argv(pattern: &str, root: &Path) -> Vec<OsString> {
+    vec![
+        OsString::from("/s"),
+        OsString::from("/n"),
+        OsString::from("/r"),
+        OsString::from(format!("/c:{pattern}")),
+        root.join("*").into_os_string(),
+    ]
 }
 
 /// Parse one JSON line from `rg --json` output. Returns `Some(RgMatch)` for
@@ -577,17 +608,11 @@ impl PickerLogic for RgSource {
                     }
 
                     GrepBackend::Findstr => {
-                        // Windows-native findstr: findstr /S /N /R <pattern> <root>\*
-                        // Output format: path:line:text — same as grep -n, reuse parse_grep_line.
-                        let search_glob = root.join("*");
+                        // Windows-native findstr — see `findstr_argv` for the
+                        // invocation. Output format: path:line:text — same as
+                        // grep -n, so parse_grep_line reads it too.
                         let child = std::process::Command::new("findstr")
-                            .args([
-                                "/S",
-                                "/N",
-                                "/R",
-                                &q,
-                                search_glob.to_str().unwrap_or("*"),
-                            ])
+                            .args(findstr_argv(&q, &root))
                             .stdout(Stdio::piped())
                             .stderr(Stdio::null())
                             .spawn();
@@ -675,6 +700,61 @@ impl PickerLogic for RgSource {
                 }
             })
             .ok()
+    }
+}
+
+#[cfg(test)]
+mod findstr_argv_tests {
+    use super::*;
+
+    /// The defect this guards: passing the raw query meant findstr parsed a
+    /// query starting with `/` as an OPTION. `/c:` is what binds it as the
+    /// search string, and the bare query must never appear on its own.
+    #[test]
+    fn slash_leading_query_is_bound_as_a_pattern() {
+        let argv = findstr_argv("/usr/bin", Path::new("/tmp/proj"));
+        assert!(
+            argv.contains(&OsString::from("/c:/usr/bin")),
+            "query must be bound by /c:, got {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == "/usr/bin"),
+            "the bare query must never reach findstr as its own argument: {argv:?}"
+        );
+    }
+
+    /// A spaced query stays ONE argument — findstr would otherwise read the
+    /// words as separate alternative search strings.
+    #[test]
+    fn spaced_query_stays_one_argument() {
+        let argv = findstr_argv("fn main", Path::new("/tmp/proj"));
+        assert!(
+            argv.contains(&OsString::from("/c:fn main")),
+            "spaced query must survive whole, got {argv:?}"
+        );
+        assert_eq!(
+            argv.len(),
+            5,
+            "three flags, the pattern, the glob: {argv:?}"
+        );
+    }
+
+    /// The path argument is `<root>\*` — an absolute glob under the picker's
+    /// root, not a relative `*` that would search the process's cwd instead.
+    #[test]
+    fn searches_recursively_under_root() {
+        let root = Path::new("/tmp/proj");
+        let argv = findstr_argv("needle", root);
+        assert_eq!(
+            argv.last().expect("glob argument"),
+            root.join("*").as_os_str(),
+            "got {argv:?}"
+        );
+        assert!(argv.contains(&OsString::from("/s")), "recursive: {argv:?}");
+        assert!(
+            argv.contains(&OsString::from("/n")),
+            "line numbers: {argv:?}"
+        );
     }
 }
 

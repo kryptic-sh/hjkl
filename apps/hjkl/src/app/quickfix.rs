@@ -683,7 +683,7 @@ impl crate::app::App {
             return;
         }
         use hjkl_picker::source::rg::{
-            GrepBackend, detect_grep_backend, parse_grep_line, parse_rg_json_line,
+            GrepBackend, detect_grep_backend, findstr_argv, parse_grep_line, parse_rg_json_line,
         };
         const MAX_ENTRIES: usize = 10_000;
         let root = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
@@ -702,11 +702,11 @@ impl crate::app::App {
             GrepBackend::Grep => std::process::Command::new("grep")
                 .args(["-rnH", "--exclude-dir=.git", "--", pat, root_str])
                 .output(),
+            // The grep picker runs the same invocation — see
+            // `findstr_argv` for why the pattern is bound with `/c:` and
+            // what findstr cannot exclude.
             GrepBackend::Findstr => std::process::Command::new("findstr")
-                // `/c:` binds the pattern as the search string so a pattern
-                // starting with `/` can't be parsed as a findstr option;
-                // `/r` keeps regex semantics (findstr's default).
-                .args(["/s", "/n", "/r", &format!("/c:{pat}"), "*"])
+                .args(findstr_argv(pat, &root))
                 .output(),
             GrepBackend::Neither => {
                 self.bus.error("no search backend found (install ripgrep)");

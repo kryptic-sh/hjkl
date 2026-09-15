@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- The `findstr` fallback (used for the grep picker when ripgrep is absent) binds
+  the query with `/c:`, so a query starting with `/` reaches findstr as a
+  pattern instead of being parsed as an option, and a query containing spaces
+  stays one search string. The invocation now lives in
+  `source::rg::findstr_argv` and is shared with `:grep`, which built a different
+  one.
+
 ## [0.41.0] - 2026-08-04
 
 ### Changed

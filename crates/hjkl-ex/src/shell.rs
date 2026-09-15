@@ -228,22 +228,43 @@ mod tests {
         assert!(matches!(result, ExEffect::Error(_)), "got: {result:?}");
     }
 
-    #[cfg(unix)]
+    /// Copies stdin to stdout line for line, in each platform's shell.
+    /// cmd.exe has no `cat`; `findstr "^"` is the stand-in — the regex matches
+    /// at the start of every line, so every line is printed (the same trick
+    /// `hjkl-mangler`'s tests use for their Windows formatter shim).
+    fn echo_stdin_command() -> &'static str {
+        if cfg!(windows) {
+            r#"findstr "^""#
+        } else {
+            "cat"
+        }
+    }
+
     #[test]
     fn shell_filter_large_payload_does_not_deadlock() {
         // Regression: stdin was written on this thread before draining stdout;
-        // once payload + streamed output exceeded the pipe buffers (~64KiB
-        // each), writer and child blocked on each other forever. `cat` streams
-        // 1:1, so a few hundred KiB reliably triggered the deadlock.
-        let line = "x".repeat(64);
-        let lines: Vec<&str> = std::iter::repeat_n(line.as_str(), 8192).collect();
+        // once the in-flight payload exceeded everything that can buffer
+        // between the two processes, writer and child blocked on each other
+        // forever. The filter here streams 1:1, so the payload only has to be
+        // big enough to fill that path — but that is well above one pipe
+        // capacity: with the guard removed, `sh -c cat` swallowed 640KiB on
+        // this project's Linux box before it stopped draining. Hence 4MiB of
+        // payload, in rows wide enough to keep the rope cheap and still far
+        // under findstr's per-line limit. Windows pipes are smaller than
+        // Linux's, so the same payload covers cmd.exe — which is why this
+        // test is no longer Unix-only.
+        let line = "x".repeat(1023);
+        let lines: Vec<&str> = std::iter::repeat_n(line.as_str(), 4096).collect();
         let mut editor = make_editor_with_lines(&lines);
         let range = LineRange::new(1, lines.len());
-        let result = shell_filter_handler(&mut editor, "cat", Some(range));
+        let result = shell_filter_handler(&mut editor, echo_stdin_command(), Some(range));
         assert_eq!(result, ExEffect::Ok, "got: {result:?}");
         assert_eq!(editor.buffer().row_count(), lines.len());
     }
 
+    /// Still Unix-only: cmd.exe's `sort.exe` is a collation-and-codepage
+    /// dependent tool whose ordering we cannot check from here, and the
+    /// deadlock guard above already covers the Windows pipe path.
     #[cfg(unix)]
     #[test]
     fn shell_range_filter_sorts_lines() {

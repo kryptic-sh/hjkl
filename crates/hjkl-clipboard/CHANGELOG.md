@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- `path_to_file_uri` no longer reads a Windows _verbatim_ path (`\\?\C:\dir\f`,
+  the form `std::fs::canonicalize` returns there) as a UNC path. It starts with
+  two backslashes, so the UNC branch claimed it and emitted
+  `file://%3F/C:/dir/f` — a URI naming the escaped `?` as its host. Verbatim
+  drive paths now yield the same URI as their ordinary spelling, and
+  `\\?\UNC\server\share\x`, which denotes a real UNC path, keeps the UNC
+  mapping.
+
 ## [0.41.0] - 2026-08-04
 
 ### Fixed
