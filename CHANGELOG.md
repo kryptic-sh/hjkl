@@ -10,6 +10,16 @@ patch bumps.
 
 ### Fixed
 
+- **Two durability and recovery gaps off Linux.** The directory `fsync` that
+  makes a rename durable — for `:w`, swap files, undofiles and trash — was
+  silently skipped on Windows, because the directory could not be opened without
+  `FILE_FLAG_BACKUP_SEMANTICS`. And a config write-lock left behind by a crashed
+  editor was only recognised on Linux, so on Windows and macOS settings
+  persistence failed for up to a minute after a crash; the pid probe is now
+  shared with the swap files' and works on both.
+
+### Fixed
+
 - **A tree-sitter heap corruption that could crash the editor.** `hjkl-bonsai`
   swapped tree-sitter's C allocator to mimalloc lazily, the first time a
   `Highlighter` was built — but tree-sitter objects created before that point

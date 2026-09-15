@@ -134,20 +134,45 @@ fn open_temp(path: &Path, mode: Option<u32>) -> io::Result<File> {
         .open(path)
 }
 
+/// Open a directory handle suitable for `fsync`.
+///
+/// `File::open` is enough on unix. On Windows a directory cannot be opened
+/// without `FILE_FLAG_BACKUP_SEMANTICS` — the open fails outright — which is how
+/// the parent `fsync` below came to be skipped there while looking like it ran.
+/// The flag is the same one [`crate::identity`] opens directories with, taken
+/// from `windows-sys` rather than written out as a literal so the value comes
+/// from the API definition.
+fn open_dir_for_sync(dir: &Path) -> io::Result<File> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_BACKUP_SEMANTICS;
+        File::options()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(dir)
+    }
+    #[cfg(not(windows))]
+    {
+        File::open(dir)
+    }
+}
+
 /// `fsync` the directory holding `path`, making a rename into it durable.
 ///
-/// Best-effort: some filesystems reject `fsync` on a directory handle, and a
-/// failure costs durability of the *name*, not integrity of the data.
-pub(crate) fn sync_parent(path: &Path) {
+/// Best-effort, and callers ignore the result: some filesystems reject `fsync`
+/// on a directory handle, and a failure costs durability of the *name*, not
+/// integrity of the data. The result is still returned rather than dropped here
+/// so the ignoring is a decision at each call site — and so a test can tell a
+/// directory that was synced from one that could not even be opened.
+pub(crate) fn sync_parent(path: &Path) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let dir = if parent.as_os_str().is_empty() {
         Path::new(".")
     } else {
         parent
     };
-    if let Ok(handle) = File::open(dir) {
-        let _ = handle.sync_all();
-    }
+    open_dir_for_sync(dir)?.sync_all()
 }
 
 /// Write the whole payload in place, without a temp file. Not atomic.
@@ -226,7 +251,9 @@ where
         match std::fs::rename(&tmp, target) {
             Ok(()) => {
                 if opts.fsync_dir {
-                    sync_parent(target);
+                    // Best-effort: the data is already durable, only the
+                    // durability of the *name* rides on this.
+                    let _ = sync_parent(target);
                 }
                 return Ok(());
             }
@@ -372,8 +399,9 @@ pub fn symlink_atomic(link_path: &Path, target: &Path) -> io::Result<()> {
             return match std::fs::rename(&tmp, link_path) {
                 Ok(()) => {
                     // Durability of the *name* is the whole point of a symlink,
-                    // so the parent sync is unconditional here.
-                    sync_parent(link_path);
+                    // so the parent sync is unconditional here — still
+                    // best-effort, since a filesystem may refuse it.
+                    let _ = sync_parent(link_path);
                     Ok(())
                 }
                 Err(e) => {
@@ -483,6 +511,34 @@ mod tests {
             .filter_map(|e| e.ok())
             .any(|e| e.file_name().to_string_lossy().contains("hjkl-tmp"));
         assert!(!leftover, "temp file left after failed fill");
+    }
+
+    /// The parent `fsync` starts with opening the directory, and that open is
+    /// the half that fails on Windows without `FILE_FLAG_BACKUP_SEMANTICS`. It
+    /// used to be swallowed by an `if let Ok(..)`, so rename durability was
+    /// skipped there while every test stayed green.
+    #[test]
+    fn parent_directory_opens_as_a_directory_handle() {
+        let td = tempfile::tempdir().unwrap();
+        let handle = open_dir_for_sync(td.path())
+            .unwrap_or_else(|e| panic!("cannot open {} as a directory: {e}", td.path().display()));
+        assert!(
+            handle.metadata().unwrap().is_dir(),
+            "handle is not on the directory itself"
+        );
+    }
+
+    /// The `fsync` stays best-effort, but a directory that cannot be opened at
+    /// all must reach the caller as an error rather than as a silent success —
+    /// otherwise no test can tell a synced rename from a skipped one.
+    #[test]
+    fn sync_parent_reports_a_missing_directory() {
+        let td = tempfile::tempdir().unwrap();
+        let orphan = td.path().join("no-such-dir").join("f.bin");
+        assert!(
+            sync_parent(&orphan).is_err(),
+            "missing parent directory reported as synced"
+        );
     }
 
     #[test]

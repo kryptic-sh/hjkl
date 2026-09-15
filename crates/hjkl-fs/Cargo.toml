@@ -20,19 +20,23 @@ hjkl-xdg.workspace = true
 # rather than by two hand-kept rule sets.
 ignore = "0.4"
 
-# `O_NOFOLLOW` for the write-permission probe. Unix-only; the probe degrades to a
-# plain write-open elsewhere.
+# `O_NOFOLLOW` for the write-permission probe (the probe degrades to a plain
+# write-open elsewhere), and `kill(pid, 0)` for the pid liveness probe.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 # `GetFileInformationByHandle` for the open-handle identity pair and the hard-link
 # count. `std` exposes those fields only behind the unstable `windows_by_handle`
-# feature, so the call is made raw. Version matches the workspace's existing
-# `windows-sys` (hjkl-app), so no second copy is pulled in.
+# feature, so the call is made raw. `FILE_FLAG_BACKUP_SEMANTICS` (same feature)
+# is what lets a directory be opened at all, for the identity check and for the
+# parent fsync. `Win32_System_Threading` carries `OpenProcess` for the pid
+# liveness probe. Version matches the workspace's existing `windows-sys`
+# (hjkl-app), so no second copy is pulled in.
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
 ] }
 
 [dev-dependencies]

@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A config write-lock left by a crashed process is reclaimed at once off
+  Linux.** The liveness probe read `/proc/<pid>` and answered "unknown"
+  everywhere else, so on Windows and macOS `write_key_at` failed for up to the
+  60-second staleness window after a crash. It now uses `hjkl_fs::pid_liveness`,
+  which probes on unix and Windows alike. A platform with no probe still keeps
+  the lock and lets mtime govern.
+
 ## [0.40.0] - 2026-08-01
 
 ### Fixed

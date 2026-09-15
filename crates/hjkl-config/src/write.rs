@@ -22,34 +22,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::error::ConfigError;
 
-// ---------------------------------------------------------------------------
-// PID liveness check
-// ---------------------------------------------------------------------------
-
-/// Report whether a process with the given `pid` is still running.
-///
-/// - `Some(true)`  — the owner is alive.
-/// - `Some(false)` — the owner is provably gone.
-/// - `None`        — liveness could not be determined on this platform.
-///
-/// On Linux this probes `/proc/<pid>/`. Elsewhere there is no cheap probe
-/// without a `libc` dependency `hjkl-config` does not carry, so it returns
-/// `None` and the mtime check ([`LOCK_STALE_SECS`]) becomes the sole staleness
-/// signal. Returning `None` (rather than `false`) is important: "cannot probe"
-/// must not be mistaken for "dead", or every live lock would look stale and
-/// mutual exclusion would break on non-Linux hosts.
-fn pid_liveness(pid: u32) -> Option<bool> {
-    #[cfg(target_os = "linux")]
-    {
-        Some(std::fs::metadata(format!("/proc/{pid}")).is_ok())
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = pid;
-        None
-    }
-}
-
 /// Maximum age of a lock file before it is considered stale regardless of
 /// PID liveness (guards against PID reuse and unreadable lock files).
 ///
@@ -156,13 +128,14 @@ fn lock_is_stale(lock_path: &Path) -> bool {
         .is_ok()
     {
         // Format: "<pid> <timestamp_secs>". Within the freshness window, only
-        // reclaim a lock whose owner is *provably* gone. When liveness cannot
-        // be probed (non-Linux), keep the lock and let mtime govern — treating
-        // "unknown" as "dead" would make every live lock look stale.
+        // reclaim a lock whose owner is *provably* gone — `Some(false)`. A
+        // platform with no probe answers `None`; keep the lock there and let
+        // mtime govern, since treating "unknown" as "dead" would make every
+        // live lock look stale.
         if let Some(pid_str) = contents.split_whitespace().next()
             && let Ok(pid) = pid_str.parse::<u32>()
         {
-            return matches!(pid_liveness(pid), Some(false));
+            return matches!(hjkl_fs::pid_liveness(pid), Some(false));
         }
         // Corrupt / unparseable body → stale (can't verify owner).
         return true;
@@ -300,9 +273,27 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml.lock");
         std::fs::write(&path, format!("{} 0", std::process::id())).unwrap();
-        // Live on Linux (probed) and "unknown" elsewhere both mean "keep the
-        // lock" while its mtime is fresh — so this must hold on every platform.
+        // "Alive" (unix, Windows) and "cannot probe" (anywhere else) both mean
+        // "keep the lock" while its mtime is fresh — so this holds everywhere.
         assert!(!lock_is_stale(&path));
+    }
+
+    /// A lock left behind by a process that is gone is reclaimed immediately,
+    /// without waiting out [`LOCK_STALE_SECS`]. The probe is what supplies the
+    /// `Some(false)`; while it was `/proc`-only, macOS and Windows answered
+    /// "unknown" here and every crashed writer blocked config persistence for a
+    /// full minute.
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn lock_is_stale_for_dead_owner_before_the_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml.lock");
+        // Freshly written, so the mtime branch cannot be what reclaims it.
+        std::fs::write(&path, "999999999 0").unwrap();
+        assert!(
+            lock_is_stale(&path),
+            "a lock whose owner is provably gone must be reclaimable at once"
+        );
     }
 
     #[test]

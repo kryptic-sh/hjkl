@@ -25,9 +25,6 @@
 //! (no undo section) parses as `Err` under the v3 reader and is treated as "no
 //! usable swap" — no migration, the bump is safe by construction.
 
-#[cfg(unix)]
-use libc;
-
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -559,73 +556,17 @@ pub fn now_unix_ms() -> u64 {
 /// Is `pid` a currently-live process owned by anyone?  Best-effort,
 /// cross-platform.
 ///
-/// - Unix uses `kill(pid, 0)` (alive on `Ok` or `EPERM`).
-/// - Windows uses `OpenProcess` + `WaitForSingleObject(0)`: a signaled
-///   process object means it has exited; access-denied means it exists but
-///   is owned by another user (alive).
-/// - Other targets cannot cheaply check, so return `false` (no lock
-///   enforced) — recovery still works; only the multi-instance refusal is
-///   skipped.
-///
-/// pid 0 is special-cased as dead on every platform: no OS probe answers
-/// "is pid 0 running?" the way the caller means it. POSIX defines pid 0 for
-/// `kill` as *every process in the caller's process group*, so `kill(0, 0)`
-/// succeeds and reports "alive"; Windows resolves pid 0 to the System Idle
-/// Process, which either opens or fails access-denied — both of which this
-/// function reads as alive. A `writer_pid` of 0 only ever comes from a
-/// truncated or corrupted header, and classifying it as live pins the swap
-/// file to a "live owner" forever: the multi-instance refusal then blocks the
-/// user from opening the file with no in-editor way to clear it.
+/// The probe itself is [`hjkl_fs::pid_liveness`] — one implementation for this
+/// and for the config write-lock, which otherwise drift apart per platform. What
+/// is decided *here* is how to read its third state: a platform with no probe
+/// answers `None`, and this collapses that to `false`. Only the multi-instance
+/// refusal is lost by doing so; recovery still works. Folding the other way
+/// would mean a swap whose owner cannot be checked is treated as live forever,
+/// and the user is then blocked from opening their own file with no in-editor
+/// way to clear it — the same reason [`hjkl_fs::pid_liveness`] reports pid 0
+/// (only ever produced by a truncated or corrupted header) as not alive.
 pub fn pid_is_alive(pid: u32) -> bool {
-    if pid == 0 {
-        return false;
-    }
-    #[cfg(unix)]
-    {
-        // kill(pid, 0): 0 = alive & ours; EPERM = alive, not ours;
-        // ESRCH = dead.
-        let r = unsafe { libc::kill(pid as libc::pid_t, 0) };
-        if r == 0 {
-            return true;
-        }
-        // errno EPERM => process exists but we lack permission => alive.
-        std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-    }
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, WAIT_OBJECT_0};
-        use windows_sys::Win32::System::Threading::{
-            OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
-            WaitForSingleObject,
-        };
-        const ERROR_ACCESS_DENIED: u32 = 5;
-
-        // SAFETY: plain Win32 FFI. The handle returned by OpenProcess is
-        // checked for null and always closed before returning.
-        unsafe {
-            let handle = OpenProcess(
-                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
-                0, // bInheritHandle = FALSE
-                pid,
-            );
-            if handle.is_null() {
-                // No such process => dead; access-denied => exists (alive),
-                // owned by another user.
-                return GetLastError() == ERROR_ACCESS_DENIED;
-            }
-            // The process object becomes signaled only once it exits, so a
-            // zero-timeout wait that returns WAIT_OBJECT_0 means dead;
-            // WAIT_TIMEOUT (anything else) means still running.
-            let wait = WaitForSingleObject(handle, 0);
-            CloseHandle(handle);
-            wait != WAIT_OBJECT_0
-        }
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = pid;
-        false
-    }
+    matches!(hjkl_fs::pid_liveness(pid), Some(true))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -795,9 +736,10 @@ mod tests {
     }
 
     /// pid 0 is never a live owner. `kill(0, 0)` targets the caller's whole
-    /// process group and returns success, so without the explicit guard a
-    /// truncated/corrupt header decoding `writer_pid == 0` would be classified
-    /// as owned by a live process forever and lock the user out of the file.
+    /// process group and returns success, so without the explicit guard (which
+    /// lives in [`hjkl_fs::pid_liveness`]) a truncated/corrupt header decoding
+    /// `writer_pid == 0` would be classified as owned by a live process forever
+    /// and lock the user out of the file.
     #[test]
     fn pid_is_alive_false_for_pid_zero() {
         assert!(

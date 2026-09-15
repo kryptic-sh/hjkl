@@ -8,6 +8,22 @@ this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `process::pid_liveness(pid) -> Option<bool>` — the one per-platform answer to
+  "is the process that wrote this record still running", now shared by the swap
+  files' `writer_pid` and the config write-lock instead of being re-derived per
+  crate. `None` means the platform has no probe and must never be read as dead.
+
+### Fixed
+
+- **The parent-directory `fsync` is no longer silently skipped on Windows.**
+  `sync_parent` opened the directory with `File::open`, which Windows refuses
+  without `FILE_FLAG_BACKUP_SEMANTICS`, and the failure was discarded — so
+  rename durability for saves, swap files, undofiles and trash was never
+  attempted there. It stays best-effort (a filesystem may refuse `fsync` on a
+  directory), but the attempt now happens.
+
 ## [0.41.0] - 2026-08-04
 
 ### Added

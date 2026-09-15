@@ -240,7 +240,9 @@ fn swap_into_place(staging: &Path, to: &Path, opts: &WriteOptions) -> io::Result
     }
 
     if opts.fsync_dir {
-        sync_parent(to);
+        // Best-effort, as everywhere else: a filesystem that refuses `fsync` on
+        // a directory costs durability of the name, not the tree's contents.
+        let _ = sync_parent(to);
     }
     Ok(())
 }
@@ -461,9 +463,10 @@ pub fn move_atomic(from: &Path, to: &Path, opts: &WriteOptions) -> io::Result<()
     match std::fs::rename(from, to) {
         Ok(()) => {
             if opts.fsync_dir {
-                sync_parent(to);
+                // Both best-effort; see `sync_parent`.
+                let _ = sync_parent(to);
                 if from.parent() != to.parent() {
-                    sync_parent(from);
+                    let _ = sync_parent(from);
                 }
             }
             Ok(())

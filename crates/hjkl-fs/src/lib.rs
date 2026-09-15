@@ -31,6 +31,9 @@
 //! - [`identity`] — [`guard_not_swapped`] proves an open handle is still the
 //!   object a path names, and [`hardlink_count`] reports how many names share
 //!   that object.
+//! - [`process`] — [`pid_liveness`], the one per-platform answer to "is the
+//!   process that wrote this record still running", shared by the swap files'
+//!   `writer_pid` and the config write-lock.
 //! - [`project`] — which files on disk are part of the user's project. The one
 //!   gitignore-and-dotfiles policy behind hjkl's file tree, its file and grep
 //!   pickers, and `:grep`, so those four cannot disagree about whether a file
@@ -124,6 +127,7 @@ pub mod identity;
 pub mod lock;
 pub mod open;
 pub mod path;
+pub mod process;
 pub mod project;
 pub mod read;
 
@@ -139,6 +143,7 @@ pub use identity::{guard_not_swapped, hardlink_count};
 pub use lock::{FileLock, lock_path_for, with_lock_exclusive, with_lock_shared};
 pub use open::{owner_only_options, owner_only_options_no_follow};
 pub use path::{canonicalize_nearest, is_safe_component, resolve_under};
+pub use process::pid_liveness;
 pub use read::{
     read_capped, read_capped_from, read_to_string_capped, read_to_string_capped_from,
     read_to_string_unbounded,
