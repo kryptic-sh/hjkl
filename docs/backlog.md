@@ -919,27 +919,19 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    only on `CrossesDevices`; renaming over a file opened without
    `FILE_SHARE_DELETE` (indexer, antivirus, another editor) errors and `:w`
    fails. Needs a retry/fallback policy.
-6. **Directory fsync is a silent no-op on Windows — confirmed by code read.**
-   `sync_parent` (`hjkl-fs` `atomic.rs`) uses `File::open(dir)`, which fails
-   without `FILE_FLAG_BACKUP_SEMANTICS`, so rename durability for save, swap,
-   undo and trash is skipped. Open with the flag via `OpenOptionsExt`.
-7. **Config write-lock liveness is Linux-only.** `pid_liveness` (`hjkl-config`
-   `write.rs`) returns `None` off Linux, so after a crash `write_key_at` fails
-   until the staleness window passes. `hjkl-app` `swap.rs` `pid_is_alive`
-   already has a Windows `OpenProcess` implementation to share.
-8. **The `findstr` grep fallbacks disagree.** `quickfix.rs` passes `/c:{pat}`
+6. **The `findstr` grep fallbacks disagree.** `quickfix.rs` passes `/c:{pat}`
    with a relative `*` and no `.git` exclusion; `hjkl-picker` `source/rg.rs`
    passes the raw query (a pattern starting with `/` parses as a findstr option)
    plus `root\*`. Only reached when `rg` is missing.
-9. **Replacing a loaded grammar DLL — suspected.** `publish_path` renames over
+7. **Replacing a loaded grammar DLL — suspected.** `publish_path` renames over
    `<name>.dll`; Windows refuses while another hjkl process has it loaded. Only
    on a grammar revision bump with two instances running.
-10. **Explorer git status under case or 8.3-name differences — suspected.** The
-    status map is keyed by git2's workdir joined with the relative path
-    (`explorer_key_for`); a cwd spelled with different case never matches.
-    `git_repo_dd_tracked_stays_red` is `#[cfg(not(target_os = "windows"))]`.
-11. **`path_to_file_uri` treats a verbatim `\\?\C:\` path as UNC**
-    (`hjkl-clipboard` `uri.rs`). Only reachable with a canonicalized path.
+8. **Explorer git status under case or 8.3-name differences — suspected.** The
+   status map is keyed by git2's workdir joined with the relative path
+   (`explorer_key_for`); a cwd spelled with different case never matches.
+   `git_repo_dd_tracked_stays_red` is `#[cfg(not(target_os = "windows"))]`.
+9. **`path_to_file_uri` treats a verbatim `\\?\C:\` path as UNC**
+   (`hjkl-clipboard` `uri.rs`). Only reachable with a canonicalized path.
 
 **Coverage gaps.**
 
