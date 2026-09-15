@@ -24,6 +24,13 @@ patch bumps.
   `hjkl_engine::policy::shell_command`: `sh -c` on Unix, and on Windows
   `%COMSPEC% /S /C "<command>"` with the command passed verbatim, vim's defaults
   there.
+- **npm-installed formatters and language servers run on Windows.** npm installs
+  tools there as `.cmd` shims, and `Command::new` with a bare name only tries
+  `.exe`, so `prettier` read as not installed and the default
+  `typescript-language-server`, `pyright-langserver` and
+  `vscode-json-language-server` never started. `hjkl-mangler` and `hjkl-lsp` now
+  resolve commands through `PATH` with the `which` crate, which honors
+  `PATHEXT`.
 - **Filter output line endings follow the filtered rows.** Tools run through
   cmd.exe emit CRLF, so `:%!sort` on Windows left a `\r` on every replaced row;
   meanwhile `!{motion}` dropped the CR of a CRLF buffer's rows. Both filters now

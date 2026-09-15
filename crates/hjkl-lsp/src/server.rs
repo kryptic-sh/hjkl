@@ -60,7 +60,13 @@ impl Server {
         evt_tx: Sender<LspEvent>,
     ) -> anyhow::Result<Self> {
         cmd.validate(&key.language).map_err(anyhow::Error::msg)?;
-        let mut child = tokio::process::Command::new(&cmd.command)
+        // Resolve through `PATH` first: `Command::new` with a bare name only
+        // tries `.exe` on Windows, so npm-installed servers — `.cmd` shims
+        // such as `typescript-language-server.cmd` — could never spawn.
+        // `which` applies `PATHEXT`.
+        let program = which::which(&cmd.command)
+            .with_context(|| format!("failed to spawn LSP server {:?}", cmd.command))?;
+        let mut child = tokio::process::Command::new(program)
             .args(&cmd.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

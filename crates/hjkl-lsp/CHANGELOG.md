@@ -6,7 +6,13 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-## [Unreleased]
+### Fixed
+
+- `Server::spawn` resolves the server command through `PATH` with the `which`
+  crate. On Windows `Command::new` with a bare name only tries `.exe`, so
+  npm-installed servers — `.cmd` shims such as `typescript-language-server`,
+  `pyright-langserver` and `vscode-json-language-server`, all defaults — failed
+  to spawn.
 
 ### Removed
 

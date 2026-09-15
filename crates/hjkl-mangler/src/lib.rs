@@ -126,11 +126,22 @@ const MAX_FORMATTER_OUTPUT: usize = 64 * 1024 * 1024;
 /// can't block the calling (often UI) thread forever.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// Resolve `tool` to the executable path to spawn, searching `PATH`.
+///
+/// `Command::new` with a bare name only tries `.exe` on Windows, so tools npm
+/// installs there — `.cmd` shims such as `prettier.cmd` — could never be
+/// spawned and read as not installed. `which` applies `PATHEXT`. A tool that
+/// does not resolve is `NotFound`, the same error a failed spawn gives.
+fn resolve_tool(tool: &str) -> std::io::Result<PathBuf> {
+    which::which(tool)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::NotFound, format!("{tool}: {e}")))
+}
+
 /// Run `<tool> --version` and wait up to [`PROBE_TIMEOUT`], killing (and
 /// reaping) the child on timeout. `Ok(Some(status))` = it exited; `Ok(None)` =
 /// it launched but timed out; `Err` = it could not be spawned.
 fn probe_status(tool: &str) -> std::io::Result<Option<std::process::ExitStatus>> {
-    let mut child = Command::new(tool)
+    let mut child = Command::new(resolve_tool(tool)?)
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -706,6 +717,9 @@ fn run_formatter_with_timeout(
         project_root
     };
 
+    let Ok(program) = resolve_tool(program) else {
+        return Err(FormatError::NotInstalled(tool_name.to_owned()));
+    };
     let mut child = match Command::new(program)
         .args(rest)
         .args(extra_args)
@@ -1095,6 +1109,47 @@ mod tests {
             !is_tool_installed("hjkl-mangler-definitely-not-a-real-tool-xyz"),
             "probe must return false for a tool not on PATH"
         );
+    }
+
+    /// Write an executable script into a fresh temp dir that echoes its stdin
+    /// — a `.cmd` shim on Windows, the way npm installs tools there — and
+    /// return its path WITHOUT an extension, the way a formatter names it.
+    fn write_script_shim(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("hjkl-mangler-shim-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        #[cfg(windows)]
+        std::fs::write(dir.join(format!("{name}.cmd")), "@findstr \"^\"\r\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let script = dir.join(name);
+            std::fs::write(&script, "#!/bin/sh\ncat\n").unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        dir.join(name)
+    }
+
+    #[test]
+    fn is_tool_installed_finds_script_shims() {
+        let shim = write_script_shim("probe");
+        assert!(is_tool_installed(shim.to_str().unwrap()));
+        let _ = std::fs::remove_dir_all(shim.parent().unwrap());
+    }
+
+    #[test]
+    fn run_formatter_spawns_script_shims() {
+        let shim = write_script_shim("format");
+        let out = run_formatter_with_timeout(
+            "shim",
+            &[shim.to_str().unwrap()],
+            &[],
+            "hello\n",
+            shim.parent().unwrap(),
+            Duration::from_secs(10),
+        );
+        let _ = std::fs::remove_dir_all(shim.parent().unwrap());
+        assert_eq!(out.expect("shim must spawn").trim_end(), "hello");
     }
 
     #[test]

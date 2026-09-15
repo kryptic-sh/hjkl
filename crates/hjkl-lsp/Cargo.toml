@@ -18,6 +18,7 @@ tokio = { version = "1", features = ["rt", "macros", "io-util", "process", "sync
 crossbeam-channel = "0.5"
 tracing = "0.1"
 url = "2"
+which = "8.0.6"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros", "io-util", "sync", "time", "test-util"] }

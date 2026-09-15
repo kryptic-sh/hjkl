@@ -8,6 +8,13 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- Formatters resolve through `PATH` with the `which` crate before spawning, in
+  both `is_tool_installed` / `probe_tool` and the format run. On Windows
+  `Command::new` with a bare name only tries `.exe`, so npm-installed formatters
+  such as `prettier` (a `.cmd` shim) were reported as not installed.
+
 ## [0.1.0] - 2026-05-16
 
 ### Added

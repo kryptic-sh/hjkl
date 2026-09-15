@@ -732,3 +732,58 @@ async fn request_with_error_returns_rpc_error() {
     .await
     .expect("request_with_error_returns_rpc_error timed out");
 }
+
+/// npm installs language servers on Windows as `.cmd` shims, which
+/// `Command::new` cannot spawn by bare name. A server named without its
+/// extension must still spawn: the shim exits at once, so `spawn` fails at the
+/// handshake — not at process creation. A missing command is the control that
+/// shows the spawn-failure message is what this tells apart.
+#[tokio::test]
+async fn spawn_resolves_script_shims() {
+    use hjkl_lsp::{Server, ServerConfig};
+
+    let dir = std::env::temp_dir().join(format!("hjkl-lsp-shim-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    #[cfg(windows)]
+    std::fs::write(dir.join("fake-ls.cmd"), "@exit /b 0\r\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let script = dir.join("fake-ls");
+        std::fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    let spawn_error = |command: String| async move {
+        let cfg = ServerConfig {
+            command,
+            args: vec![],
+            root_markers: vec![],
+            shutdown_idle_after_secs: 0,
+            initialization_options: None,
+        };
+        let key = ServerKey {
+            language: "fake".to_string(),
+            root: workspace_root("shim-workspace"),
+        };
+        let (evt_tx, _evt_rx) = crossbeam_channel::unbounded::<LspEvent>();
+        let result =
+            tokio::time::timeout(Duration::from_secs(10), Server::spawn(key, &cfg, evt_tx))
+                .await
+                .expect("Server::spawn did not return promptly");
+        format!(
+            "{:#}",
+            result.err().expect("no real server, so spawn must fail")
+        )
+    };
+
+    let missing = spawn_error(dir.join("no-such-ls").display().to_string()).await;
+    let shim = spawn_error(dir.join("fake-ls").display().to_string()).await;
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(missing.contains("failed to spawn"), "control: {missing}");
+    assert!(
+        !shim.contains("failed to spawn"),
+        "shim did not spawn: {shim}"
+    );
+}
