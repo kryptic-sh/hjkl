@@ -8,13 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.41.7] - 2026-09-15
+
 ### Changed
 
 - **Dependency updates.** `hjkl-xdg` bumps `dirs` 6 → 7, whose only change is
   `preference_dir` on Windows (Roaming instead of Local AppData); hjkl-xdg reads
   only `home_dir`, so nothing moves. Within existing ranges: `bitflags` 2.13.2,
   `crossbeam-channel` 0.5.17, `reqwest` 0.13.5 (which adds `base64` 0.23 beside
-  0.22), `toml` 1.1.6 and `toml_edit` 0.25.15. No behavior change.
+  0.22), `toml` 1.1.6 and `toml_edit` 0.25.15. The release lockfile refresh
+  rolls 36 more transitive packages forward within existing ranges (among them
+  `clap` 4.6.7, `rustls` 0.23.45, `wasm-bindgen` 0.2.128) and drops
+  `tinyvec_macros`. No behavior change.
 
 ### Fixed
 
@@ -6067,7 +6072,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.6...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.7...HEAD
+[0.41.7]: https://github.com/kryptic-sh/hjkl/compare/v0.41.6...v0.41.7
 [0.41.6]: https://github.com/kryptic-sh/hjkl/compare/v0.41.5...v0.41.6
 [0.41.5]: https://github.com/kryptic-sh/hjkl/compare/v0.41.4...v0.41.5
 [0.41.4]: https://github.com/kryptic-sh/hjkl/compare/v0.41.3...v0.41.4
