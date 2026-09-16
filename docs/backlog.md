@@ -566,6 +566,17 @@ with ripgrep installed are unaffected.
 
 ### 1.7 Harness, coverage, and hardening
 
+- **The vim-compat corpus runs only in the weekly Cron, never in `ci.yml`.**
+  Nothing in PR or main CI runs `hjkl-compat-oracle`, so a corpus case can land
+  broken and stay that way until Monday:
+  `visual_block_star_searches_selection_forward` was committed 2026-08-22 and
+  first failed in the 2026-08-24 cron, then every week after. Needs a decision —
+  adding it to `ci.yml` costs a pinned-neovim download plus ~90s of runtime per
+  run (the `tier2_block_textobj` tier alone takes over 60s), against catching
+  corpus regressions at the commit that causes them. Deliberately not changed
+  here: the weekly job is now correct, and where else to run it is the user's
+  call.
+
 - **The Wayland mock's `reset()` does not tell the client anything
   (2026-08-02).** `MockState::reset` clears `offer_payloads` and the pending
   offers, but sends no `data_offer` teardown and no null selection, so the
@@ -756,12 +767,19 @@ with ripgrep installed are unaffected.
   behaviour change to the test environment, not a workflow-hygiene one. Decide
   it repo-wide or not at all.
 
-- **`vim_compat` does not diff against the neovim the corpus was measured on.**
-  Corpus expectations are taken from neovim 0.12.4 on the workstation; the CI
-  job installs whatever `ubuntu-24.04`'s apt carries, which is older. Not
-  measured — recorded because a corpus case that passes locally and fails (or
-  passes for the wrong reason) in CI would look like flake. Check what the job
-  actually reports before trusting either side.
+- **The `hjkl-ex` path-completion cache test loses its race under a full
+  parallel workspace run.**
+  `complete_path_entries_caches_listing_until_dir_mtime_changes` (`hjkl-ex`
+  `complete.rs`) measures a delta on the process-wide `PATH_ENTRIES_CACHE`
+  rescan counter that every other path test shares. It already evicts and
+  retries 64 times for exactly this contention and still loses: on 2026-09-16 it
+  failed in `cargo test --workspace`, and `cargo test -p hjkl-vim -p hjkl-ex`
+  reproduced it roughly one run in three — on a clean `main` with no local
+  changes, so it is not tied to any pending work. It always passes when run
+  alone. Not fixed — recorded so the next person does not chase it as a real
+  regression. The fix is to give the test its own cache instance (the counter
+  and cache are process-wide statics) rather than to widen the retry loop, which
+  has already been tried and is what is failing.
 
 - **A grammar installed before the query-sanitizer was removed never
   re-installs.** `is_user_install_fresh` (`hjkl-bonsai` `runtime/loader.rs`)

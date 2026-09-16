@@ -66,9 +66,18 @@ async fn tier1_corpus_passes() {
     assert!(failures.is_empty(), "{failures:#?}");
 }
 
-/// Resolve the `hjkl` binary path (HJKL_BIN override, else workspace
-/// target/debug). Returns `None` if it doesn't exist so callers can skip.
-fn resolve_hjkl_bin() -> Option<std::path::PathBuf> {
+/// Is the `hjkl` binary built (HJKL_BIN override, else workspace
+/// target/debug)?
+///
+/// Returns `false` when it is missing, so a bare `cargo test -p
+/// hjkl-compat-oracle` without a prior build still runs the in-process tiers.
+/// Under CI a missing binary panics instead: a lane that skips the
+/// binary-backed corpora while reporting success is a check that cannot fail,
+/// and the weekly cron job did exactly that — "74 passed" with most tiers
+/// never run — from the job's first green until 2026-09-16.
+///
+/// The drivers resolve the path themselves; callers only need the verdict.
+fn hjkl_bin_available(label: &str) -> bool {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let bin_path: std::path::PathBuf = if let Ok(v) = std::env::var("HJKL_BIN") {
         v.into()
@@ -82,7 +91,24 @@ fn resolve_hjkl_bin() -> Option<std::path::PathBuf> {
                 |p| p.join("target/debug").join(&exe_name),
             )
     };
-    bin_path.exists().then_some(bin_path)
+
+    if bin_path.exists() {
+        return true;
+    }
+
+    assert!(
+        std::env::var_os("CI").is_none(),
+        "{label}: hjkl binary not found at {}. A CI lane running this corpus \
+         must `cargo build -p hjkl --bin hjkl` (or set HJKL_BIN) — skipping \
+         here would report success without running a single case.",
+        bin_path.display()
+    );
+    eprintln!(
+        "skipping {label}: hjkl binary not found at {}. \
+         Run `cargo build -p hjkl --bin hjkl` first, or set HJKL_BIN.",
+        bin_path.display()
+    );
+    false
 }
 
 /// Drive `rel_path` through the `hjkl --nvim-api` subprocess and assert every
@@ -101,14 +127,9 @@ async fn run_corpus_via_nvim_api(rel_path: &str, label: &str) {
     let corpus_path = PathBuf::from(manifest_dir).join(rel_path);
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
 
-    let Some(bin_path) = resolve_hjkl_bin() else {
-        eprintln!(
-            "skipping {label}: hjkl binary not found. \
-             Run `cargo build -p hjkl --bin hjkl` first, or set HJKL_BIN."
-        );
+    if !hjkl_bin_available(label) {
         return;
-    };
-    let _ = bin_path;
+    }
 
     let mut failures: Vec<String> = Vec::new();
 
@@ -674,27 +695,7 @@ async fn nvim_api_tier_passes() {
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/nvim_api_tier.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
 
-    // Resolve binary path using the same logic as hjkl_driver, but check
-    // existence here so we can skip gracefully.
-    let bin_path: std::path::PathBuf = if let Ok(v) = std::env::var("HJKL_BIN") {
-        v.into()
-    } else {
-        let exe_name = format!("hjkl{}", std::env::consts::EXE_SUFFIX);
-        std::path::Path::new(manifest_dir)
-            .parent() // crates/
-            .and_then(|p| p.parent())
-            .map_or_else(
-                || std::path::PathBuf::from(&exe_name),
-                |p| p.join("target/debug").join(&exe_name),
-            )
-    };
-
-    if !bin_path.exists() {
-        eprintln!(
-            "skipping nvim_api_tier_passes: binary not found at {}. \
-             Run `cargo build -p hjkl --bin hjkl` first, or set HJKL_BIN.",
-            bin_path.display()
-        );
+    if !hjkl_bin_available("nvim_api_tier_passes") {
         return;
     }
 
@@ -774,25 +775,7 @@ async fn tier2_sneak_disabled_fallback_corpus_passes() {
     let corpus_path = PathBuf::from(manifest_dir).join("corpus/tier2_sneak.toml");
     let corpus = hjkl_compat_oracle::load_corpus(&corpus_path).unwrap();
 
-    let bin_path: std::path::PathBuf = if let Ok(v) = std::env::var("HJKL_BIN") {
-        v.into()
-    } else {
-        let exe_name = format!("hjkl{}", std::env::consts::EXE_SUFFIX);
-        std::path::Path::new(manifest_dir)
-            .parent()
-            .and_then(|p| p.parent())
-            .map_or_else(
-                || std::path::PathBuf::from(&exe_name),
-                |p| p.join("target/debug").join(&exe_name),
-            )
-    };
-
-    if !bin_path.exists() {
-        eprintln!(
-            "skipping tier2_sneak_disabled_fallback_corpus_passes: binary not found at {}. \
-             Run `cargo build -p hjkl --bin hjkl` first, or set HJKL_BIN.",
-            bin_path.display()
-        );
+    if !hjkl_bin_available("tier2_sneak_disabled_fallback_corpus_passes") {
         return;
     }
 

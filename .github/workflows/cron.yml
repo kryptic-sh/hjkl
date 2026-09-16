@@ -174,13 +174,17 @@ jobs:
 
   vim_compat:
     name: vim-compat oracle (neovim)
-    # Pinned since the job was written (319db53b), unlike the jobs above; the
-    # commit gives no reason. Keep the pin deliberately: the oracle diffs
-    # against whatever neovim this image's apt repository carries, so bumping
-    # the image moves the reference implementation out from under the corpus.
+    # The image pin no longer decides which neovim the oracle diffs against —
+    # the `Install neovim` step below pins that explicitly. Kept anyway so the
+    # rest of the environment (glibc, apt packages) cannot move under the job
+    # without someone choosing it.
     runs-on: ubuntu-24.04
     # 1 min on 2026-08-03.
     timeout-minutes: 20
+    env:
+      # The reference implementation the corpus is diffed against. Read by
+      # both the install and the verify step below, so they cannot disagree.
+      NVIM_VERSION: v0.12.5
     steps:
       - uses: actions/checkout@v7
       - uses: actions-rust-lang/setup-rust-toolchain@v2
@@ -190,10 +194,35 @@ jobs:
       - run: rustup update --no-self-update stable
       - uses: Swatinem/rust-cache@v2
       - name: Install neovim
+        # Pinned to the neovim the corpus is measured against, NOT apt's.
+        # `ubuntu-24.04` carries 0.9.5, well behind the workstation the
+        # expectations are authored on, and the two disagree on real
+        # behaviour: 0.9.5's visual-mode `*` leaves the selection in the
+        # unnamed register and 0.12's does not, which failed
+        # `tier2_search_corpus_passes` every week from 2026-08-24 while hjkl
+        # matched current neovim. Raise this pin when the corpus is
+        # re-measured, so the reference implementation only ever moves
+        # deliberately.
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends neovim
+          url="https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-x86_64.tar.gz"
+          curl -fsSL "$url" -o /tmp/nvim.tar.gz
+          sudo tar -C /opt -xzf /tmp/nvim.tar.gz
+          echo "/opt/nvim-linux-x86_64/bin" >> "$GITHUB_PATH"
+      - name: Verify the pinned neovim is the one on PATH
+        # Without this the job would silently fall back to any other nvim on
+        # the image, diffing the corpus against a version nobody chose.
+        run: |
+          set -euo pipefail
           nvim --version | head -1
+          nvim --version | head -1 | grep -qF "NVIM ${NVIM_VERSION}"
+      - name: Build the hjkl binary
+        # The `--nvim-api` corpora (ex commands, substitute, abbrev, sneak,
+        # …) drive a `hjkl` subprocess. Without this they skip themselves and
+        # the job still reports success — it did for weeks, printing
+        # "74 passed" while most tiers never ran. `require_hjkl_bin` in
+        # tests/oracle.rs now turns that skip into a failure whenever CI is
+        # set, so this step is load-bearing rather than an optimisation.
+        run: cargo build -p hjkl --bin hjkl
       - name: Run compat oracle
         run: cargo test -p hjkl-compat-oracle --all-targets -- --nocapture
