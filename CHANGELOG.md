@@ -8,6 +8,21 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-09-17
+
+### Changed (BREAKING)
+
+- **`hjkl-engine`'s word motions take a fold provider.** `move_word_fwd`,
+  `move_word_back` and `move_word_end` (`hjkl_engine::motions`) gained a
+  `folds: &dyn FoldProvider` parameter, and `move_word_end` additionally takes
+  `stop: bool` — vim's rule that `cw` ends on the word's last character while
+  `ce` runs to the next word end. Callers pass `&NoFolds` where they have no
+  fold state. Without this a word motion cannot see a closed fold, which is what
+  the fold fixes below required.
+- **`hjkl_vim_types::Motion` gained a `ChangeWordEnd { big }` variant.** The
+  enum is not `#[non_exhaustive]`, so an exhaustive `match` on `Motion`
+  downstream must add an arm.
+
 ### Fixed
 
 - **Debug builds no longer panic when a vertical motion parks on a tab or a
@@ -16,9 +31,6 @@ patch bumps.
   does — but the debug-only `sticky_col` invariant compared against the span's
   first cell and aborted. Found by `cargo-fuzz` from a two-keystroke input;
   release builds, which compile the check out, were never affected.
-
-### Fixed
-
 - **Word motions and operators on a closed fold now match vim.** A counted `2dw`
   / `2yw` / `2de` applies its count on top of the fold instead of stopping at
   the fold's end, `de` / `ce` end at the next word end, `db` and `d0` at a
@@ -33,8 +45,6 @@ patch bumps.
   its sentence, is a step; hjkl treated every blank run as one and landed a full
   row-set too far up.
 
-### Fixed
-
 - **Windows search fallbacks and file URIs.** With ripgrep absent, the grep
   picker passed the query to `findstr` unbound, so a query starting with `/` was
   read as a command-line option and one with spaces became several alternative
@@ -43,8 +53,6 @@ patch bumps.
   canonicalized Windows path (`\\?\C:\...`) also produced a malformed `file://`
   URI naming `?` as the host.
 
-### Fixed
-
 - **Two durability and recovery gaps off Linux.** The directory `fsync` that
   makes a rename durable — for `:w`, swap files, undofiles and trash — was
   silently skipped on Windows, because the directory could not be opened without
@@ -52,8 +60,6 @@ patch bumps.
   editor was only recognised on Linux, so on Windows and macOS settings
   persistence failed for up to a minute after a crash; the pid probe is now
   shared with the swap files' and works on both.
-
-### Fixed
 
 - **A tree-sitter heap corruption that could crash the editor.** `hjkl-bonsai`
   swapped tree-sitter's C allocator to mimalloc lazily, the first time a
@@ -6134,7 +6140,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.41.7...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.42.0...HEAD
+[0.42.0]: https://github.com/kryptic-sh/hjkl/compare/v0.41.7...v0.42.0
 [0.41.7]: https://github.com/kryptic-sh/hjkl/compare/v0.41.6...v0.41.7
 [0.41.6]: https://github.com/kryptic-sh/hjkl/compare/v0.41.5...v0.41.6
 [0.41.5]: https://github.com/kryptic-sh/hjkl/compare/v0.41.4...v0.41.5
