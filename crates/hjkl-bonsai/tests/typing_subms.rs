@@ -37,6 +37,11 @@ fn make_loader(tmp: &tempfile::TempDir) -> (GrammarLoader, GrammarRegistry, Mani
 /// The test is marked `#[ignore]` because it needs the Rust grammar from the
 /// network. It is not a strict deadline test — it is a smoke-check that the
 /// tree-walk path isn't O(file-size) instead of O(viewport-size).
+///
+/// The `grammar_tests` CI lane runs every other ignored test in this crate but
+/// excludes this one by name: a wall-clock budget measures the runner, not the
+/// code, and it failed here under a cold parallel run that was compiling
+/// grammars at the same time. Run it locally, or from the bench job.
 #[test]
 #[ignore = "network + compiler: needs tree-sitter-rust grammar — timing may vary on CI"]
 fn small_edit_parse_and_walk_under_some_budget() {

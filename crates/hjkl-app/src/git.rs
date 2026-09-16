@@ -1036,7 +1036,7 @@ mod tests {
         // In a real git repo, explorer_key_for of a modified file returns
         // the same key that explorer_status_map uses for that file.
         let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
 
         let f = tmp.path().join("tracked.txt");
         std::fs::write(&f, "original\n").unwrap();
@@ -1089,7 +1089,7 @@ mod tests {
     #[test]
     fn explorer_status_map_classifies_files() {
         let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
 
         // committed file — will be modified
         let committed = tmp.path().join("committed.txt");
@@ -1140,7 +1140,7 @@ mod tests {
     #[test]
     fn path_in_repo_returns_true_inside_repo() {
         let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = tmp.path().join("file.txt");
         std::fs::write(&f, "hello\n").unwrap();
         assert!(path_in_repo(&f), "file inside a repo must return true");
@@ -1163,6 +1163,45 @@ mod tests {
         );
     }
 
+    /// `git init` a throwaway repo whose line-ending behaviour does not depend
+    /// on whoever's git config the run inherits.
+    ///
+    /// This is what the "#115 flake" actually was, and it is not a race: the
+    /// `windows-latest` image ships Git for Windows with `core.autocrlf=true`,
+    /// and `git apply` honours it when it writes the worktree, so
+    /// `revert_hunk_restores_worktree` read back `a\r\nb\r\nc\r\n` against a
+    /// byte-exact `a\nb\nc\n` and failed every time. It reproduces on Linux
+    /// with `GIT_CONFIG_GLOBAL` pointing at a config containing
+    /// `[core] autocrlf = true`; without that, 65 consecutive runs of the
+    /// then-ignored tests (2026-09-16, 40 under `cargo nextest -j 8` and 25
+    /// under `cargo test --test-threads=16`) never failed once. Deterministic
+    /// environment dependence, not nondeterminism.
+    ///
+    /// Repo-local config outranks the user's global and system config, and
+    /// `$GIT_DIR/info/attributes` outranks every config file, so both the `git`
+    /// this module spawns and the one [`run_git_apply`] spawns see neutral
+    /// settings — without this test binary mutating process-global environment,
+    /// which would reach every other test thread.
+    fn init_repo(dir: &Path) {
+        git(dir, &["init", "-q", "-b", "main"]);
+        git(dir, &["config", "core.autocrlf", "false"]);
+        git(dir, &["config", "core.eol", "lf"]);
+        // A developer's global `core.hooksPath` (husky, pre-commit, gitleaks)
+        // otherwise runs on these commits and can refuse them, and a global
+        // `commit.gpgsign` asks for a key that CI does not have.
+        let no_hooks = dir.join(".git").join("empty-hooks");
+        std::fs::create_dir_all(&no_hooks).expect("create empty hooks dir");
+        git(dir, &["config", "core.hooksPath", ".git/empty-hooks"]);
+        git(dir, &["config", "commit.gpgsign", "false"]);
+        // `-text` disables end-of-line conversion outright, so a global
+        // `core.attributesFile` marking `* text=auto` cannot reintroduce it.
+        std::fs::write(
+            dir.join(".git").join("info").join("attributes"),
+            "* -text\n",
+        )
+        .expect("write .git/info/attributes");
+    }
+
     #[test]
     fn no_repo_returns_empty() {
         let tmp = TempDir::new().unwrap();
@@ -1176,7 +1215,7 @@ mod tests {
         // Untracked files no longer flood the gutter with `+`; the
         // `[Untracked]` status-line tag carries the signal instead.
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = tmp.path().join("u.txt");
         std::fs::write(&f, "a\nb\nc\n").unwrap();
         let bytes = std::fs::read(&f).unwrap();
@@ -1188,7 +1227,7 @@ mod tests {
     #[test]
     fn modified_line_emits_modify() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = tmp.path().join("m.txt");
         std::fs::write(&f, "alpha\nbravo\ncharlie\n").unwrap();
         git(tmp.path(), &["add", "m.txt"]);
@@ -1207,7 +1246,7 @@ mod tests {
     #[test]
     fn added_line_emits_add() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = tmp.path().join("a.txt");
         std::fs::write(&f, "alpha\nbravo\n").unwrap();
         git(tmp.path(), &["add", "a.txt"]);
@@ -1228,7 +1267,7 @@ mod tests {
         // buffer has unsaved edits. changes_for_bytes must compare
         // HEAD blob against the *provided bytes*, not disk.
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = tmp.path().join("app.rs");
         std::fs::write(&f, "alpha\nbravo\ncharlie\n").unwrap();
         git(tmp.path(), &["add", "app.rs"]);
@@ -1247,7 +1286,7 @@ mod tests {
     #[test]
     fn deleted_line_emits_delete() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = tmp.path().join("d.txt");
         std::fs::write(&f, "alpha\nbravo\ncharlie\n").unwrap();
         git(tmp.path(), &["add", "d.txt"]);
@@ -1270,19 +1309,17 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
     fn no_change_yields_no_hunks() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = commit_file(tmp.path(), "h.txt", "a\nb\nc\n");
         assert!(hunks_for_bytes(&f, b"a\nb\nc\n").is_empty());
     }
 
     #[test]
-    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
     fn modified_line_one_hunk_with_patch_body() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = commit_file(tmp.path(), "h.txt", "a\nb\nc\n");
         let hunks = hunks_for_bytes(&f, b"a\nB\nc\n");
         assert_eq!(hunks.len(), 1, "got {hunks:?}");
@@ -1298,10 +1335,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
     fn added_lines_hunk_covers_new_rows() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = commit_file(tmp.path(), "h.txt", "a\nb\n");
         let hunks = hunks_for_bytes(&f, b"a\nNEW1\nNEW2\nb\n");
         assert_eq!(hunks.len(), 1);
@@ -1310,10 +1346,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
     fn two_separate_changes_two_hunks() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = commit_file(
             tmp.path(),
             "h.txt",
@@ -1326,10 +1361,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
     fn hunk_at_off_change_is_none() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = commit_file(tmp.path(), "h.txt", "1\n2\n3\n4\n5\n6\n7\n8\n");
         let hunks = hunks_for_bytes(&f, b"1\n2\n3\n4\nFIVE\n6\n7\n8\n");
         // Row 0 is beyond the context window of the row-4 change.
@@ -1378,10 +1412,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
     fn stage_hunk_applies_to_index() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = commit_file(tmp.path(), "s.txt", "a\nb\nc\n");
         // Edit on disk + save (stage works against the on-disk file vs HEAD).
         std::fs::write(&f, "a\nB\nc\n").unwrap();
@@ -1400,11 +1433,42 @@ mod tests {
         );
     }
 
+    /// The patch is applied to a file in a SUBDIRECTORY, which is the shape the
+    /// Windows path bug had: [`build_patch`] joins the relative path's
+    /// components with `/` because `git apply` takes a native `src\deep\s.txt`
+    /// literally and finds no such file. Note what this can and cannot prove:
+    /// on Unix `MAIN_SEPARATOR` is already `/`, so here it pins that the path
+    /// written into the patch is the one `git apply` resolves for a nested
+    /// file — the separator itself only goes red on the Windows leg.
     #[test]
-    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
+    fn stage_hunk_in_subdirectory_applies_to_index() {
+        let tmp = TempDir::new().unwrap();
+        init_repo(tmp.path());
+        let sub = tmp.path().join("src").join("deep");
+        std::fs::create_dir_all(&sub).unwrap();
+        let f = sub.join("s.txt");
+        std::fs::write(&f, "a\nb\nc\n").unwrap();
+        git(tmp.path(), &["add", "src/deep/s.txt"]);
+        git(tmp.path(), &["commit", "-q", "-m", "init"]);
+
+        std::fs::write(&f, "a\nB\nc\n").unwrap();
+        let bytes = std::fs::read(&f).unwrap();
+        let hunks = hunks_for_bytes(&f, &bytes);
+        assert_eq!(hunks.len(), 1, "expected one hunk, got {hunks:?}");
+
+        stage_hunk(&f, &hunks[0]).expect("stage_hunk for a file in a subdirectory");
+
+        let staged = staged_diff(tmp.path(), "src/deep/s.txt");
+        assert!(
+            staged.contains("-b") && staged.contains("+B"),
+            "staged: {staged}"
+        );
+    }
+
+    #[test]
     fn revert_hunk_restores_worktree() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = commit_file(tmp.path(), "r.txt", "a\nb\nc\n");
         std::fs::write(&f, "a\nB\nc\n").unwrap();
 
@@ -1420,7 +1484,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
     fn stage_hunk_outside_repo_errs() {
         let tmp = TempDir::new().unwrap();
         let f = tmp.path().join("loose.txt");
@@ -1442,10 +1505,9 @@ mod tests {
     // ── Blame (#202) ─────────────────────────────────────────────────────────
 
     #[test]
-    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
     fn blame_line_committed_line_attributes_commit() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = commit_file(tmp.path(), "b.txt", "a\nb\nc\n");
         let info = blame_line(&f, 1, b"a\nb\nc\n");
         let info = info.expect("blame_line must return Some for a tracked committed file");
@@ -1455,10 +1517,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
     fn blame_line_uncommitted_edit_is_not_committed() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = commit_file(tmp.path(), "b.txt", "a\nb\nc\n");
         let info = blame_line(&f, 1, b"a\nMODIFIED\nc\n");
         let info = info.expect("blame_line must return Some for in-memory modified line");
@@ -1470,7 +1531,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
     fn blame_line_out_of_repo_is_none() {
         let tmp = TempDir::new().unwrap();
         let f = tmp.path().join("loose.txt");
@@ -1486,7 +1546,7 @@ mod tests {
     #[test]
     fn stage_path_stages_modification() {
         let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = tmp.path().join("tracked.txt");
         std::fs::write(&f, "original\n").unwrap();
         git(tmp.path(), &["add", "tracked.txt"]);
@@ -1514,7 +1574,7 @@ mod tests {
     #[test]
     fn unstage_path_unstages() {
         let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = tmp.path().join("tracked.txt");
         std::fs::write(&f, "original\n").unwrap();
         git(tmp.path(), &["add", "tracked.txt"]);
@@ -1543,7 +1603,7 @@ mod tests {
     #[test]
     fn discard_path_restores_worktree() {
         let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         // Disable autocrlf so Windows checkout doesn't rewrite `\n` → `\r\n`.
         git(tmp.path(), &["config", "core.autocrlf", "false"]);
         let f = tmp.path().join("tracked.txt");
@@ -1595,7 +1655,7 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
 
         let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         // Disable autocrlf so checkout doesn't rewrite `\n` → `\r\n`.
         git(tmp.path(), &["config", "core.autocrlf", "false"]);
 
@@ -1651,7 +1711,7 @@ mod tests {
     #[test]
     fn commit_with_file_real_message_commits() {
         let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         // Repo-local identity so commit_with_file's plain `git commit` succeeds
         // on CI runners that have no global git config.
         git(tmp.path(), &["config", "user.email", "t@t.com"]);
@@ -1690,7 +1750,7 @@ mod tests {
     #[test]
     fn commit_with_file_empty_message_aborts() {
         let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = tmp.path().join("a.txt");
         std::fs::write(&f, "original\n").unwrap();
         git(tmp.path(), &["add", "a.txt"]);
@@ -1728,7 +1788,7 @@ mod tests {
     #[test]
     fn commit_edit_path_in_repo_returns_some() {
         let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let root = tmp.path().to_path_buf();
         let path = commit_edit_path(&root);
         assert!(
@@ -1754,10 +1814,9 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "git2 integration: real repo + git subprocess; CI test-binary flake (#115 follow-up)"]
     fn blame_file_all_len_matches_lines() {
         let tmp = TempDir::new().unwrap();
-        git(tmp.path(), &["init", "-q", "-b", "main"]);
+        init_repo(tmp.path());
         let f = commit_file(tmp.path(), "b.txt", "a\nb\nc\n");
         let all = blame_file_all(&f, b"a\nb\nc\n");
         assert!(

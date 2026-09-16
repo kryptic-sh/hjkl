@@ -2229,6 +2229,105 @@ mod tests {
         fold_ranges_when_ready(&mut layer, &buf, name, 80)
     }
 
+    /// The lua fixture the `foldlevelstart` level rule is pinned on, run end to
+    /// end: ranges from a REAL tree, then through the wiring that turns them
+    /// into open/closed folds.
+    ///
+    /// `hjkl_buffer::folds`'s
+    /// `set_auto_folds_closes_folds_deeper_than_foldlevelstart` asserts the same
+    /// closed sets, but from a `NVIM_LUA_RANGES` constant typed into the test —
+    /// so the LEVEL rule was covered while nothing checked that a live grammar
+    /// and `folds/lua.scm` actually produce those ranges. The other end-to-end
+    /// test, `auto_fold_pass_applies_foldlevelstart_as_a_level` in `syntax_glue`,
+    /// uses `foldmethod=marker` so it can run without grammars. This is the only
+    /// pass that runs the real query at a non-zero `foldlevelstart`.
+    ///
+    /// Measured on neovim 0.12.5 over this exact fixture with
+    /// `nvim --headless -u NONE --cmd 'filetype on' --cmd 'set foldmethod=expr
+    /// foldexpr=v:lua.vim.treesitter.foldexpr() foldenable foldlevelstart=N'`,
+    /// enumerating closed folds with `foldclosed`/`foldclosedend` — rescanning
+    /// after `zo` on each hit, because `foldclosed` reports only the OUTERMOST
+    /// closed fold covering a line and the nested ones are invisible to a single
+    /// sweep:
+    ///
+    /// ```text
+    /// fls=0   closed=[(2, 16), (3, 14), (4, 7), (10, 13), (18, 23), (19, 21)]
+    /// fls=1   closed=[(3, 14), (4, 7), (10, 13), (19, 21)]
+    /// fls=2   closed=[(4, 7), (10, 13)]
+    /// fls=3   closed=[]
+    /// fls=99  closed=[]
+    /// ```
+    ///
+    /// `-u NONE` keeps the measurement off the local plugin set; nvim's bundled
+    /// `queries/lua/folds.scm` is byte-identical to nvim-treesitter's, which the
+    /// other fixtures here were measured against.
+    ///
+    /// `local M = {}` on row 0 is a single-row `(table_constructor)`: neovim
+    /// folds it no more than `set_auto_folds` does.
+    #[test]
+    #[ignore = "network + compiler: fetches the lua grammar"]
+    fn lua_fold_ranges_and_foldlevelstart_match_neovim() {
+        let src = concat!(
+            "local M = {}\n\n",
+            "function M.outer(a, b)\n",
+            "  if a > b then\n",
+            "    local t = {\n      x = 1,\n      y = 2,\n    }\n",
+            "    print(t.x)\n",
+            "    -- count down\n",
+            "    for i = 1, 10 do\n      print(i)\n      print(i * 2)\n    end\n",
+            "  end\n",
+            "  return a\n",
+            "end\n\n",
+            "function M.second(c)\n",
+            "  while c > 0 do\n    c = c - 1\n  end\n",
+            "  return c\n",
+            "end\n\n",
+            "return M\n",
+        );
+        let ranges = folds_for("a.lua", src);
+        assert_eq!(
+            ranges,
+            vec![(2, 16), (3, 14), (4, 7), (10, 13), (18, 23), (19, 21)],
+            "the live lua tree must produce the ranges the level rule is pinned on"
+        );
+
+        // Closed auto folds after one `set_auto_folds` pass at `fls` — the same
+        // call `View`'s auto-fold pass makes with the ranges above.
+        let closed_at = |fls: u32| -> Vec<(usize, usize)> {
+            let mut buf = View::from_str(src);
+            buf.set_auto_folds(&ranges, fls);
+            buf.folds()
+                .iter()
+                .filter(|f| f.closed)
+                .map(|f| (f.start_row, f.end_row))
+                .collect()
+        };
+
+        assert_eq!(
+            closed_at(0),
+            vec![(2, 16), (3, 14), (4, 7), (10, 13), (18, 23), (19, 21)],
+            "foldlevelstart=0 must close every fold the grammar found"
+        );
+        assert_eq!(
+            closed_at(1),
+            vec![(3, 14), (4, 7), (10, 13), (19, 21)],
+            "foldlevelstart=1 must leave the two functions open and close what is inside"
+        );
+        assert_eq!(
+            closed_at(2),
+            vec![(4, 7), (10, 13)],
+            "foldlevelstart=2 must close only the level-3 table and for-loop"
+        );
+        assert!(
+            closed_at(3).is_empty(),
+            "foldlevelstart=3 must leave this 3-level nesting fully open"
+        );
+        assert!(
+            closed_at(99).is_empty(),
+            "foldlevelstart=99 (hjkl's default) must open everything"
+        );
+    }
+
     /// nvim on this fixture: `(2, 4)`, `(6, 10)`, `(7, 9)` — identical.
     #[test]
     #[ignore = "network + compiler: fetches the go grammar"]

@@ -12,11 +12,58 @@
 //! `Normal` components) that traverses a symlink out of the working directory
 //! must be refused. `hjkl_engine::policy::check_fs_path` alone passes it —
 //! `hjkl_fs::resolve_under` is what catches it.
+//!
+//! # Why the cwd is under a lock
+//!
+//! Both tests here need the **process** working directory, and neither can be
+//! rewritten to take a path instead: the confinement root is not a parameter,
+//! it is whatever `std::env::current_dir()` says at the moment `:r` runs (see
+//! the `fs_restricted()` arm in `hjkl_ex::builtins`), and `:cd`'s whole
+//! contract is that it must not move that directory. Being separate `#[test]`
+//! functions in one binary, they run as threads of one process under
+//! `cargo test` and so trade working directories. Measured on 2026-09-16 before
+//! this guard existed: 38 of 50 consecutive
+//! `cargo test -p hjkl-ex --test fs_policy` runs failed, with `:r inside.txt`
+//! answering `NotFound` because the other test had moved the cwd, or `:cd`'s
+//! before/after compare failing for the same reason. (Under `cargo nextest`,
+//! which is what CI runs, each test is its own process and the lock is
+//! uncontended.)
 
 #![cfg(unix)]
 
 use hjkl_engine::{DefaultHost, Editor, Options};
 use hjkl_ex::{ExEffect, default_registry, try_dispatch};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
+
+/// Serializes the cwd-dependent tests in this binary and restores the previous
+/// working directory on drop. Hold it for the whole test body.
+///
+/// Mirrors `apps/hjkl`'s `CwdGuard` (`src/test_cwd.rs`), which cannot be reused
+/// here: it is `pub(crate)` inside a binary crate.
+struct CwdGuard {
+    _lock: MutexGuard<'static, ()>,
+    prev: PathBuf,
+}
+
+impl CwdGuard {
+    fn enter(dir: &Path) -> Self {
+        static SERIAL_LOCK: Mutex<()> = Mutex::new(());
+        // A panicking test poisons the mutex, but the only invariant it guards
+        // is "one cwd mutation at a time", which restore-on-drop re-establishes
+        // either way.
+        let lock = SERIAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let prev = std::env::current_dir().expect("read current dir");
+        std::env::set_current_dir(dir).expect("set current dir");
+        Self { _lock: lock, prev }
+    }
+}
+
+impl Drop for CwdGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.prev);
+    }
+}
 
 fn make_editor() -> Editor<hjkl_buffer::View, DefaultHost> {
     let buf = hjkl_buffer::View::from_str("first");
@@ -44,7 +91,7 @@ fn read_via_symlink_escape_is_refused_and_inside_read_still_works() {
     std::fs::write(project.join("inside.txt"), "inside line\n").unwrap();
     std::os::unix::fs::symlink("../outside", project.join("escape")).unwrap();
 
-    std::env::set_current_dir(&project).unwrap();
+    let _cwd = CwdGuard::enter(&project);
     // One-way and process-global — see the module docs.
     hjkl_engine::policy::restrict_fs();
     assert!(hjkl_engine::policy::fs_restricted());
@@ -87,7 +134,7 @@ fn read_via_symlink_escape_is_refused_and_inside_read_still_works() {
 #[test]
 fn cd_is_refused_under_policy() {
     let td = tempfile::tempdir().unwrap();
-    std::env::set_current_dir(td.path()).unwrap();
+    let _cwd = CwdGuard::enter(td.path());
     // Idempotent — makes this test order-independent within the binary.
     hjkl_engine::policy::restrict_fs();
     assert!(hjkl_engine::policy::fs_restricted());
