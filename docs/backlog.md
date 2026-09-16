@@ -199,18 +199,13 @@ with nothing foldable.** C# folded nothing at all for that reason. Now guarded
 by `folds::every_bundled_fold_query_is_reachable_by_extension`, which is
 grammar-free and runs in the normal lane.
 
-Coverage gap left by the `foldlevelstart` fix (2026-08-02): the LEVEL rule was
-checked, the level-to-grammar wiring was not, end to end. `set_auto_folds`'s
-levels are pinned by `set_auto_folds_closes_folds_deeper_than_foldlevelstart` in
-`hjkl_buffer::folds`, whose expectations are neovim's measured output for a
-6-fold / 3-level lua file — but the ranges are typed into the test as a
-constant, not extracted from a live tree. The end-to-end test
-(`auto_fold_pass_applies_foldlevelstart_as_a_level` in `syntax_glue`) uses
-`foldmethod=marker` so it can run without grammars. Nothing runs the real
-`foldmethod=expr` path at a non-zero `foldlevelstart` and compares the closed
-set to neovim's. Cheapest close: add `foldlevelstart` to whatever the
-`<lang>_fold_ranges_match_neovim` fixtures already parse, asserting closed state
-rather than only ranges.
+The coverage gap left by the `foldlevelstart` fix (2026-08-02) is closed:
+`lua_fold_ranges_and_foldlevelstart_match_neovim` (`hjkl_syntax`) extracts fold
+ranges from a live lua tree and asserts the closed set after `set_auto_folds` at
+`foldlevelstart` 0, 1, 2, 3 and 99, measured against neovim 0.12.5 on that
+fixture. The older checks remain as they were: `hjkl_buffer::folds` pins the
+level rule against a typed-in constant, and `syntax_glue`'s end-to-end test uses
+`foldmethod=marker` so it can run without grammars.
 
 Granularity differences found in the second pass — all deliberate, ranges on
 both sides correct, recorded so the next differential run does not read them as
@@ -640,10 +635,11 @@ with ripgrep installed are unaffected.
   them from unguarded readers, so a residual cwd race is possible in principle —
   none observed in 30 post-fix runs.
 
-  Not audited: `crates/hjkl-ex/tests/fs_policy.rs` calls
-  `std::env::set_current_dir` directly with no guard at all. It is a separate
-  test binary, so it cannot race the `hjkl` binary's tests, but it can race
-  other tests in its own.
+  Closed 2026-09-16: `crates/hjkl-ex/tests/fs_policy.rs` did race itself — 38 of
+  50 consecutive `cargo test -p hjkl-ex --test fs_policy` runs failed before it
+  took a cwd guard. Neither test can avoid `set_current_dir`: the confinement
+  root is whatever `current_dir()` says inside `:r`, not a parameter, and
+  `:cd`'s contract is about the process cwd.
 
 - **Left open by the 2026-08-02 cold-cache grammar-race fix.**
   - **A failed grammar load is never retried.**
@@ -740,6 +736,14 @@ with ripgrep installed are unaffected.
   `-max_total_time`, add harnesses (an ex-command target and a `:s` target are
   the obvious gaps — neither is reachable from `handle_key`), or both, is an
   owner decision about runner minutes. Still open.
+
+- **One wall-clock test is excluded from the `grammar_tests` lane by name.**
+  `typing_subms::small_edit_parse_and_walk_under_some_budget` asserts an
+  incremental parse + viewport walk stays under 100 ms. It failed on a cold
+  parallel local run that was compiling grammars at the same time, which is the
+  shape a shared CI runner has, so the lane's filter excludes it. Every
+  correctness test in those crates runs. If a real perf gate is wanted, it
+  belongs in the bench job with a measured baseline, not in a wall-clock assert.
 
 - **The sibling repos pin `runs-on` to a concrete image; hjkl does not.** infr,
   and the other siblings its `cron.yml` names, run `ubuntu-26.04`. hjkl uses
@@ -940,11 +944,6 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
 - `hjkl-fs` `dir.rs`'s Windows directory-symlink branch in `remove_path_all` has
   no runtime coverage: its symlink tests are `#[cfg(unix)]` (creating a symlink
   on Windows needs Developer Mode or elevation).
-- Hunk stage/unstage/revert on Windows: `build_patch_uses_forward_slashes`
-  checks the patch text, but every test that runs `git apply`
-  (`stage_hunk_applies_to_index` and its siblings in `hjkl-app` `git.rs`) is
-  `#[ignore]`d for the #115 flake, so no CI leg applies a patch for a file in a
-  subdirectory.
 - `hjkl-ex` `shell.rs`: `shell_range_filter_sorts_lines` stays `#[cfg(unix)]` —
   cmd.exe's `sort.exe` orders by codepage and collation, which is not worth
   asserting blind. The range filter is covered on Windows by the CRLF and
