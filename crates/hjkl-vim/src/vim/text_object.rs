@@ -393,6 +393,10 @@ pub fn reverse_visual_block_sentence_landing<H: hjkl_engine::types::Host>(
     }
     starts.sort_unstable();
     starts.dedup();
+    if inner && let Some(rung) = blank_run_rung(&starts, &lines, cursor) {
+        starts.push(rung);
+        starts.sort_unstable();
+    }
     let mut index = starts.iter().rposition(|&start| start <= cursor)?;
     // A reverse block first moves onto the row above its anchor. When that row
     // starts a sentence at the active cursor, Vim's first text-object count
@@ -443,6 +447,48 @@ pub fn reverse_visual_block_sentence_landing<H: hjkl_engine::types::Host>(
         remaining -= 1;
     }
     starts.get(index).copied()
+}
+
+/// The one whitespace object a reverse `is` walk can stop on, if any.
+///
+/// A run of BLANK rows between two sentences is an object in its own right
+/// (`:h is` — "a sentence, or, when the cursor is in white space, that white
+/// space"), so on `"aaa.\n   \nbbb.\nccc.\n"` with the block cursor inside
+/// `bbb.` the ladder is `bbb.` / the blank row / `aaa.`: `<C-v>k2is` stops on
+/// the blank row and only `3is` reaches `aaa.`. Vim stops on the FIRST row of
+/// the run, at column 0.
+///
+/// Only ONE run is ever a rung: the one the cursor stands in, else the one
+/// directly above the sentence the cursor is in. A run further up the buffer
+/// is not offered — from `ccc.` in `"aaa.\n   \nbbb.\nccc.\nxxx."` the
+/// third `is` reaches `aaa.`, not the blank row above `bbb.` (measured
+/// against nvim 0.12.5). A bare line break between two adjacent sentences is
+/// never such an object either.
+///
+/// `as` gets none of this: it has already swallowed the whitespace into the
+/// sentence that trails it.
+fn blank_run_rung(starts: &[Pos], lines: &[Vec<char>], cursor: Pos) -> Option<Pos> {
+    let index = starts.iter().rposition(|&start| start <= cursor)?;
+    let standing_in = starts
+        .get(index + 1)
+        .and_then(|&next| blank_gap(lines, starts[index], next))
+        .filter(|&(row, _)| row <= cursor.0);
+    standing_in.or_else(|| {
+        let prev = *starts.get(index.checked_sub(1)?)?;
+        blank_gap(lines, prev, starts[index])
+    })
+}
+
+/// First row of the run of blank rows between two sentence starts, at column
+/// 0. `None` when they sit on adjacent rows, or when a row between them holds
+/// a non-blank.
+fn blank_gap(lines: &[Vec<char>], prev: Pos, next: Pos) -> Option<Pos> {
+    let first = prev.0 + 1;
+    (first < next.0
+        && lines[first..next.0]
+            .iter()
+            .all(|line| line.iter().all(|ch| ch.is_whitespace())))
+    .then_some((first, 0))
 }
 
 /// Every valid sentence-boundary landing position within `lines[..n_lines]`,

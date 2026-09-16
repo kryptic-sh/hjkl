@@ -202,8 +202,13 @@ expected_buffer = "bc\n"
 expected_mode = "normal"
 expected_register = ['"', "a"]
 
-# At column > 0 of a closed fold, nvim keeps normal charwise semantics — only
-# column 0 triggers the whole-fold promotion.
+# At column > 0 of a closed fold, nvim keeps normal charwise semantics. The
+# reason is `'foldopen'`, whose default contains `hor`: the `l` that moved to
+# column 1 OPENED the fold as it finished, so the `x` / `dw` that follows is
+# looking at an open fold. hjkl has no `'foldopen'` yet and leaves the fold
+# closed, so it stands column 0 in for "nothing has opened this fold yet"
+# (`cursor_left_fold_open`); these two cases are what pins that. Within ONE
+# command the fold does stay closed in nvim too — see `3e` below.
 [[cases]]
 name = "x_at_col1_on_closed_fold_stays_charwise"
 initial_buffer = "abc\ndef\nghi\n"
@@ -224,3 +229,315 @@ foldmethod = "manual"
 expected_buffer = "a\ndef\nghi\n"
 expected_mode = "normal"
 expected_register = ['"', "bc"]
+
+# ── Word MOTIONS over a closed fold ───────────────────────────────────────────
+#
+# The whole-fold behaviour above is not a special case bolted onto the
+# operator: vim's `fwd_word()` / `end_word()` open every count iteration by
+# moving a cursor that is inside a closed fold to the fold's LAST row and
+# `coladvance(MAXCOL)`, and `bck_word()` moves it to the fold's FIRST row,
+# column 0. `ge` / `gE` have no such jump. What the uncounted `dw` / `yw`
+# cases above pin is just that jump plus the ordinary word scan; with a COUNT
+# the scan keeps walking past the fold.
+#
+# On top of that, `do_pending_operator()` includes folded lines completely:
+# an endpoint that lands inside a closed fold is pushed out to that fold's far
+# edge. That is what makes `dj` / `d3w` stopping part-way into a LATER fold
+# take all of it — and it runs after the word-EOL clamp, so a `d3w` whose last
+# word ends on the row above a fold pulls back there and never reaches it.
+#
+# Expected values captured from nvim 0.12.5.
+
+[[cases]]
+name = "counted_2dw_on_closed_fold_walks_past_the_fold"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfj2dw"
+foldmethod = "manual"
+expected_buffer = "jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef\nghi "]
+
+[[cases]]
+name = "counted_3dw_on_closed_fold_walks_past_the_fold"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfj3dw"
+foldmethod = "manual"
+expected_buffer = "mno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef\nghi jkl\n"]
+
+[[cases]]
+name = "counted_2dW_on_closed_fold_walks_past_the_fold"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfj2dW"
+foldmethod = "manual"
+expected_buffer = "jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef\nghi "]
+
+[[cases]]
+name = "counted_2yw_on_closed_fold_walks_past_the_fold"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfj2yw"
+foldmethod = "manual"
+expected_buffer = "abc\ndef\nghi jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef\nghi "]
+
+[[cases]]
+name = "de_on_closed_fold_ends_at_next_word_end"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfjde"
+foldmethod = "manual"
+expected_buffer = " jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef\nghi"]
+
+[[cases]]
+name = "dE_on_closed_fold_ends_at_next_word_end"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfjdE"
+foldmethod = "manual"
+expected_buffer = " jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef\nghi"]
+
+[[cases]]
+name = "counted_2de_on_closed_fold_ends_at_second_word_end"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfj2de"
+foldmethod = "manual"
+expected_buffer = "mno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef\nghi jkl\n"]
+
+[[cases]]
+name = "ye_on_closed_fold_ends_at_next_word_end"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfjye"
+foldmethod = "manual"
+expected_buffer = "abc\ndef\nghi jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef\nghi"]
+
+[[cases]]
+name = "ce_on_closed_fold_ends_at_next_word_end"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfjce"
+foldmethod = "manual"
+expected_buffer = " jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "insert"
+expected_register = ['"', "abc\ndef\nghi"]
+
+[[cases]]
+name = "cw_on_closed_fold_stops_at_the_fold_not_the_next_word"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfjcw"
+foldmethod = "manual"
+expected_buffer = "\nghi jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "insert"
+expected_register = ['"', "abc\ndef"]
+
+[[cases]]
+name = "cW_on_closed_fold_stops_at_the_fold_not_the_next_word"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfjcW"
+foldmethod = "manual"
+expected_buffer = "\nghi jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "insert"
+expected_register = ['"', "abc\ndef"]
+
+[[cases]]
+name = "counted_2cw_on_closed_fold_ends_at_next_word_end"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfj2cw"
+foldmethod = "manual"
+expected_buffer = " jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "insert"
+expected_register = ['"', "abc\ndef\nghi"]
+
+[[cases]]
+name = "counted_3cw_on_closed_fold_ends_at_second_word_end"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfj3cw"
+foldmethod = "manual"
+expected_buffer = "\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "insert"
+expected_register = ['"', "abc\ndef\nghi jkl"]
+
+[[cases]]
+name = "db_on_closed_fold_start_is_noop"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfjdb"
+foldmethod = "manual"
+expected_buffer = "abc\ndef\nghi jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', ""]
+
+[[cases]]
+name = "d0_on_closed_fold_start_is_noop"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfjd0"
+foldmethod = "manual"
+expected_buffer = "abc\ndef\nghi jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', ""]
+
+[[cases]]
+name = "yj_on_closed_fold_covers_fold_and_next_row"
+initial_buffer = "abc\ndef\nghi jkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfjyj"
+foldmethod = "manual"
+expected_buffer = "abc\ndef\nghi jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc\ndef\nghi jkl\n"]
+
+[[cases]]
+name = "d3w_ending_in_a_later_fold_takes_all_of_it"
+initial_buffer = "one two\nAAA\nBBB\nlast\n"
+initial_cursor = [0, 0]
+keys = "jzfjkd3w"
+foldmethod = "manual"
+expected_buffer = "last\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "one two\nAAA\nBBB\n"]
+
+[[cases]]
+name = "d4w_crossing_a_later_fold_keeps_walking"
+initial_buffer = "one two\nAAA\nBBB\nlast word\n"
+initial_cursor = [0, 0]
+keys = "jzfjkd4w"
+foldmethod = "manual"
+expected_buffer = "word\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "one two\nAAA\nBBB\nlast "]
+
+[[cases]]
+name = "dj_ending_in_a_later_fold_takes_all_of_it"
+initial_buffer = "one two\nAAA\nBBB\nlast\n"
+initial_cursor = [0, 0]
+keys = "jzfjkdj"
+foldmethod = "manual"
+expected_buffer = "last\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "one two\nAAA\nBBB\n"]
+
+[[cases]]
+name = "d2e_ending_in_a_later_fold_takes_all_of_it"
+initial_buffer = "aa\nbb cc\nDD\nee\n"
+initial_cursor = [0, 0]
+keys = "jzfjkd2e"
+foldmethod = "manual"
+expected_buffer = "ee\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "aa\nbb cc\nDD\n"]
+
+[[cases]]
+name = "d3w_stopping_above_a_fold_never_reaches_it"
+initial_buffer = "aa bb\ncc\nDD\nEE\nff\n"
+initial_cursor = [0, 0]
+keys = "jjzfjkkd3w"
+foldmethod = "manual"
+expected_buffer = "DD\nEE\nff\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "aa bb\ncc\n"]
+
+[[cases]]
+name = "d4w_into_a_fold_takes_all_of_it"
+initial_buffer = "aa bb\ncc\nDD\nEE\nff\n"
+initial_cursor = [0, 0]
+keys = "jjzfjkkd4w"
+foldmethod = "manual"
+expected_buffer = "ff\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "aa bb\ncc\nDD\nEE\n"]
+
+[[cases]]
+name = "d4b_backward_over_a_closed_fold_jumps_to_its_first_row"
+initial_buffer = "aaa bbb\nAAA\nBBB\nccc ddd\n"
+initial_cursor = [0, 3]
+keys = "jzfjj$d4b"
+foldmethod = "manual"
+expected_buffer = "aaa d\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+expected_register = ['"', "bbb\nAAA\nBBB\nccc dd"]
+
+[[cases]]
+name = "d4ge_backward_never_jumps_over_a_closed_fold"
+initial_buffer = "aaa bbb\nAAA\nBBB\nccc ddd\n"
+initial_cursor = [0, 3]
+keys = "jzfjj$d4ge"
+foldmethod = "manual"
+expected_buffer = "aaa bb\n"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+expected_register = ['"', "b\nAAA\nBBB\nccc ddd"]
+
+
+# Within a SINGLE command the fold is still closed in nvim too: `'foldopen'`
+# only fires once the command finishes. So the third iteration of `3e` — which
+# starts from a landing inside the fold, at column 1 — still takes the fold
+# jump. This is the case a plain "column 0 only" reading of the two cases
+# above would get wrong.
+
+[[cases]]
+name = "counted_3e_within_one_command_still_sees_the_fold_closed"
+initial_buffer = "aa\nbb cc\nDD\nee\n"
+initial_cursor = [0, 0]
+keys = "jzfjk3e"
+foldmethod = "manual"
+expected_buffer = "aa\nbb cc\nDD\nee\n"
+expected_cursor = [3, 1]
+expected_mode = "normal"
+expected_register = ['"', ""]
+
+[[cases]]
+name = "d3e_within_one_command_still_sees_the_fold_closed"
+initial_buffer = "aa\nbb cc\nDD\nee\n"
+initial_cursor = [0, 0]
+keys = "jzfjkd3e"
+foldmethod = "manual"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "aa\nbb cc\nDD\nee\n"]
+

@@ -45,6 +45,25 @@ pub fn expand_linewise_over_closed_folds(
     }
     (start, end)
 }
+/// True when `cursor` is parked somewhere nvim would never leave it: inside
+/// a CLOSED fold at a column other than 0.
+///
+/// Vim's `'foldopen'` contains `hor`, so any horizontal move opens the fold
+/// under the cursor as soon as the command finishes — after `zfjl` nvim is
+/// looking at an OPEN fold, and `zfjldw` deletes one word. hjkl has no
+/// `'foldopen'` yet, so the fold is still closed here and every "a closed
+/// fold is included as a whole" rule would fire and eat the whole fold
+/// instead (both spellings pinned in `tier2_fold_delete.toml`). Callers use
+/// this to treat the fold as open in exactly that state; column 0 stands in
+/// for "nothing has opened this fold yet" until `'foldopen'` lands.
+///
+/// Takes the position explicitly because an operator has to ask about the
+/// cursor it started from, not the one its motion left behind.
+pub fn cursor_left_fold_open(buf: &hjkl_buffer::View, cursor: (usize, usize)) -> bool {
+    let (row, col) = cursor;
+    col != 0 && expand_linewise_over_closed_folds(buf, row, row) != (row, row)
+}
+
 pub fn execute_line_op<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,

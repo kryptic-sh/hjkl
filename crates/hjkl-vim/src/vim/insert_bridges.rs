@@ -660,7 +660,16 @@ pub fn insert_ctrl_w_bridge<H: hjkl_engine::types::Host>(
         return true;
     }
     let iskeyword = ed.settings().iskeyword.clone();
-    hjkl_engine::motions::move_word_back(ed.buffer_mut(), false, 1, &iskeyword);
+    // Folds are irrelevant to insert-mode `<C-w>`: vim's `'foldopen'` lists
+    // `insert`, so entering insert mode has already opened the fold under the
+    // cursor by the time this runs.
+    hjkl_engine::motions::move_word_back(
+        ed.buffer_mut(),
+        &hjkl_engine::types::NoopFoldProvider,
+        false,
+        1,
+        &iskeyword,
+    );
     let word_start = buf_cursor_pos(ed.buffer());
     if word_start == cursor {
         return true;

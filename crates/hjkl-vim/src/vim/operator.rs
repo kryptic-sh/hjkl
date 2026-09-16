@@ -22,7 +22,7 @@ use hjkl_engine::buf_helpers::{
 /// re-entering the FSM.
 ///
 /// Applies standard vim quirks:
-/// - `cw` / `cW` → `ce` / `cE`
+/// - `cw` / `cW` → the word-END motion (see [`change_word_motion`])
 /// - `FindRepeat` → resolves against `last_find`
 /// - Updates `last_find` and `last_change` per existing conventions.
 ///
@@ -42,9 +42,6 @@ pub fn apply_op_motion_key<H: hjkl_engine::types::Host>(
     let Some(motion) = parse_motion(&input) else {
         return;
     };
-    // Vim quirk (`:h cw`): `cw`/`cW` act like `ce`/`cE` — but ONLY when the
-    // cursor is on a non-blank. On whitespace, `cw` behaves like `dw` (changes
-    // just the whitespace up to the next word), so the conversion is skipped.
     let cursor_on_nonblank = {
         let (r, c) = ed.cursor();
         buf_line(ed.buffer(), r)
@@ -60,9 +57,7 @@ pub fn apply_op_motion_key<H: hjkl_engine::types::Host>(
             },
             None => return,
         },
-        Motion::WordFwd if op == Operator::Change && cursor_on_nonblank => Motion::WordEnd,
-        Motion::BigWordFwd if op == Operator::Change && cursor_on_nonblank => Motion::BigWordEnd,
-        m => m,
+        m => change_word_motion(m, op, cursor_on_nonblank),
     };
     // Peeked before the operator consumes it — see `apply_op_double`.
     let register = vim(ed).pending_register;
@@ -78,6 +73,26 @@ pub fn apply_op_motion_key<H: hjkl_engine::types::Host>(
             inserted: None,
             register,
         });
+    }
+}
+/// Vim's `nv_wordcmd()` `cw` / `cW` rewrite (`:h cw`): with a CHANGE operator
+/// and the cursor on a non-blank, `w` / `W` run a word-END motion instead. On
+/// whitespace the rewrite is skipped and `cw` behaves like `dw`, changing just
+/// the run of whitespace up to the next word.
+///
+/// The target is [`Motion::ChangeWordEnd`], not [`Motion::WordEnd`]: vim sets
+/// `end_word()`'s `stop` flag here, so `cw` on the last character of a word
+/// changes only that character where `ce` runs on to the next word's end.
+///
+/// Every other motion passes through untouched.
+pub fn change_word_motion(motion: Motion, op: Operator, cursor_on_nonblank: bool) -> Motion {
+    if op != Operator::Change || !cursor_on_nonblank {
+        return motion;
+    }
+    match motion {
+        Motion::WordFwd => Motion::ChangeWordEnd { big: false },
+        Motion::BigWordFwd => Motion::ChangeWordEnd { big: true },
+        m => m,
     }
 }
 /// Public(crate) entry: apply doubled-letter line op (`dd`/`yy`/`cc`/`>>`/`<<`/`gcc`).

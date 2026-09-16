@@ -1031,23 +1031,11 @@ fn handle_after_op<H: Host>(
                 },
                 None => return true,
             },
-            // Vim quirk (`:h cw`): `cw`/`cW` act like `ce`/`cE` — but ONLY when
-            // the cursor is on a non-blank. On whitespace, `cw` behaves like
-            // `dw` (changes just the whitespace up to the next word), so the
-            // conversion is skipped.
-            Motion::WordFwd
-                if op == Operator::Change
-                    && ed.char_at_cursor().is_some_and(|c| !c.is_whitespace()) =>
-            {
-                Motion::WordEnd
-            }
-            Motion::BigWordFwd
-                if op == Operator::Change
-                    && ed.char_at_cursor().is_some_and(|c| !c.is_whitespace()) =>
-            {
-                Motion::BigWordEnd
-            }
-            m => m,
+            m => crate::vim::operator::change_word_motion(
+                m,
+                op,
+                ed.char_at_cursor().is_some_and(|c| !c.is_whitespace()),
+            ),
         };
         // Peeked before the operator consumes it, so `.` can restore it
         // (`:h redo-register`).

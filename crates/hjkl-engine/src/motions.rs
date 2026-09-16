@@ -569,15 +569,92 @@ pub fn move_bottom<B: Cursor + Query>(buf: &mut B, count: usize) {
 
 // ── Word motions ────────────────────────────────────────────────────
 
+/// Vim's `hasFolding()` — the row range `(first, last)` of the CLOSED
+/// fold covering `row`, or `None` when `row` is not inside one.
+///
+/// Derived from the visible-row surface rather than a fold list: a
+/// closed fold keeps its first row visible and hides every row after
+/// it, so the fold's first row is the last visible row at or before
+/// `row`, and its last row is the one just before the next visible
+/// row. Nested closed folds fall out for free — every row they hide is
+/// hidden here too. A fold covering a single row hides nothing and so
+/// answers `None`, which is also what vim does: `'foldminlines'`
+/// defaults to 1, and a one-line fold is never displayed closed.
+fn closed_fold_at(
+    folds: &dyn FoldProvider,
+    row_count: usize,
+    row: usize,
+) -> Option<(usize, usize)> {
+    let first = if folds.is_row_hidden(row) {
+        folds.prev_visible_row(row)?
+    } else {
+        row
+    };
+    if !folds.is_row_hidden(first + 1) {
+        return None;
+    }
+    let last = match folds.next_visible_row(first, row_count) {
+        Some(next) => next.saturating_sub(1),
+        None => row_count.saturating_sub(1),
+    };
+    Some((first, last))
+}
+
+/// The fold jump vim's `fwd_word()` and `end_word()` run at the top of
+/// every count iteration: a cursor inside a closed fold first moves to
+/// the fold's LAST row and `coladvance(MAXCOL)`, so the word scan
+/// starts from that row's last character. `d2w` / `de` on a closed
+/// fold consume the fold and then keep walking, instead of stopping at
+/// the fold's own end.
+fn fold_jump_fwd<B: Query + ?Sized>(
+    buf: &B,
+    cache: &mut LineCache,
+    folds: &dyn FoldProvider,
+    from: Position,
+) -> Option<Position> {
+    let rows = content_row_count(buf);
+    let (_, last) = closed_fold_at(folds, rows, from.row)?;
+    let jumped = Position::new(last, cache.char_count(buf, last).saturating_sub(1));
+    (jumped != from).then_some(jumped)
+}
+
+/// Mirror of [`fold_jump_fwd`] for vim's `bck_word()`: a cursor inside
+/// a closed fold moves to the fold's FIRST row, column 0, before the
+/// backward scan runs.
+fn fold_jump_back<B: Query + ?Sized>(
+    buf: &B,
+    folds: &dyn FoldProvider,
+    from: Position,
+) -> Option<Position> {
+    let rows = content_row_count(buf);
+    let (first, _) = closed_fold_at(folds, rows, from.row)?;
+    let jumped = Position::new(first, 0);
+    (jumped != from).then_some(jumped)
+}
+
 /// `w` / `W` — start of next word. `big = true` treats every
 /// non-whitespace run as one word (vim's WORD). `iskeyword` is
 /// the live spec from `Editor::settings.iskeyword`; it's caller-
 /// supplied since 0.0.28 (was a buffer field before).
-pub fn move_word_fwd<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, iskeyword: &str) {
+///
+/// `folds` drives vim's per-iteration closed-fold jump (see
+/// [`fold_jump_fwd`]); pass a [`crate::types::NoopFoldProvider`] to
+/// walk the buffer as if nothing were folded.
+pub fn move_word_fwd<B: Cursor + Query>(
+    buf: &mut B,
+    folds: &dyn FoldProvider,
+    big: bool,
+    count: usize,
+    iskeyword: &str,
+) {
     let spec = KeywordSpec::parse(iskeyword);
     let mut cache = LineCache::default();
     for _ in 0..count.max(1) {
-        let from = read_cursor(buf);
+        let mut from = read_cursor(buf);
+        if let Some(jumped) = fold_jump_fwd(buf, &mut cache, folds, from) {
+            from = jumped;
+            write_cursor(buf, from);
+        }
         if let Some(next) = next_word_start(buf, &mut cache, from, big, &spec) {
             write_cursor(buf, next);
         } else {
@@ -586,12 +663,23 @@ pub fn move_word_fwd<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, is
     }
 }
 
-/// `b` / `B` — start of previous word.
-pub fn move_word_back<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, iskeyword: &str) {
+/// `b` / `B` — start of previous word. See [`move_word_fwd`] for
+/// `folds`; the backward jump lands on the fold's first row instead.
+pub fn move_word_back<B: Cursor + Query>(
+    buf: &mut B,
+    folds: &dyn FoldProvider,
+    big: bool,
+    count: usize,
+    iskeyword: &str,
+) {
     let spec = KeywordSpec::parse(iskeyword);
     let mut cache = LineCache::default();
     for _ in 0..count.max(1) {
-        let from = read_cursor(buf);
+        let mut from = read_cursor(buf);
+        if let Some(jumped) = fold_jump_back(buf, folds, from) {
+            from = jumped;
+            write_cursor(buf, from);
+        }
         if let Some(prev) = prev_word_start(buf, &mut cache, from, big, &spec) {
             write_cursor(buf, prev);
         } else {
@@ -600,18 +688,72 @@ pub fn move_word_back<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, i
     }
 }
 
-/// `e` / `E` — end of current/next word.
-pub fn move_word_end<B: Cursor + Query>(buf: &mut B, big: bool, count: usize, iskeyword: &str) {
+/// `e` / `E` — end of current/next word. See [`move_word_fwd`] for
+/// `folds`.
+///
+/// `stop` is vim's `end_word(…, stop, …)` flag, set only by `cw` /
+/// `cW`: with it, a FIRST iteration that starts on the last character
+/// of a word does not move at all (`:h cw` — "cw" on the end of a word
+/// changes only that character). Later iterations always walk, exactly
+/// as vim clears `stop` at the end of its loop body.
+pub fn move_word_end<B: Cursor + Query>(
+    buf: &mut B,
+    folds: &dyn FoldProvider,
+    big: bool,
+    count: usize,
+    mut stop: bool,
+    iskeyword: &str,
+) {
     let spec = KeywordSpec::parse(iskeyword);
     let mut cache = LineCache::default();
     for _ in 0..count.max(1) {
-        let from = read_cursor(buf);
+        let mut from = read_cursor(buf);
+        if let Some(jumped) = fold_jump_fwd(buf, &mut cache, folds, from) {
+            from = jumped;
+            write_cursor(buf, from);
+        }
+        let hold = stop && at_word_end(buf, &mut cache, from, big, &spec);
+        stop = false;
+        if hold {
+            continue;
+        }
         if let Some(end) = next_word_end(buf, &mut cache, from, big, &spec) {
             write_cursor(buf, end);
         } else {
             break;
         }
     }
+}
+
+/// Vim's `cw` stop test: `pos` holds a non-blank and the cell vim's
+/// `inc_cursor()` would step onto holds a different class.
+///
+/// `inc_cursor()` lands on the row's VIRTUAL end-of-line cell before it
+/// wraps, and `cls()` reads that cell as whitespace — so a word that
+/// ends at end-of-line always satisfies the test.
+fn at_word_end<B: Query + ?Sized>(
+    buf: &B,
+    cache: &mut LineCache,
+    pos: Position,
+    big: bool,
+    iskeyword: &KeywordSpec,
+) -> bool {
+    let here = cls(buf, cache, pos, big, iskeyword);
+    if here == CharKind::Space {
+        return false;
+    }
+    let next = if pos.col + 1 < cache.char_count(buf, pos.row) {
+        cls(
+            buf,
+            cache,
+            Position::new(pos.row, pos.col + 1),
+            big,
+            iskeyword,
+        )
+    } else {
+        CharKind::Space
+    };
+    next != here
 }
 
 /// `ge` / `gE` — end of previous word. Walks backward until
@@ -1600,18 +1742,18 @@ mod tests {
     #[test]
     fn move_word_fwd_skips_whitespace_runs() {
         let mut b = View::from_str("foo bar  baz");
-        move_word_fwd(&mut b, false, 1, ISK);
+        move_word_fwd(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 4));
-        move_word_fwd(&mut b, false, 1, ISK);
+        move_word_fwd(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 9));
     }
 
     #[test]
     fn move_word_fwd_separates_word_from_punct_in_small_w() {
         let mut b = View::from_str("foo.bar");
-        move_word_fwd(&mut b, false, 1, ISK);
+        move_word_fwd(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 3));
-        move_word_fwd(&mut b, false, 1, ISK);
+        move_word_fwd(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 4));
     }
 
@@ -1626,7 +1768,7 @@ mod tests {
             move_down(&mut b, &f, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(1, 0));
-        move_word_fwd(&mut b, false, 1, ISK);
+        move_word_fwd(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(2, 0));
     }
 
@@ -1641,14 +1783,14 @@ mod tests {
             move_down(&mut b, &f, 1, &mut sticky, 4);
         }
         assert_eq!(at(&b), Position::new(1, 0));
-        move_word_fwd(&mut b, false, 1, ISK);
+        move_word_fwd(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(2, 0));
     }
 
     #[test]
     fn move_word_fwd_big_collapses_word_and_punct() {
         let mut b = View::from_str("foo.bar baz");
-        move_word_fwd(&mut b, true, 1, ISK);
+        move_word_fwd(&mut b, &crate::types::NoopFoldProvider, true, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 8));
     }
 
@@ -1665,19 +1807,19 @@ mod tests {
         // empty row. From the last char, `w` must not step onto it.
         let mut b = View::from_str("abc def\n");
         b.set_cursor(Position::new(0, 6));
-        move_word_fwd(&mut b, false, 1, ISK);
+        move_word_fwd(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 7));
 
         // Big-word `W` shares the same walk.
         let mut b = View::from_str("abc def\n");
         b.set_cursor(Position::new(0, 6));
-        move_word_fwd(&mut b, true, 1, ISK);
+        move_word_fwd(&mut b, &crate::types::NoopFoldProvider, true, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 7));
 
         // Non-newline-terminated buffer behaves as before: same landing.
         let mut b = View::from_str("abc def");
         b.set_cursor(Position::new(0, 6));
-        move_word_fwd(&mut b, false, 1, ISK);
+        move_word_fwd(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 7));
 
         // A REAL empty last line ("foo\n\n" -> rows ["foo", "", ""]) stays
@@ -1685,7 +1827,7 @@ mod tests {
         // phantom row is excluded by `content_row_count`.
         let mut b = View::from_str("foo\n\n");
         b.set_cursor(Position::new(0, 2));
-        move_word_fwd(&mut b, false, 1, ISK);
+        move_word_fwd(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(1, 0));
     }
 
@@ -1701,7 +1843,7 @@ mod tests {
         line.push_str("target");
         let mut b = View::from_str(&line);
         // 400 `w` steps: one per "word", landing on "target"'s start.
-        move_word_fwd(&mut b, false, 400, ISK);
+        move_word_fwd(&mut b, &crate::types::NoopFoldProvider, false, 400, ISK);
         assert_eq!(at(&b), Position::new(0, 2000));
     }
 
@@ -1713,13 +1855,27 @@ mod tests {
     fn move_word_end_at_eof_newline_terminated_stays_on_last_char() {
         let mut b = View::from_str("abc def\n");
         b.set_cursor(Position::new(0, 6));
-        move_word_end(&mut b, false, 1, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            1,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(0, 6));
 
         // Non-newline-terminated buffer behaves as before.
         let mut b = View::from_str("abc def");
         b.set_cursor(Position::new(0, 6));
-        move_word_end(&mut b, false, 1, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            1,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(0, 6));
     }
 
@@ -1728,18 +1884,32 @@ mod tests {
         let mut b = View::from_str("foo bar baz");
         move_line_end(&mut b);
         assert_eq!(at(&b), Position::new(0, 10));
-        move_word_back(&mut b, false, 1, ISK);
+        move_word_back(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 8));
-        move_word_back(&mut b, false, 2, ISK);
+        move_word_back(&mut b, &crate::types::NoopFoldProvider, false, 2, ISK);
         assert_eq!(at(&b), Position::new(0, 0));
     }
 
     #[test]
     fn move_word_end_lands_on_last_char() {
         let mut b = View::from_str("foo bar");
-        move_word_end(&mut b, false, 1, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            1,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(0, 2));
-        move_word_end(&mut b, false, 1, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            1,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(0, 6));
     }
 
@@ -1753,13 +1923,20 @@ mod tests {
     fn move_word_end_mid_word_at_line_end_stays_on_line() {
         let mut b = View::from_str("foo bar\nbaz\n");
         b.set_cursor(Position::new(0, 4));
-        move_word_end(&mut b, false, 1, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            1,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(0, 6));
 
         // `E` (big word) shares `end_word`, so it gets the same boundary.
         let mut b = View::from_str("foo bar\nbaz\n");
         b.set_cursor(Position::new(0, 4));
-        move_word_end(&mut b, true, 1, ISK);
+        move_word_end(&mut b, &crate::types::NoopFoldProvider, true, 1, false, ISK);
         assert_eq!(at(&b), Position::new(0, 6));
     }
 
@@ -1769,7 +1946,14 @@ mod tests {
     fn move_word_end_from_word_end_crosses_line() {
         let mut b = View::from_str("foo bar\nbaz qux\n");
         b.set_cursor(Position::new(0, 6));
-        move_word_end(&mut b, false, 1, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            1,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(1, 2));
     }
 
@@ -1781,13 +1965,27 @@ mod tests {
     fn move_word_end_crosses_empty_lines() {
         let mut b = View::from_str("foo\n\nbar\n");
         b.set_cursor(Position::new(0, 2));
-        move_word_end(&mut b, false, 1, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            1,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(2, 2));
 
         // Consecutive empty lines, counted motion.
         let mut b = View::from_str("foo\n\n\nbar\n");
         b.set_cursor(Position::new(0, 2));
-        move_word_end(&mut b, false, 2, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            2,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(3, 2));
     }
 
@@ -1799,12 +1997,26 @@ mod tests {
     fn move_word_end_crosses_empty_lines_to_eof() {
         let mut b = View::from_str("foo\n\n");
         b.set_cursor(Position::new(0, 2));
-        move_word_end(&mut b, false, 1, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            1,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(1, 0));
 
         let mut b = View::from_str("foo\n\n\n");
         b.set_cursor(Position::new(0, 2));
-        move_word_end(&mut b, false, 1, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            1,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(2, 0));
     }
 
@@ -1815,12 +2027,26 @@ mod tests {
     fn move_word_end_trailing_whitespace_wraps_like_vim() {
         let mut b = View::from_str("foo   \nbar\n");
         b.set_cursor(Position::new(0, 2));
-        move_word_end(&mut b, false, 1, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            1,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(1, 2));
 
         let mut b = View::from_str("foo  bar\nbaz\n");
         b.set_cursor(Position::new(0, 3));
-        move_word_end(&mut b, false, 1, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            1,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(0, 7));
     }
 
@@ -1830,7 +2056,14 @@ mod tests {
     fn move_word_end_trailing_whitespace_at_eof_lands_on_last_char() {
         let mut b = View::from_str("foo\nbar   ");
         b.set_cursor(Position::new(1, 3));
-        move_word_end(&mut b, false, 1, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            1,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(1, 5));
     }
 
@@ -1841,12 +2074,26 @@ mod tests {
     #[test]
     fn move_word_end_counts_wrap_line_endings() {
         let mut b = View::from_str("foo bar baz\nqux quux\n");
-        move_word_end(&mut b, false, 3, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            3,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(0, 10));
 
         let mut b = View::from_str("foo bar baz\nqux quux\n");
         b.set_cursor(Position::new(0, 1));
-        move_word_end(&mut b, false, 4, ISK);
+        move_word_end(
+            &mut b,
+            &crate::types::NoopFoldProvider,
+            false,
+            4,
+            false,
+            ISK,
+        );
         assert_eq!(at(&b), Position::new(1, 2));
     }
 
@@ -1989,20 +2236,20 @@ mod tests {
         // Inside "ghi": the word start is on this row, so `b` stays here.
         let mut b = View::from_str("abc def\nghi jkl");
         b.set_cursor(Position::new(1, 1));
-        move_word_back(&mut b, false, 1, ISK);
+        move_word_back(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(1, 0));
 
         // Same for `B` over a punctuation-heavy WORD.
         let mut b = View::from_str("'self.x'\n(foo) a, {xy}  ");
         b.set_cursor(Position::new(1, 1));
-        move_word_back(&mut b, true, 1, ISK);
+        move_word_back(&mut b, &crate::types::NoopFoldProvider, true, 1, ISK);
         assert_eq!(at(&b), Position::new(1, 0));
 
         // From column 0 there IS no word start left on the row, so the
         // motion crosses — onto the previous word's start, not into it.
         let mut b = View::from_str("abc def\nghi jkl");
         b.set_cursor(Position::new(1, 0));
-        move_word_back(&mut b, false, 1, ISK);
+        move_word_back(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(0, 4));
     }
 
@@ -2013,9 +2260,9 @@ mod tests {
     fn move_word_back_stops_on_an_empty_line() {
         let mut b = View::from_str("abc\n\ndef");
         b.set_cursor(Position::new(2, 1));
-        move_word_back(&mut b, false, 1, ISK);
+        move_word_back(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(2, 0));
-        move_word_back(&mut b, false, 1, ISK);
+        move_word_back(&mut b, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(at(&b), Position::new(1, 0));
     }
 
@@ -2403,7 +2650,7 @@ mod tests {
         assert_eq!(m.cursor, Pos::new(0, 0));
 
         // Word motion via the non-canonical buffer.
-        super::move_word_fwd(&mut m, false, 1, ISK);
+        super::move_word_fwd(&mut m, &crate::types::NoopFoldProvider, false, 1, ISK);
         assert_eq!(m.cursor, Pos::new(0, 4));
 
         // gg / G via the non-canonical buffer.

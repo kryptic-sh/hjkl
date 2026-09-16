@@ -8,6 +8,18 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- `cw` / `cW` on the last character of a word changes only that character, as
+  vim's `end_word(stop)` does; it previously ran on to the next word's end,
+  because `cw` was mapped to the same motion as `ce`.
+- Word motions and operators treat a closed fold the way vim does: the fold is
+  jumped at each count iteration, so `2dw` walks past it, `de` ends at the next
+  word end, and `dj` / `d3w` landing inside a later fold take that fold whole.
+- Counted reverse blockwise sentence (`<C-v>k2is`) offers only the blank run the
+  cursor stands in or the one directly above its sentence, matching nvim, rather
+  than treating every blank run as a step.
+
 ## [0.41.0] - 2026-08-04
 
 ### Fixed

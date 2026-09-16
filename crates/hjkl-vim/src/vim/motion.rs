@@ -13,6 +13,40 @@ use hjkl_engine::buf_helpers::{
 };
 use hjkl_engine::{Editor, Move};
 
+/// Fold view handed to the word motions, which jump over a closed fold the
+/// way vim's `fwd_word()` / `bck_word()` / `end_word()` do.
+///
+/// Built by [`word_motion_folds`], which hides the buffer's folds when the
+/// cursor does not start at column 0 — see there for why.
+pub enum WordMotionFolds {
+    Aware(hjkl_engine::SnapshotFoldProvider),
+    Blind(hjkl_engine::types::NoopFoldProvider),
+}
+
+impl WordMotionFolds {
+    pub fn as_provider(&self) -> &dyn hjkl_engine::types::FoldProvider {
+        match self {
+            Self::Aware(f) => f,
+            Self::Blind(f) => f,
+        }
+    }
+}
+
+/// Decide whether a word motion may see the buffer's closed folds.
+///
+/// Vim's word motions always see them; the one state hjkl has to hide them
+/// in is the one vim never reaches — see [`cursor_left_fold_open`]. Every
+/// count iteration of the walk is fold-aware, as vim's is.
+pub fn word_motion_folds<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+) -> WordMotionFolds {
+    if cursor_left_fold_open(ed.buffer(), ed.cursor()) {
+        WordMotionFolds::Blind(hjkl_engine::types::NoopFoldProvider)
+    } else {
+        WordMotionFolds::Aware(hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer()))
+    }
+}
+
 /// Parse the first key of a normal/visual-mode motion. Returns `None` for
 /// keys that don't start a motion (operator keys, command keys, etc.).
 /// Promoted to `pub` in Phase 6.6e so `hjkl-vim::normal` can call it.
@@ -453,6 +487,7 @@ fn motion_class(motion: &Motion) -> MotionClass {
         | Motion::BigWordBack
         | Motion::WordEnd
         | Motion::BigWordEnd
+        | Motion::ChangeWordEnd { .. }
         | Motion::WordEndBack
         | Motion::BigWordEndBack
         | Motion::LineStart
@@ -571,9 +606,17 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             );
             ed.set_sticky_col(sticky);
         }
-        Motion::WordFwd => {
+        Motion::WordFwd | Motion::BigWordFwd => {
+            let big = matches!(motion, Motion::BigWordFwd);
             let iskeyword = ed.settings().iskeyword.clone();
-            hjkl_engine::motions::move_word_fwd(ed.buffer_mut(), false, count, &iskeyword);
+            let folds = word_motion_folds(ed);
+            hjkl_engine::motions::move_word_fwd(
+                ed.buffer_mut(),
+                folds.as_provider(),
+                big,
+                count,
+                &iskeyword,
+            );
             // Cursor context: clamp to the last char of the line so a counted
             // `w` past EOF never lands past the last character.
             if !as_operator {
@@ -584,33 +627,34 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
                 }
             }
         }
-        Motion::WordBack => {
+        Motion::WordBack | Motion::BigWordBack => {
+            let big = matches!(motion, Motion::BigWordBack);
             let iskeyword = ed.settings().iskeyword.clone();
-            hjkl_engine::motions::move_word_back(ed.buffer_mut(), false, count, &iskeyword);
+            let folds = word_motion_folds(ed);
+            hjkl_engine::motions::move_word_back(
+                ed.buffer_mut(),
+                folds.as_provider(),
+                big,
+                count,
+                &iskeyword,
+            );
         }
-        Motion::WordEnd => {
+        Motion::WordEnd | Motion::BigWordEnd | Motion::ChangeWordEnd { .. } => {
+            let (big, stop) = match motion {
+                Motion::BigWordEnd => (true, false),
+                Motion::ChangeWordEnd { big } => (*big, true),
+                _ => (false, false),
+            };
             let iskeyword = ed.settings().iskeyword.clone();
-            hjkl_engine::motions::move_word_end(ed.buffer_mut(), false, count, &iskeyword);
-        }
-        Motion::BigWordFwd => {
-            let iskeyword = ed.settings().iskeyword.clone();
-            hjkl_engine::motions::move_word_fwd(ed.buffer_mut(), true, count, &iskeyword);
-            // Cursor context: clamp to the last char of the line.
-            if !as_operator {
-                let (row, col) = ed.cursor();
-                let line_len = buf_line_chars(ed.buffer(), row);
-                if col > line_len.saturating_sub(1) {
-                    ed.jump_cursor(row, line_len.saturating_sub(1));
-                }
-            }
-        }
-        Motion::BigWordBack => {
-            let iskeyword = ed.settings().iskeyword.clone();
-            hjkl_engine::motions::move_word_back(ed.buffer_mut(), true, count, &iskeyword);
-        }
-        Motion::BigWordEnd => {
-            let iskeyword = ed.settings().iskeyword.clone();
-            hjkl_engine::motions::move_word_end(ed.buffer_mut(), true, count, &iskeyword);
+            let folds = word_motion_folds(ed);
+            hjkl_engine::motions::move_word_end(
+                ed.buffer_mut(),
+                folds.as_provider(),
+                big,
+                count,
+                stop,
+                &iskeyword,
+            );
         }
         Motion::WordEndBack => {
             let iskeyword = ed.settings().iskeyword.clone();

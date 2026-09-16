@@ -8,6 +8,12 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- `Motion::ChangeWordEnd { big }` — the word-end motion `cw` / `cW` runs, which
+  is not the same as `e` / `E`. Adding a variant to the non-`non_exhaustive`
+  `Motion` enum breaks any external `match` over it.
+
 ### Changed
 
 - Every `LastChange` variant that writes a register carries a

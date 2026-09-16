@@ -590,3 +590,97 @@ expected_buffer = "a\n\n"
 expected_cursor = [1, 0]
 expected_mode = "normal"
 expected_register = ['"', ""]
+
+# ── `cw` / `cW` are a word-END motion with vim's `stop` flag ──────────────────
+#
+# `:h cw`: with a CHANGE operator on a non-blank, `w` / `W` run `end_word()` —
+# but with its `stop` flag set, so a FIRST iteration that starts on the last
+# character of a word does not move at all and `cw` changes just that
+# character. `ce` has no such flag and runs on to the next word's end, which
+# is what makes `cw` and `ce` differ there. Later iterations always walk (vim
+# clears `stop` at the end of its loop body), so `2cw` from a word end covers
+# one word less than `2ce`. On whitespace the rewrite does not happen at all
+# and `cw` is `dw`-shaped.
+#
+# Expected values captured from nvim 0.12.5.
+
+[[cases]]
+name = "cw_on_last_char_of_word_changes_only_that_char"
+initial_buffer = "ab cd ef\n"
+initial_cursor = [0, 1]
+keys = "cwX<Esc>"
+expected_buffer = "aX cd ef\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+expected_register = ['"', "b"]
+
+[[cases]]
+name = "cW_on_last_char_of_WORD_changes_only_that_char"
+initial_buffer = "ab cd ef\n"
+initial_cursor = [0, 1]
+keys = "cWX<Esc>"
+expected_buffer = "aX cd ef\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+expected_register = ['"', "b"]
+
+[[cases]]
+name = "counted_2cw_on_last_char_of_word_is_one_word_short_of_2ce"
+initial_buffer = "ab cd ef\n"
+initial_cursor = [0, 1]
+keys = "2cwX<Esc>"
+expected_buffer = "aX ef\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+expected_register = ['"', "b cd"]
+
+[[cases]]
+name = "ce_on_last_char_of_word_runs_to_the_next_word_end"
+initial_buffer = "ab cd ef\n"
+initial_cursor = [0, 1]
+keys = "ceX<Esc>"
+expected_buffer = "aX ef\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+expected_register = ['"', "b cd"]
+
+[[cases]]
+name = "cw_mid_word_still_reaches_that_word_end"
+initial_buffer = "ab cd ef\n"
+initial_cursor = [0, 0]
+keys = "cwX<Esc>"
+expected_buffer = "X cd ef\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "ab"]
+
+[[cases]]
+name = "cw_on_last_char_of_last_word_changes_only_that_char"
+initial_buffer = "ab cd ef\n"
+initial_cursor = [0, 7]
+keys = "cwX<Esc>"
+expected_buffer = "ab cd eX\n"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+expected_register = ['"', "f"]
+
+[[cases]]
+name = "cw_at_a_punctuation_class_break_changes_only_that_char"
+initial_buffer = "foo.bar\n"
+initial_cursor = [0, 2]
+keys = "cwX<Esc>"
+expected_buffer = "foX.bar\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+expected_register = ['"', "o"]
+
+[[cases]]
+name = "cw_on_whitespace_is_dw_shaped_and_keeps_the_next_word"
+initial_buffer = "ab  cd\n"
+initial_cursor = [0, 2]
+keys = "cwX<Esc>"
+expected_buffer = "abXcd\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+expected_register = ['"', "  "]
+

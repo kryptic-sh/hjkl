@@ -179,6 +179,15 @@ pub enum Motion {
     BigWordBack,
     WordEnd,
     BigWordEnd,
+    /// The word-end motion `cw` / `cW` runs instead of `w` / `W` when the
+    /// cursor is on a non-blank (`:h cw`). It is NOT `e` / `E`: vim calls
+    /// `end_word()` with its `stop` flag set, so a first iteration that
+    /// starts on the last character of a word does not move — `cw` there
+    /// changes just that character, where `ce` runs on to the next word's
+    /// end. `big` picks `cW` over `cw`.
+    ChangeWordEnd {
+        big: bool,
+    },
     /// `ge` — backward word end.
     WordEndBack,
     /// `gE` — backward WORD end.

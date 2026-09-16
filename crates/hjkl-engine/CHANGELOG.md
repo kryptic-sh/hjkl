@@ -6,6 +6,21 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- `move_word_fwd`, `move_word_back` and `move_word_end` take a
+  `&dyn FoldProvider` (pass `NoopFoldProvider` to walk as if nothing were
+  folded), and `move_word_end` takes vim's `stop` flag. Vim's `fwd_word()` /
+  `bck_word()` / `end_word()` jump a closed fold at the top of every count
+  iteration, which these could not express without knowing the folds; `stop` is
+  what makes `cw` on the last character of a word change only that character.
+
+### Fixed
+
+- Counted word operators over a closed fold apply the count on top of the fold
+  instead of stopping at its end (`2dw`, `2yw`, `2de`), and `db` / `d0` at a
+  fold's start are no-ops, as in vim.
+
 ### Added
 
 - `policy::shell_command` builds the platform shell invocation for a user-typed

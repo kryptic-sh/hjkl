@@ -10,6 +10,22 @@ patch bumps.
 
 ### Fixed
 
+- **Word motions and operators on a closed fold now match vim.** A counted `2dw`
+  / `2yw` / `2de` applies its count on top of the fold instead of stopping at
+  the fold's end, `de` / `ce` end at the next word end, `db` and `d0` at a
+  fold's start are no-ops, and an operator whose landing falls inside a _later_
+  fold takes that fold whole. Measured against neovim 0.12.5 and pinned by 44
+  corpus cases.
+- **`cw` on the last character of a word changes only that character**
+  (`:h cw`), where it used to run on to the next word's end — `cw` was mapped to
+  the same motion as `ce`.
+- **Counted reverse blockwise sentence (`<C-v>k2is`) selects what nvim
+  selects.** Only the blank run the cursor stands in, or the one directly above
+  its sentence, is a step; hjkl treated every blank run as one and landed a full
+  row-set too far up.
+
+### Fixed
+
 - **Windows search fallbacks and file URIs.** With ripgrep absent, the grep
   picker passed the query to `findstr` unbound, so a query starting with `/` was
   read as a command-line option and one with spaces became several alternative

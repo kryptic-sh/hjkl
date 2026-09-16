@@ -246,3 +246,118 @@ expected_buffer = "alpha beta. gamma delta.\n"
 expected_cursor = [0, 0]
 expected_mode = "normal"
 expected_register = ['"', "alpha beta. "]
+
+# ── Reverse blockwise `is` / `as` and the blank-row object ────────────────────
+#
+# `:h is`: the object is "a sentence, or, when the cursor is in white space,
+# that white space" — so a run of BLANK rows between two sentences is a rung
+# on the ladder a counted reverse `<C-v>k{count}is` climbs, and vim stops on
+# the FIRST row of the run at column 0. Only ONE run is ever offered: the one
+# the cursor stands in, else the one directly above the sentence the cursor is
+# in. Two sentences below a run, the walk goes straight past it to the
+# sentence above. A bare line break between adjacent sentences is never such
+# an object, and `as` gets none of them — it has already swallowed the
+# whitespace into the sentence that trails it.
+#
+# Expected values captured from nvim 0.12.5.
+
+[[cases]]
+name = "reverse_block_2is_stops_on_the_blank_row_between_sentences"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\n"
+initial_cursor = [3, 3]
+keys = "<C-v>k2isy"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', "   \nbbb.\nccc."]
+
+[[cases]]
+name = "reverse_block_3is_reaches_the_sentence_above_the_blank_row"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\n"
+initial_cursor = [3, 3]
+keys = "<C-v>k3isy"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "aaa.\n   \nbbb.\nccc."]
+
+[[cases]]
+name = "reverse_block_1is_is_the_cursor_sentence"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\n"
+initial_cursor = [3, 3]
+keys = "<C-v>kisy"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+expected_register = ['"', "bbb.\nccc."]
+
+[[cases]]
+name = "reverse_block_2as_swallows_the_blank_row_into_the_sentence"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\n"
+initial_cursor = [3, 3]
+keys = "<C-v>k2asy"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "aaa.\n   \nbbb.\nccc."]
+
+[[cases]]
+name = "reverse_block_2is_over_an_empty_row_stops_on_it"
+initial_buffer = "aaa.\n\nbbb.\nccc.\n"
+initial_cursor = [3, 3]
+keys = "<C-v>k2isy"
+expected_buffer = "aaa.\n\nbbb.\nccc.\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', "\nbbb.\nccc."]
+
+[[cases]]
+name = "reverse_block_2is_over_a_two_row_blank_run_stops_on_its_first_row"
+initial_buffer = "aaa.\n   \n   \nbbb.\nccc.\n"
+initial_cursor = [4, 3]
+keys = "<C-v>k2isy"
+expected_buffer = "aaa.\n   \n   \nbbb.\nccc.\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', "   \n   \nbbb.\nccc."]
+
+[[cases]]
+name = "reverse_block_2is_with_no_blank_run_skips_straight_to_the_previous_sentence"
+initial_buffer = "aaa.\nbbb.\nccc.\n"
+initial_cursor = [2, 3]
+keys = "<C-v>k2isy"
+expected_buffer = "aaa.\nbbb.\nccc.\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "aaa.\nbbb.\nccc."]
+
+[[cases]]
+name = "reverse_block_is_from_inside_the_blank_run_selects_the_run"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\n"
+initial_cursor = [3, 3]
+keys = "<C-v>2kisy"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', "   \nbbb.\nccc."]
+
+[[cases]]
+name = "reverse_block_3is_two_sentences_below_a_blank_run_skips_it"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\nxxx."
+initial_cursor = [4, 3]
+keys = "<C-v>k3isy"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\nxxx."
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "aaa.\n   \nbbb.\nccc.\nxxx."]
+
+[[cases]]
+name = "reverse_block_2is_from_a_sentence_start_two_below_a_blank_run_skips_it"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\nxxx."
+initial_cursor = [4, 0]
+keys = "<C-v>k2isy"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\nxxx."
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "a\n \nb\nc\nx"]
+
