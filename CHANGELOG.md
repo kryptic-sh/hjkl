@@ -10,6 +10,15 @@ patch bumps.
 
 ### Fixed
 
+- **Debug builds no longer panic when a vertical motion parks on a tab or a
+  double-width character.** `j` / `k` onto a row whose landing character paints
+  more than one cell leaves `curswant` inside that character's span — what vim
+  does — but the debug-only `sticky_col` invariant compared against the span's
+  first cell and aborted. Found by `cargo-fuzz` from a two-keystroke input;
+  release builds, which compile the check out, were never affected.
+
+### Fixed
+
 - **Word motions and operators on a closed fold now match vim.** A counted `2dw`
   / `2yw` / `2de` applies its count on top of the fold instead of stopping at
   the fold's end, `de` / `ce` end at the next word end, `db` and `d0` at a

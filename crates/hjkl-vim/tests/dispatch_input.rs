@@ -1299,6 +1299,46 @@ fn vertical_clamp_ignores_a_non_newline_line_separator() {
     assert_eq!(e.cursor(), (1, 0));
 }
 
+/// A vertical motion may park on a char that paints more than one cell, and
+/// then `sticky_col` sits *inside* that char's span rather than on its first
+/// cell. The debug curswant invariant compared against the first cell only and
+/// reported those as violations — which is what cargo-fuzz kept finding from
+/// 2026-08-24 (three consecutive weekly Cron runs) with a two-key input:
+/// something that sets `sticky_col` to 3, then `<Down>` onto a row whose char
+/// at the landing column is a tab.
+///
+/// Both landings are measured against neovim 0.12.5:
+///
+/// ```text
+/// abcdef  / \tx        3l then j → col 1  (the tab),  virtcol 8, curswant 3
+/// abcdefgh / ab世界cd   3l then j → byte col 3 (世),   virtcol 4, curswant 3
+/// ```
+#[test]
+fn vertical_motion_parks_inside_a_multi_cell_char() {
+    // Tab: row 1's only cells 0..8 all belong to the tab, so curswant 3 lands
+    // on it rather than clamping or snapping to the next char.
+    let mut e = editor_with("abcdef\n\tx\n");
+    dispatch_keys(&mut e, "lll");
+    assert_eq!(e.cursor(), (0, 3));
+    assert_eq!(e.sticky_col(), Some(3));
+    dispatch_keys(&mut e, "j");
+    assert_eq!(e.cursor(), (1, 0), "parks on the tab, as nvim does");
+    assert_eq!(
+        e.sticky_col(),
+        Some(3),
+        "a vertical motion leaves sticky_col alone"
+    );
+
+    // Double-width glyph: `世` paints cells 2 and 3, so curswant 3 is its
+    // second cell.
+    let mut e = editor_with("abcdefgh\nab世界cd\n");
+    dispatch_keys(&mut e, "lll");
+    assert_eq!(e.cursor(), (0, 3));
+    dispatch_keys(&mut e, "j");
+    assert_eq!(e.cursor(), (1, 2), "parks on 世, as nvim does");
+    assert_eq!(e.sticky_col(), Some(3));
+}
+
 /// Run `keys` and read `"a` back out.
 fn dispatch_and_read_reg_a(e: &mut Editor, keys: &str) -> String {
     dispatch_keys(e, keys);

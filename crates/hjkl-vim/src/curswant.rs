@@ -66,9 +66,22 @@ fn holds<H: hjkl_engine::Host>(ed: &Editor<hjkl_buffer::View, H>) -> bool {
     // sticky_col now stores a display column — convert the cursor's char
     // index to a display column before comparing.
     let line = buf_line(ed.buffer(), row).unwrap_or_default();
-    let display_col = char_col_to_visual_col(&line, col, ed.settings().tabstop);
+    let tabstop = ed.settings().tabstop;
+    let display_col = char_col_to_visual_col(&line, col, tabstop);
     if want == display_col {
         return true; // synced to the landed column
+    }
+    // One char can paint several cells — a tab's expansion, a double-width
+    // glyph — so the landed column is a span, not a point. A vertical motion
+    // whose `want` falls anywhere inside that span lands ON the char and
+    // leaves `want` alone: `visual_col_to_char_col` is defined that way, and
+    // neovim agrees (from `abcdef` col 3, `j` onto a row starting with a tab
+    // parks on the tab and keeps curswant 3). Comparing against only the
+    // span's first cell reported those as violations — the shape cargo-fuzz
+    // found on 2026-08-24 and hit for three weeks running.
+    let span_end = char_col_to_visual_col(&line, col.saturating_add(1), tabstop);
+    if want > display_col && want < span_end {
+        return true;
     }
     // A vertical motion clamped to a short row. Normal mode parks on the last
     // char (`len - 1`); Visual may sit one past the end, so both count as
@@ -100,9 +113,12 @@ fn holds<H: hjkl_engine::Host>(ed: &Editor<hjkl_buffer::View, H>) -> bool {
 /// `sticky_col` may only be:
 ///
 /// 1. `None` — no motion has ever run on this editor; or
-/// 2. `Some(col)` — the "everything else" rule; or
-/// 3. `Some(want)` with `want > col` **and** `col` at the end of `row` —
-///    the vertical rule parked on a row shorter than `want`.
+/// 2. `Some(want)` with `want` anywhere in the display span of the char at
+///    `col` — its first cell for the "everything else" rule, any of its cells
+///    when a vertical motion parked on a multi-cell char (a tab, a
+///    double-width glyph); or
+/// 3. `Some(want)` with `want` past that span **and** `col` at the end of
+///    `row` — the vertical rule parked on a row shorter than `want`.
 ///
 /// Those are exactly the states phase 1's `Move` variants can reach (`Raw`
 /// excepted, which is why `Raw` must stay justified per site). A stale
