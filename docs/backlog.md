@@ -3160,23 +3160,27 @@ verified its findings against nvim 0.12.5 directly.
 
 ### Findings — ranked
 
-1. **LOW — two counted/word-end charwise-op divergences on a closed fold remain
-   (found 2026-08-30, during the closed-fold charwise fix).** The whole-fold
-   promotion now applies at column 0, but:
-   - Counted `2dw`/`2yw` on a closed fold do not re-apply the count on top of
-     the fold (nvim applies the count over the fold).
-   - `de`/`ce` (word-end motion) on a closed fold delete/change the whole buffer
-     in nvim (its `e`-on-fold quirk) where hjkl deletes/changes just the fold.
+1. **LOW — `'foldopen'` is unimplemented, and a column-0 proxy stands in for it
+   (measured 2026-09-16, while fixing the counted/word-end items that were
+   here).** nvim's default `'foldopen'` contains `hor`, so a horizontal motion
+   OPENS the fold as the command finishes: `zfjldd` deletes one row there,
+   `zfjlj` lands on row 1. hjkl has no `'foldopen'`, so `cursor_left_fold_open`
+   (`hjkl-vim` `vim/linewise.rs`) approximates it by treating column > 0 as "the
+   fold is open", which is why the corpus's column > 0 cases pass. Divergences
+   that remain from the missing option: `zfjldd` (hjkl deletes both fold rows),
+   `zfjlyy`, `zfjlj` (hjkl (2,1), nvim (1,1)), and a `d3e` whose INTERMEDIATE
+   landing sits at column > 0 of a fold when the operator started at column > 0
+   on a folded row. Implementing `'foldopen'` is what lets the proxy be deleted.
 
 ### Refinement of an already-open item (not counted)
 
-Counted reverse blockwise sentence (`<C-v>k2is`,
-`reverse_visual_block_sentence_landing`, `text_object.rs:350-446`): the
-uncounted form matches nvim; with `count ≥ 2` hjkl lands a full row-set further
-up (`<C-v>k2isy` on `"aaa.\n   \nbbb.\nccc.\n"` @ (3,3): hjkl reg =
-`"aaa.\n   \nbbb.\nccc."` cursor (0,0); nvim reg = `"   \nbbb.\nccc."` cursor
-(1,0)). This is the count dimension of §1.5b's open anchor-BELOW
-sentence-orientation item.
+Counted reverse blockwise sentence: the count dimension shipped 2026-09-16 —
+only the blank run the cursor stands in, or the one directly above its sentence,
+is a step. What remains is the anchor/orientation half of §1.5b: `<C-v>k4is` on
+`"aaa. bbb.\n   \nccc.\nddd.\n"` @ (3,3) lands the right ROW but the wrong block
+column (hjkl (0,0), nvim (0,3)), because the fallback walk produces no same-row
+separator units. Verified not a regression — the tree before the count fix gives
+(0,0) too.
 
 ### Cleared
 
