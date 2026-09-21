@@ -980,6 +980,15 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
 - `:make` runs `makeprg` as an argv with no shell by design, so it is not a
   shell-out and was deliberately left out of `policy::shell_command`.
 
+**Scoop publishing, not yet run (2026-09-21).** The `scoop-bucket` CI job and
+`pkg/scoop/hjkl.json.in` were added after 0.42.0, so the first tag after that is
+the first run. Checked by hand: the template rendered with v0.42.0's real
+Windows zip sidecar parses, its hash matches the zip, `hjkl.exe` sits at the
+zip's root and runs, and the `autoupdate` URL resolves to the same zip. Not
+checked: whether the org secret `SCOOP_SSH_KEY` is granted to this repo (it is
+selected-repository scoped, and listing it needs `admin:org`). If the job fails
+at "Push manifest", add hjkl to the secret's repositories.
+
 ## 2. Blocked on platform access
 
 | Finding                                                      | Location                                                         | Blocker                                                                             |

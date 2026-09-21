@@ -33,6 +33,13 @@ brew install kryptic-sh/tap/hjkl
 paru -S hjkl-bin
 ```
 
+**Windows (Scoop)**
+
+```powershell
+scoop bucket add kryptic-sh https://github.com/kryptic-sh/scoop-bucket
+scoop install kryptic-sh/hjkl
+```
+
 **Alpine Linux**
 
 ```bash
