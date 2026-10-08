@@ -431,8 +431,9 @@ pub fn build_app_keymap(leader: char) -> Keymap<AppAction, hjkl_vim::Mode> {
     // ── <C-h/j/k/l> window focus + tmux fallback (issue #120 Phase 3) ───
     // TmuxNavigate dispatch checks whether a neighbour exists:
     //   neighbour present → focus_left/below/above/right
+    //   no neighbour, $TMXR set → tmxr select-pane
     //   no neighbour, $TMUX set → tmux select-pane
-    //   no neighbour, no tmux → no-op
+    //   no neighbour, neither → no-op
     // <C-Backspace> is an alias for <C-h> on some terminals (mirrors the
     // original inline intercept's `key.code == KeyCode::Backspace` arm).
     for (chord, dir, desc) in [

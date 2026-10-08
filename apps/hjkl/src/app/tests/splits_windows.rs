@@ -2249,6 +2249,18 @@ fn bottom_dock_resize_clamps_to_minimum_height() {
     );
 }
 
+/// At an edge, `<C-h/j/k/l>` goes to the innermost multiplexer. A tmxr pane
+/// started inside tmux still has `$TMUX`, so `$TMXR` must win.
+#[test]
+fn edge_navigation_hands_off_to_the_innermost_multiplexer() {
+    use crate::app::window::handoff_program;
+
+    assert_eq!(handoff_program(true, true), Some("tmxr"));
+    assert_eq!(handoff_program(true, false), Some("tmxr"));
+    assert_eq!(handoff_program(false, true), Some("tmux"));
+    assert_eq!(handoff_program(false, false), None);
+}
+
 /// Three-window layout `LEFT | (TOP-RIGHT / BOTTOM-RIGHT)`: `<C-h>` from the
 /// BOTTOM-right pane must return to the left pane, not just from the top one.
 /// The bottom pane's parent is the horizontal split, so the left neighbour is

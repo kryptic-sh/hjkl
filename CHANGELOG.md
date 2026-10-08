@@ -8,6 +8,13 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- `Ctrl-h/j/k/l` at the edge of hjkl's windows now hands off to
+  [tmxr](https://github.com/kryptic-sh/tmxr) as it does to tmux: inside a tmxr
+  pane (`$TMXR` set) it runs `tmxr select-pane -L/-D/-U/-R`. When tmxr runs
+  inside tmux both are set, and the innermost, tmxr, wins.
+
 ## [0.42.1] - 2026-09-21
 
 ### Added

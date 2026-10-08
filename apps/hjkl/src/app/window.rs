@@ -222,14 +222,17 @@ impl App {
                 NavDir::Up => self.focus_above(),
                 NavDir::Right => self.focus_right(),
             }
-        } else if std::env::var("TMUX").is_ok() {
+        } else if let Some(program) = handoff_program(
+            std::env::var_os("TMXR").is_some_and(|v| !v.is_empty()),
+            std::env::var_os("TMUX").is_some(),
+        ) {
             let flag = match dir {
                 NavDir::Left => "-L",
                 NavDir::Down => "-D",
                 NavDir::Up => "-U",
                 NavDir::Right => "-R",
             };
-            let _ = std::process::Command::new("tmux")
+            let _ = std::process::Command::new(program)
                 .args(["select-pane", flag])
                 .status();
         }
@@ -778,5 +781,19 @@ impl App {
                     *ratio = if in_a { max_branch } else { min_branch };
                 }
             });
+    }
+}
+
+/// The terminal multiplexer an edge-most `<C-h/j/k/l>` is handed to: the
+/// innermost one hjkl runs in. tmxr panes set `$TMXR`; tmux sets `$TMUX`, and
+/// a tmxr started inside tmux inherits that, so `$TMXR` wins. Both take the
+/// same `select-pane -L/-D/-U/-R`.
+pub fn handoff_program(in_tmxr: bool, in_tmux: bool) -> Option<&'static str> {
+    if in_tmxr {
+        Some("tmxr")
+    } else if in_tmux {
+        Some("tmux")
+    } else {
+        None
     }
 }

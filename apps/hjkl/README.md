@@ -207,7 +207,9 @@ existing `nvim-rs` clients can target hjkl unchanged. Phase 3 of
 - **Tabs** — `:tabnew`, `gt` / `gT`, `:tabnext` / `:tabprev` / `:tabclose` /
   `:tabfirst` / `:tablast` / `:tabonly` / `:tabmove` / `:tabs`, `Ctrl-w T`
 - **tmux-navigator handoff** — `Ctrl-h/j/k/l` in Normal mode move between hjkl
-  windows; at an edge and `$TMUX` is set, falls through to `tmux select-pane`
+  windows; at an edge, falls through to `tmxr select-pane` when `$TMXR` is set
+  (a [tmxr](https://github.com/kryptic-sh/tmxr) pane), else to
+  `tmux select-pane` when `$TMUX` is set
 - **Mouse wheel scroll** — wheel scrolls viewport with cursor clamped inside,
   respecting `scrolloff`. Toggle with `editor.mouse` config field or
   `:set mouse` / `:set nomouse` / `:set mouse!`
