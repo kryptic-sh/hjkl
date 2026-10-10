@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.42.2] - 2026-10-11
+
 ### Added
 
 - `Ctrl-h/j/k/l` at the edge of hjkl's windows now hands off to
@@ -6156,7 +6158,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.42.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.42.2...HEAD
+[0.42.2]: https://github.com/kryptic-sh/hjkl/compare/v0.42.1...v0.42.2
 [0.42.1]: https://github.com/kryptic-sh/hjkl/compare/v0.42.0...v0.42.1
 [0.42.0]: https://github.com/kryptic-sh/hjkl/compare/v0.41.7...v0.42.0
 [0.41.7]: https://github.com/kryptic-sh/hjkl/compare/v0.41.6...v0.41.7
