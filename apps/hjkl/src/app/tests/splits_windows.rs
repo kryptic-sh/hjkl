@@ -2261,6 +2261,72 @@ fn edge_navigation_hands_off_to_the_innermost_multiplexer() {
     assert_eq!(handoff_program(false, false), None);
 }
 
+/// Edge navigation, decided without running anything: a neighbour is
+/// focused; at an edge each direction runs its `select-pane` flag in the
+/// innermost multiplexer; outside one nothing happens.
+#[test]
+fn edge_navigation_runs_select_pane_with_the_direction() {
+    use crate::app::NavDir;
+    use crate::app::window::NavStep;
+
+    let mut app = App::new(None, false, None, None).unwrap();
+    // One window: every direction is an edge.
+    for (dir, flag) in [
+        (NavDir::Left, "-L"),
+        (NavDir::Down, "-D"),
+        (NavDir::Up, "-U"),
+        (NavDir::Right, "-R"),
+    ] {
+        assert_eq!(
+            app.nav_step(dir, true, true),
+            NavStep::HandOff {
+                program: "tmxr",
+                flag
+            },
+            "{dir:?} in tmxr inside tmux"
+        );
+        assert_eq!(
+            app.nav_step(dir, false, true),
+            NavStep::HandOff {
+                program: "tmux",
+                flag
+            },
+            "{dir:?} in tmux"
+        );
+        assert_eq!(
+            app.nav_step(dir, false, false),
+            NavStep::Stay,
+            "{dir:?} alone"
+        );
+    }
+    // Side by side: towards the other window it is focused, never handed off;
+    // away from it the edge is handed off.
+    app.dispatch_ex("vsp");
+    let left = app.focused_window();
+    assert_eq!(app.nav_step(NavDir::Right, true, false), NavStep::Focus);
+    assert_eq!(
+        app.nav_step(NavDir::Left, true, false),
+        NavStep::HandOff {
+            program: "tmxr",
+            flag: "-L"
+        }
+    );
+    app.dispatch_tmux_navigate(NavDir::Right);
+    assert_ne!(
+        app.focused_window(),
+        left,
+        "a neighbour is focused, not handed off"
+    );
+    assert_eq!(app.nav_step(NavDir::Left, true, false), NavStep::Focus);
+    assert_eq!(
+        app.nav_step(NavDir::Right, true, false),
+        NavStep::HandOff {
+            program: "tmxr",
+            flag: "-R"
+        }
+    );
+}
+
 /// Three-window layout `LEFT | (TOP-RIGHT / BOTTOM-RIGHT)`: `<C-h>` from the
 /// BOTTOM-right pane must return to the left pane, not just from the top one.
 /// The bottom pane's parent is the horizontal split, so the left neighbour is

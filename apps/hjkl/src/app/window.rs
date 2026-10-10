@@ -198,17 +198,42 @@ impl App {
         }
     }
 
-    /// `<C-h/j/k/l>` — focus the neighbour window or fall through to tmux.
-    ///
-    /// When a window neighbour exists in `dir`, focuses it. When no neighbour
-    /// exists and `$TMUX` is set, forwards to `tmux select-pane`.
+    /// `<C-h/j/k/l>` — focus the neighbour window or hand off to the
+    /// multiplexer hjkl runs in (see [`App::nav_step`]).
     pub(crate) fn dispatch_tmux_navigate(&mut self, dir: super::NavDir) {
+        use super::NavDir;
+        let step = self.nav_step(
+            dir,
+            std::env::var_os("TMXR").is_some_and(|v| !v.is_empty()),
+            std::env::var_os("TMUX").is_some(),
+        );
+        match step {
+            NavStep::Focus => match dir {
+                NavDir::Left => self.focus_left(),
+                NavDir::Down => self.focus_below(),
+                NavDir::Up => self.focus_above(),
+                NavDir::Right => self.focus_right(),
+            },
+            NavStep::HandOff { program, flag } => {
+                let _ = std::process::Command::new(program)
+                    .args(["select-pane", flag])
+                    .status();
+            }
+            NavStep::Stay => {}
+        }
+    }
+
+    /// What `<C-h/j/k/l>` in `dir` does from the focused window: focus the
+    /// neighbour there, or at an edge run `select-pane` in the innermost
+    /// multiplexer (`in_tmxr` / `in_tmux`: whether `$TMXR` / `$TMUX` are set),
+    /// or nothing outside one.
+    pub(crate) fn nav_step(&self, dir: super::NavDir, in_tmxr: bool, in_tmux: bool) -> NavStep {
         use super::NavDir;
         let focused = self.focused_window();
         // Docks are ordinary leaves (#63 Phase 3), so the tree's own
         // adjacency already crosses in and out of them — `<C-h>` at the
         // leftmost regular window with the explorer open finds the explorer
-        // here, and only a genuinely edge-most window falls through to tmux.
+        // here, and only a genuinely edge-most window falls through.
         let neighbour = match dir {
             NavDir::Left => self.layout().neighbor_left(focused),
             NavDir::Down => self.layout().neighbor_below(focused),
@@ -216,26 +241,18 @@ impl App {
             NavDir::Right => self.layout().neighbor_right(focused),
         };
         if neighbour.is_some() {
-            match dir {
-                NavDir::Left => self.focus_left(),
-                NavDir::Down => self.focus_below(),
-                NavDir::Up => self.focus_above(),
-                NavDir::Right => self.focus_right(),
-            }
-        } else if let Some(program) = handoff_program(
-            std::env::var_os("TMXR").is_some_and(|v| !v.is_empty()),
-            std::env::var_os("TMUX").is_some(),
-        ) {
-            let flag = match dir {
-                NavDir::Left => "-L",
-                NavDir::Down => "-D",
-                NavDir::Up => "-U",
-                NavDir::Right => "-R",
-            };
-            let _ = std::process::Command::new(program)
-                .args(["select-pane", flag])
-                .status();
+            return NavStep::Focus;
         }
+        let Some(program) = handoff_program(in_tmxr, in_tmux) else {
+            return NavStep::Stay;
+        };
+        let flag = match dir {
+            NavDir::Left => "-L",
+            NavDir::Down => "-D",
+            NavDir::Up => "-U",
+            NavDir::Right => "-R",
+        };
+        NavStep::HandOff { program, flag }
     }
 
     // ── Window focus navigation ───────────────────────────────────────────
@@ -782,6 +799,20 @@ impl App {
                 }
             });
     }
+}
+
+/// What a `<C-h/j/k/l>` does, as [`App::nav_step`] decides it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NavStep {
+    /// Focus the neighbouring window.
+    Focus,
+    /// Run `program select-pane flag`.
+    HandOff {
+        program: &'static str,
+        flag: &'static str,
+    },
+    /// At an edge outside any multiplexer: nothing.
+    Stay,
 }
 
 /// The terminal multiplexer an edge-most `<C-h/j/k/l>` is handed to: the
