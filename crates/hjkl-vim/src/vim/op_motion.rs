@@ -15,11 +15,7 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     motion: &Motion,
     count: usize,
 ) {
-    let mut start = ed.cursor();
-    // Where the cursor is parked before the operator runs. Held separately
-    // from `start` because the exclusive-motion adjustment below can move the
-    // range's *backward* endpoint, which must not drag the parked cursor.
-    let cursor_restore = start;
+    let start = ed.cursor();
     // Tentatively apply motion to find the endpoint. Operator context
     // so `l` on the last char advances past-last (standard vim
     // exclusive-motion endpoint behaviour), enabling `dl` / `cl` /
@@ -88,6 +84,27 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
         end = (end.0, end.1 + 1);
         kind = RangeKind::Exclusive;
     }
+    let word_fwd = matches!(motion, Motion::WordFwd | Motion::BigWordFwd);
+    operate_over_motion_range(ed, op, start, end, kind, word_fwd);
+}
+
+/// The half of [`apply_op_with_motion`] that runs once the motion's endpoint
+/// is known: vim's range adjustments (`:h exclusive`, closed folds, the
+/// charwise-delete promotion), then the operator itself. `start` is where the
+/// cursor was; `word_fwd` marks `w` / `W`, whose end-of-line special case
+/// (`:h word`) is the one adjustment that depends on the motion.
+fn operate_over_motion_range<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    op: Operator,
+    mut start: (usize, usize),
+    mut end: (usize, usize),
+    mut kind: RangeKind,
+    word_fwd: bool,
+) {
+    // Where the cursor is parked before the operator runs. Held separately
+    // from `start` because the exclusive-motion adjustment below can move the
+    // range's *backward* endpoint, which must not drag the parked cursor.
+    let cursor_restore = start;
     // Linewise motions always cover their row when successful even if
     // `start == end` (e.g. `d_` with count 1 on a single row deletes it).
     if start == end && !matches!(kind, RangeKind::Linewise) {
@@ -100,7 +117,7 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // its last word is not at end-of-line. When the word-forward motion
     // crossed onto a later row, clamp `end` back to the last non-blank char it
     // moved over and make the range inclusive.
-    if matches!(motion, Motion::WordFwd | Motion::BigWordFwd)
+    if word_fwd
         && kind == RangeKind::Exclusive
         && end.0 > start.0
         && let Some(word_end) = last_word_end_before(ed, start, end)
