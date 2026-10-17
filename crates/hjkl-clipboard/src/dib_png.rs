@@ -554,7 +554,7 @@ pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
 
     // -----------------------------------------------------------------------
@@ -572,7 +572,7 @@ mod tests {
     // -----------------------------------------------------------------------
 
     /// Build a minimal valid PNG from raw RGBA or RGB pixels (top-down, no filtering).
-    fn build_png(width: u32, height: u32, channels: usize, pixels: &[u8]) -> Vec<u8> {
+    pub fn build_png(width: u32, height: u32, channels: usize, pixels: &[u8]) -> Vec<u8> {
         assert_eq!(pixels.len(), width as usize * height as usize * channels);
         let color_type: u8 = if channels == 4 {
             PNG_COLOR_RGBA

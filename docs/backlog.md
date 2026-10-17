@@ -819,12 +819,8 @@ with its §8 finding number:
   trade-off; recorded so a parity pass does not "fix" it blindly.
 - **vim `\ze`/`\zs` (start/end of match) mis-translate** (§8 #10 half) — needs
   match-boundary rewriting rust-regex has no anchor for; currently compiles to
-  nonsense or nothing rather than corrupting.
-- **Windows `EmptyClipboard` runs before allocation, wiping the prior clipboard
-  on failure** (§8 #19) — needs a Windows host to verify the reorder; the macOS
-  NUL-panic half of that finding shipped (`4323e39d`).
-
-(The macOS NUL fix and the X11/Wayland clipboard fixes are in `4323e39d`.)
+  nonsense or nothing rather than corrupting. (The macOS NUL fix and the
+  X11/Wayland clipboard fixes are in `4323e39d`.)
 
 ### 1.12 Open from the 2026-08-10 sweep + user reports
 
@@ -970,6 +966,15 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
 - The `~\` completion fix (`expand_path_prefix`) is red/green only on a Windows
   leg: on Unix `\` is a filename character, so the tests pin the literal case.
 - Not exercised: a non-US keyboard layout, conhost, ARM64 Windows.
+- `hjkl-clipboard`'s Windows backend (§8 #19 fix, 2026-10-18): the
+  allocate-before-`EmptyClipboard` order is enforced by `replace_clipboard`
+  taking already-built `GlobalBuffer`s, but no test observes an allocation
+  failure — `GlobalAlloc` cannot be made to fail from a real slice. The
+  real-clipboard round trip is `#[ignore]`d (it replaces the user's clipboard)
+  and was run on a Windows 11 host only. It also cannot see the ownership
+  hand-off: freeing a block after `SetClipboardData` took it still round-trips
+  inside the owning process (checked by mutation), so a regression there is a
+  use-after-free no test here catches.
 
 **Recorded behaviour, not bugs.**
 

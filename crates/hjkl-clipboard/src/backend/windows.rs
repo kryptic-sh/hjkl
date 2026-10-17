@@ -237,19 +237,53 @@ impl Drop for LockedHandle {
     }
 }
 
-// ---------------------------------------------------------------------------
-// CF_UNICODETEXT helpers.
-// ---------------------------------------------------------------------------
+/// A `GMEM_MOVEABLE` block holding a copy of some bytes — the only kind of
+/// memory `SetClipboardData` accepts. Owned until [`replace_clipboard`] hands
+/// it to the clipboard; freed on drop otherwise, so every early return and
+/// every failed hand-off releases it.
+struct GlobalBuffer(HGLOBAL);
 
-/// Write UTF-8 `bytes` to the clipboard as `CF_UNICODETEXT`.
-fn set_text(bytes: &[u8]) -> Result<(), ClipboardError> {
-    let text = std::str::from_utf8(bytes)
-        .map_err(|_| ClipboardError::io_other("clipboard text is not valid UTF-8"))?;
+impl GlobalBuffer {
+    fn from_bytes(data: &[u8]) -> Result<Self, ClipboardError> {
+        // SAFETY: GlobalAlloc with GMEM_MOVEABLE is the required allocation
+        // strategy for clipboard data; failure is a NULL return.
+        let handle: HGLOBAL = unsafe { GlobalAlloc(GMEM_MOVEABLE, data.len()) };
+        if handle.is_null() {
+            return Err(ClipboardError::io_other("GlobalAlloc failed"));
+        }
+        let buf = Self(handle);
+        let locked = LockedHandle::new(buf.0)?;
+        // SAFETY: `locked.ptr()` is a writable allocation of `data.len()`
+        // bytes from `GlobalLock`, and `data` is `data.len()` readable bytes
+        // of Rust memory, so the regions cannot overlap.
+        unsafe {
+            std::ptr::copy_nonoverlapping(data.as_ptr(), locked.ptr().cast::<u8>(), data.len());
+        }
+        // Unlocked before the block can be handed to the clipboard.
+        drop(locked);
+        Ok(buf)
+    }
+}
 
-    // Encode as UTF-16 LE with an explicit null terminator.
-    let utf16: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
-    let byte_len = utf16.len() * 2;
+impl Drop for GlobalBuffer {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` came from `GlobalAlloc` and is still ours: the one
+        // place the clipboard takes ownership, `replace_clipboard`, forgets
+        // the buffer instead of dropping it.
+        unsafe {
+            GlobalFree(self.0);
+        }
+    }
+}
 
+/// Replace the clipboard's contents with `items`, one block per format.
+///
+/// Takes the blocks already allocated and filled, so nothing that can fail on
+/// our side runs after `EmptyClipboard` has destroyed what was there before:
+/// a failed allocation leaves the old contents intact. Only a failing
+/// `SetClipboardData` can still leave the clipboard holding the formats set
+/// before it.
+fn replace_clipboard(items: Vec<(UINT, GlobalBuffer)>) -> Result<(), ClipboardError> {
     let _guard = ClipboardOpen::new()?;
 
     // SAFETY: EmptyClipboard requires the clipboard to be open (guaranteed by
@@ -259,49 +293,39 @@ fn set_text(bytes: &[u8]) -> Result<(), ClipboardError> {
         return Err(ClipboardError::io_other("EmptyClipboard failed"));
     }
 
-    // SAFETY: GlobalAlloc with GMEM_MOVEABLE is the required allocation
-    // strategy for clipboard data. The size is derived from a `Vec<u16>` whose
-    // length is bounded by the input string length; no overflow is possible for
-    // any string that fits in memory.
-    let handle: HGLOBAL = unsafe { GlobalAlloc(GMEM_MOVEABLE, byte_len) };
-    if handle.is_null() {
-        return Err(ClipboardError::io_other("GlobalAlloc failed"));
-    }
-
-    // Lock the handle (RAII releases on drop).
-    let locked = match LockedHandle::new(handle) {
-        Ok(l) => l,
-        Err(e) => {
-            // SAFETY: `handle` is still our allocation; GlobalFree releases it.
-            unsafe { GlobalFree(handle) };
-            return Err(e);
+    for (format, buf) in items {
+        // SAFETY: the clipboard is open (`_guard`) and was emptied by us, and
+        // `buf.0` is an unlocked GMEM_MOVEABLE block holding `format` data.
+        // On success the clipboard owns the block, so it must not be freed.
+        let result = unsafe { SetClipboardData(format, buf.0) };
+        if result.is_null() {
+            // Ownership did not transfer: `buf` (and every block not yet
+            // handed over) is freed as it drops.
+            return Err(ClipboardError::io_other("SetClipboardData failed"));
         }
-    };
-
-    // SAFETY: `locked.ptr()` is a valid, writable allocation of `byte_len`
-    // bytes obtained from `GlobalLock`. `utf16.as_ptr()` points to
-    // `utf16.len()` valid `u16` values. The regions do not overlap.
-    unsafe {
-        std::ptr::copy_nonoverlapping(utf16.as_ptr(), locked.ptr().cast::<u16>(), utf16.len());
-    }
-
-    // Drop the lock guard before transferring ownership to the clipboard.
-    drop(locked);
-
-    // SAFETY: the clipboard is open (`_guard`), `EmptyClipboard` was called,
-    // and `handle` holds a valid GMEM_MOVEABLE allocation with CF_UNICODETEXT
-    // data. On success the clipboard takes ownership of the handle — we must
-    // NOT free it. On failure (NULL return) we must free it ourselves.
-    let result = unsafe { SetClipboardData(CF_UNICODETEXT, handle) };
-    if result.is_null() {
-        // SAFETY: `SetClipboardData` failed, so ownership did not transfer.
-        // We free the allocation to avoid a leak.
-        unsafe { GlobalFree(handle) };
-        return Err(ClipboardError::io_other("SetClipboardData failed"));
+        std::mem::forget(buf);
     }
 
     // `_guard` drops here → `CloseClipboard()` called.
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// CF_UNICODETEXT helpers.
+// ---------------------------------------------------------------------------
+
+/// Write UTF-8 `bytes` to the clipboard as `CF_UNICODETEXT`.
+fn set_text(bytes: &[u8]) -> Result<(), ClipboardError> {
+    let text = std::str::from_utf8(bytes)
+        .map_err(|_| ClipboardError::io_other("clipboard text is not valid UTF-8"))?;
+
+    // UTF-16 LE with an explicit null terminator.
+    let utf16le: Vec<u8> = text
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    replace_clipboard(vec![(CF_UNICODETEXT, GlobalBuffer::from_bytes(&utf16le)?)])
 }
 
 /// Read `CF_UNICODETEXT` from the clipboard and return it as UTF-8 bytes.
@@ -360,58 +384,9 @@ fn get_text() -> Result<Vec<u8>, ClipboardError> {
 // The `CF_UNICODETEXT` path (text) keeps its own `set_text`/`get_text` with
 // the UTF-8 ↔ UTF-16 LE conversion baked in.
 
-/// Place `bytes` on the clipboard under `format`.
-///
-/// Opens the clipboard, empties it, allocates a GMEM_MOVEABLE block, copies
-/// `bytes` in, and transfers ownership to the clipboard via `SetClipboardData`.
+/// Place `bytes` on the clipboard under `format`, replacing its contents.
 fn set_bytes(format: UINT, bytes: &[u8]) -> Result<(), ClipboardError> {
-    let _guard = ClipboardOpen::new()?;
-
-    // SAFETY: EmptyClipboard requires an open clipboard (`_guard` guarantees
-    // this). It frees all existing data and clears the clipboard owner.
-    let ok = unsafe { EmptyClipboard() };
-    if ok == 0 {
-        return Err(ClipboardError::io_other("EmptyClipboard failed"));
-    }
-
-    let len = bytes.len();
-    // SAFETY: GlobalAlloc with GMEM_MOVEABLE is the required strategy for
-    // clipboard data. `len` is the byte length of the caller's slice; no
-    // overflow possible for data that fits in memory.
-    let handle: HGLOBAL = unsafe { GlobalAlloc(GMEM_MOVEABLE, len) };
-    if handle.is_null() {
-        return Err(ClipboardError::io_other("GlobalAlloc failed"));
-    }
-
-    let locked = match LockedHandle::new(handle) {
-        Ok(l) => l,
-        Err(e) => {
-            // SAFETY: allocation is still ours; free to avoid a leak.
-            unsafe { GlobalFree(handle) };
-            return Err(e);
-        }
-    };
-
-    // SAFETY: `locked.ptr()` is a writable allocation of `len` bytes from
-    // `GlobalLock`. `bytes.as_ptr()` points to `len` valid bytes. The regions
-    // do not overlap (one is from the global heap, one from Rust memory).
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), locked.ptr().cast::<u8>(), len);
-    }
-
-    drop(locked); // GlobalUnlock before we hand off to the clipboard.
-
-    // SAFETY: clipboard is open, EmptyClipboard was called, `handle` holds a
-    // valid GMEM_MOVEABLE block with `format` data. On success the clipboard
-    // owns the handle and we must NOT free it. On failure we free it.
-    let result = unsafe { SetClipboardData(format, handle) };
-    if result.is_null() {
-        // SAFETY: SetClipboardData failed; ownership did not transfer.
-        unsafe { GlobalFree(handle) };
-        return Err(ClipboardError::io_other("SetClipboardData failed"));
-    }
-
-    Ok(())
+    replace_clipboard(vec![(format, GlobalBuffer::from_bytes(bytes)?)])
 }
 
 /// Read `format` bytes from the clipboard, returning a heap-allocated copy.
@@ -550,8 +525,8 @@ fn get_uri_list() -> Result<Vec<u8>, ClipboardError> {
 
 /// Write PNG bytes to the clipboard as both `"PNG"` and `CF_DIBV5`.
 ///
-/// Both formats are set (or neither — if conversion fails the error is
-/// returned immediately rather than partially landing one format).
+/// The DIB conversion and both allocations happen before the clipboard is
+/// touched, so any of them failing leaves it as it was.
 fn set_png(bytes: &[u8]) -> Result<(), ClipboardError> {
     let png_id = cf_png_format();
     if png_id == 0 {
@@ -560,51 +535,10 @@ fn set_png(bytes: &[u8]) -> Result<(), ClipboardError> {
         ));
     }
     let dib = crate::dib_png::png_to_dib(bytes)?;
-
-    // Open clipboard once for both writes.
-    let _guard = ClipboardOpen::new()?;
-
-    // SAFETY: clipboard is open (`_guard`).
-    let ok = unsafe { EmptyClipboard() };
-    if ok == 0 {
-        return Err(ClipboardError::io_other("EmptyClipboard failed"));
-    }
-
-    // Helper: allocate + copy + SetClipboardData, no re-open.
-    let set_raw = |format: UINT, data: &[u8]| -> Result<(), ClipboardError> {
-        let len = data.len();
-        // SAFETY: GMEM_MOVEABLE allocation for clipboard.
-        let handle: HGLOBAL = unsafe { GlobalAlloc(GMEM_MOVEABLE, len) };
-        if handle.is_null() {
-            return Err(ClipboardError::io_other("GlobalAlloc failed"));
-        }
-        let locked = match LockedHandle::new(handle) {
-            Ok(l) => l,
-            Err(e) => {
-                // SAFETY: still our allocation.
-                unsafe { GlobalFree(handle) };
-                return Err(e);
-            }
-        };
-        // SAFETY: locked.ptr() is valid for `len` writable bytes; no overlap.
-        unsafe {
-            std::ptr::copy_nonoverlapping(data.as_ptr(), locked.ptr().cast::<u8>(), len);
-        }
-        drop(locked);
-        // SAFETY: clipboard is open, EmptyClipboard was called, handle is valid.
-        let result = unsafe { SetClipboardData(format, handle) };
-        if result.is_null() {
-            // SAFETY: SetClipboardData failed; ownership did not transfer.
-            unsafe { GlobalFree(handle) };
-            return Err(ClipboardError::io_other("SetClipboardData failed"));
-        }
-        Ok(())
-    };
-
-    set_raw(png_id, bytes)?;
-    set_raw(CF_DIBV5, &dib)?;
-
-    Ok(())
+    replace_clipboard(vec![
+        (png_id, GlobalBuffer::from_bytes(bytes)?),
+        (CF_DIBV5, GlobalBuffer::from_bytes(&dib)?),
+    ])
 }
 
 /// Read PNG bytes from the clipboard.
@@ -783,5 +717,61 @@ impl Backend for WindowsBackend {
             }
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn global_buffer_holds_a_copy_of_the_bytes() {
+        let data = b"clipboard \x00 bytes";
+        let buf = GlobalBuffer::from_bytes(data).unwrap();
+        let locked = LockedHandle::new(buf.0).unwrap();
+        // SAFETY: `buf.0` is a live, locked GlobalAlloc block.
+        let size = unsafe { GlobalSize(buf.0) };
+        assert!(size >= data.len());
+        // SAFETY: the locked block is readable for `size` >= `data.len()` bytes.
+        let copy = unsafe { std::slice::from_raw_parts(locked.ptr().cast::<u8>(), data.len()) };
+        assert_eq!(copy, data);
+    }
+
+    /// Every format through the real Win32 clipboard, in one test so nothing
+    /// races on it. Puts the text that was there back afterwards.
+    #[test]
+    #[ignore = "replaces the contents of the real system clipboard"]
+    fn every_format_round_trips_through_the_system_clipboard() {
+        let saved = get_text().ok();
+
+        set_text("hjkl \u{2713} \u{6587}\u{5b57}\r\nline two".as_bytes()).unwrap();
+        assert_eq!(
+            get_text().unwrap(),
+            "hjkl \u{2713} \u{6587}\u{5b57}\r\nline two".as_bytes()
+        );
+
+        set_html("<b>bold</b> text").unwrap();
+        assert_eq!(get_html().unwrap(), b"<b>bold</b> text");
+
+        set_rtf(br"{\rtf1 plain}").unwrap();
+        assert_eq!(get_rtf().unwrap(), br"{\rtf1 plain}");
+
+        let png = crate::dib_png::tests::build_png(2, 1, 4, &[255, 0, 0, 255, 0, 0, 255, 128]);
+        set_png(&png).unwrap();
+        assert_eq!(get_png().unwrap(), png);
+        let formats = WindowsBackend::new()
+            .available(Selection::Clipboard)
+            .unwrap();
+        assert_eq!(formats, [MimeType::Png]);
+
+        // A payload that fails before the clipboard is touched leaves it as
+        // it was.
+        assert!(set_png(b"not a png").is_err());
+        assert_eq!(get_png().unwrap(), png);
+
+        match saved {
+            Some(text) => set_text(&text).unwrap(),
+            None => WindowsBackend::new().clear(Selection::Clipboard).unwrap(),
+        }
     }
 }

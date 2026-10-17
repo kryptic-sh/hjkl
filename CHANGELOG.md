@@ -34,6 +34,9 @@ patch bumps.
   `\r`, which the rope counts as a line break but the highlighter's row table
   did not, so rendering the viewport sliced past the end of its span cache and
   panicked. Any lone `\r`, VT, FF, NEL, LS or PS line separator did the same.
+- **Windows: a failed clipboard write no longer wipes the clipboard.** The
+  clipboard was emptied before the new data's memory was allocated, so an
+  allocation failure left it empty; allocation now comes first.
 - A forward charwise operator started inside a closed fold takes the fold whole
   from any column: `x` / `dw` at column 2 used to delete characters, because
   column 0 was standing in for "the fold is still closed". A backward charwise

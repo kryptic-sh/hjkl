@@ -8,6 +8,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Windows: a clipboard write whose allocation fails leaves the previous contents
+  in place. `set` emptied the clipboard first and allocated after, so a failed
+  `GlobalAlloc` destroyed what was there and put nothing back. Every block —
+  both of PNG's `"PNG"` and `CF_DIBV5` — is now built before `EmptyClipboard`
+  runs.
 - `path_to_file_uri` no longer reads a Windows _verbatim_ path (`\\?\C:\dir\f`,
   the form `std::fs::canonicalize` returns there) as a UNC path. It starts with
   two backslashes, so the UNC branch claimed it and emitted
