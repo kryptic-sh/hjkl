@@ -288,6 +288,8 @@ pub fn goto_mark<H: hjkl_engine::types::Host>(
     }
     if ed.cursor() != pre {
         ed.push_jump(pre);
+        // `'foldopen'` `mark`: only a jump that moved opens the fold.
+        foldopen_cursor(ed);
     }
     ed.set_sticky_col(Some(ed.cursor().1));
 }

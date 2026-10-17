@@ -202,16 +202,17 @@ pub fn do_char_delete<H: hjkl_engine::types::Host>(
     count: usize,
 ) {
     use hjkl_buffer::{Edit, MotionKind, Position};
-    // `x` at COLUMN 0 of a CLOSED fold deletes the whole fold linewise (vim
-    // `:h fold`: a closed fold is included as a whole). At column > 0 nvim
-    // keeps normal charwise delete. `X` is a *backward* delete and is never
-    // promoted — nvim leaves it charwise (a no-op at column 0), even on a
-    // closed fold.
+    // `x` on a CLOSED fold deletes the whole fold linewise, from any column
+    // (vim `:h fold`: a closed fold is included as a whole). An `l` that put
+    // the cursor at column > 0 has already opened the fold (`'foldopen'`
+    // `hor`), so it no longer reaches here. `X` is a *backward* delete and is
+    // never promoted — nvim leaves it charwise (a no-op at column 0), even on
+    // a closed fold.
     if forward {
-        let (cursor_row, cursor_col) = ed.cursor();
+        let cursor_row = ed.cursor().0;
         let (fold_start, fold_end) =
             expand_linewise_over_closed_folds(ed.buffer(), cursor_row, cursor_row);
-        if cursor_col == 0 && (fold_start, fold_end) != (cursor_row, cursor_row) {
+        if (fold_start, fold_end) != (cursor_row, cursor_row) {
             run_operator_over_range(
                 ed,
                 Operator::Delete,
@@ -1400,7 +1401,9 @@ mod fold_char_delete_tests {
     #[test]
     fn x_at_col1_on_closed_fold_stays_charwise() {
         let mut ed = make_editor("abc\ndef\nghi\n", Some((0, 1)));
-        ed.jump_cursor(0, 1);
+        // `l`, not a bare cursor jump: it is `'foldopen'` running after the
+        // `l` that opens the fold, so the `x` that follows is charwise.
+        crate::vim::execute_motion(&mut ed, hjkl_vim_types::Motion::Right, 1);
         do_char_delete(&mut ed, true, 1);
         assert_eq!(full_buffer(&ed), "ac\ndef\nghi\n");
         assert_eq!(ed.yank(), "b");

@@ -13,40 +13,6 @@ use hjkl_engine::buf_helpers::{
 };
 use hjkl_engine::{Editor, Move};
 
-/// Fold view handed to the word motions, which jump over a closed fold the
-/// way vim's `fwd_word()` / `bck_word()` / `end_word()` do.
-///
-/// Built by [`word_motion_folds`], which hides the buffer's folds when the
-/// cursor does not start at column 0 — see there for why.
-pub enum WordMotionFolds {
-    Aware(hjkl_engine::SnapshotFoldProvider),
-    Blind(hjkl_engine::types::NoopFoldProvider),
-}
-
-impl WordMotionFolds {
-    pub fn as_provider(&self) -> &dyn hjkl_engine::types::FoldProvider {
-        match self {
-            Self::Aware(f) => f,
-            Self::Blind(f) => f,
-        }
-    }
-}
-
-/// Decide whether a word motion may see the buffer's closed folds.
-///
-/// Vim's word motions always see them; the one state hjkl has to hide them
-/// in is the one vim never reaches — see [`cursor_left_fold_open`]. Every
-/// count iteration of the walk is fold-aware, as vim's is.
-pub fn word_motion_folds<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::View, H>,
-) -> WordMotionFolds {
-    if cursor_left_fold_open(ed.buffer(), ed.cursor()) {
-        WordMotionFolds::Blind(hjkl_engine::types::NoopFoldProvider)
-    } else {
-        WordMotionFolds::Aware(hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer()))
-    }
-}
-
 /// Parse the first key of a normal/visual-mode motion. Returns `None` for
 /// keys that don't start a motion (operator keys, command keys, etc.).
 /// Promoted to `pub` in Phase 6.6e so `hjkl-vim::normal` can call it.
@@ -175,6 +141,9 @@ pub fn execute_motion<H: hjkl_engine::types::Host>(
             // Sticky tracks the landed column.
             ed.move_cursor(Move::Horizontal { col: ed.cursor().1 });
         }
+    }
+    if motion_opens_fold(&motion, count, pre_pos != post_pos) {
+        foldopen_cursor(ed);
     }
     // Phase 7b: keep the migration buffer's cursor + viewport in
     // lockstep with the textarea after every motion. Once 7c lands
@@ -502,6 +471,81 @@ fn motion_class(motion: &Motion) -> MotionClass {
         // No Motion variant classifies Raw — see the enum docs.
     }
 }
+/// Vim's `foldOpenCursor()` as `'foldopen'` runs it after a command: open
+/// every closed fold holding the cursor row. Vim only does this for a command
+/// typed in Normal mode — not under an operator (callers on an operator path
+/// never get here), not in Visual, and not while `@q` replays keys
+/// (`KeyTyped` is false there) — so the gate lives here, once.
+pub fn foldopen_cursor<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
+    let st = vim(ed);
+    if st.mode != Mode::Normal || st.replaying_macro {
+        return;
+    }
+    let row = ed.cursor().0;
+    ed.buffer_mut().open_folds_containing(row);
+}
+/// Whether vim's default `'foldopen'` (`block,hor,mark,percent,quickfix,
+/// search,tag,undo`) opens the folds under the cursor once `motion` finishes
+/// as a Normal-mode command. Each arm is the flag vim's own handler checks;
+/// `moved` stands in for the handler's success test, which is why a failed
+/// `l` at the end of a line opens nothing. Measured against nvim 0.12.5:
+/// `ge`/`gE`, `g_`, `gm`/`gM`, `|`, `H`/`M`/`L`, `+`/`-`/`_`, `gg`/`G` and
+/// `j`/`k` leave the fold closed.
+fn motion_opens_fold(motion: &Motion, count: usize, moved: bool) -> bool {
+    match motion {
+        // `hor`: `nv_beginline()` succeeds without moving, and so does
+        // `nv_dollar()` unless a count runs it off the end of the buffer.
+        Motion::LineStart | Motion::FirstNonBlank => true,
+        Motion::LineEnd => moved || count == 1,
+        // `hor`.
+        Motion::Left
+        | Motion::Right
+        | Motion::SpaceFwd
+        | Motion::BackspaceBack
+        | Motion::WordFwd
+        | Motion::BigWordFwd
+        | Motion::WordBack
+        | Motion::BigWordBack
+        | Motion::WordEnd
+        | Motion::BigWordEnd
+        | Motion::Find { .. }
+        | Motion::FindRepeat { .. }
+        // `percent`.
+        | Motion::MatchBracket
+        // `block`.
+        | Motion::UnmatchedBracket { .. }
+        | Motion::ParagraphPrev
+        | Motion::ParagraphNext
+        | Motion::SentencePrev
+        | Motion::SentenceNext
+        | Motion::SectionBackward
+        | Motion::SectionForward
+        | Motion::SectionEndBackward
+        | Motion::SectionEndForward
+        // `search`.
+        | Motion::WordAtCursor { .. }
+        | Motion::SearchNext { .. } => moved,
+        Motion::Up
+        | Motion::Down
+        | Motion::ScreenUp
+        | Motion::ScreenDown
+        | Motion::ChangeWordEnd { .. }
+        | Motion::WordEndBack
+        | Motion::BigWordEndBack
+        | Motion::FileTop
+        | Motion::FileBottom
+        | Motion::ViewportTop
+        | Motion::ViewportMiddle
+        | Motion::ViewportBottom
+        | Motion::LastNonBlank
+        | Motion::LineMiddle
+        | Motion::ScreenLineMiddle
+        | Motion::FirstNonBlankNextLine
+        | Motion::FirstNonBlankPrevLine
+        | Motion::FirstNonBlankLine
+        | Motion::GotoColumn => false,
+    }
+}
 pub fn apply_motion_cursor<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     motion: &Motion,
@@ -609,14 +653,8 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         Motion::WordFwd | Motion::BigWordFwd => {
             let big = matches!(motion, Motion::BigWordFwd);
             let iskeyword = ed.settings().iskeyword.clone();
-            let folds = word_motion_folds(ed);
-            hjkl_engine::motions::move_word_fwd(
-                ed.buffer_mut(),
-                folds.as_provider(),
-                big,
-                count,
-                &iskeyword,
-            );
+            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
+            hjkl_engine::motions::move_word_fwd(ed.buffer_mut(), &folds, big, count, &iskeyword);
             // Cursor context: clamp to the last char of the line so a counted
             // `w` past EOF never lands past the last character.
             if !as_operator {
@@ -630,14 +668,8 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         Motion::WordBack | Motion::BigWordBack => {
             let big = matches!(motion, Motion::BigWordBack);
             let iskeyword = ed.settings().iskeyword.clone();
-            let folds = word_motion_folds(ed);
-            hjkl_engine::motions::move_word_back(
-                ed.buffer_mut(),
-                folds.as_provider(),
-                big,
-                count,
-                &iskeyword,
-            );
+            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
+            hjkl_engine::motions::move_word_back(ed.buffer_mut(), &folds, big, count, &iskeyword);
         }
         Motion::WordEnd | Motion::BigWordEnd | Motion::ChangeWordEnd { .. } => {
             let (big, stop) = match motion {
@@ -646,10 +678,10 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
                 _ => (false, false),
             };
             let iskeyword = ed.settings().iskeyword.clone();
-            let folds = word_motion_folds(ed);
+            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             hjkl_engine::motions::move_word_end(
                 ed.buffer_mut(),
-                folds.as_provider(),
+                &folds,
                 big,
                 count,
                 stop,

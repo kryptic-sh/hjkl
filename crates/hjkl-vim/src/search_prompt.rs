@@ -57,11 +57,11 @@ pub fn step_search_prompt<H: Host>(
                 if let Some(pattern) = pattern {
                     ed.push_search_pattern(&pattern);
                     let pre = ed.cursor();
-                    if p.forward {
-                        ed.search_advance_forward(true);
+                    let found = if p.forward {
+                        ed.search_advance_forward(true)
                     } else {
-                        ed.search_advance_backward(true);
-                    }
+                        ed.search_advance_backward(true)
+                    };
                     if let Some(off) = offset.as_deref().filter(|s| !s.is_empty()) {
                         apply_search_offset(ed, off);
                     }
@@ -70,8 +70,14 @@ pub fn step_search_prompt<H: Host>(
                     // moving the cursor / pushing a jump.
                     if let Some((op, _count, origin)) = p.operator {
                         ed.apply_op_search_range(op, origin);
-                    } else if ed.cursor() != pre {
-                        ed.push_jump(pre);
+                    } else {
+                        if ed.cursor() != pre {
+                            ed.push_jump(pre);
+                        }
+                        // `'foldopen'` `search`.
+                        if found {
+                            crate::vim::foldopen_cursor(ed);
+                        }
                     }
                     ed.record_search_history(&pattern);
                     ed.set_last_search_pattern_only(Some(pattern));

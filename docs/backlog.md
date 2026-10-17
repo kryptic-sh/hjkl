@@ -989,6 +989,55 @@ secret `SCOOP_SSH_KEY` is granted to this repo:
 `gh api repos/kryptic-sh/hjkl/actions/organization-secrets` lists it (checked
 2026-09-21), as it does for krypt, whose scoop job publishes.
 
+### 1.15 Left open by the `'foldopen'` work (2026-10-18)
+
+`'foldopen'`'s `hor`, `block`, `percent`, `search` and `mark` classes shipped as
+`foldopen_cursor` / `motion_opens_fold` (`hjkl-vim` `vim/motion.rs`), with the
+column-0 proxy `cursor_left_fold_open` deleted. Every class was measured against
+nvim 0.12.5 with `dfcase` and pinned in `tier2_fold_delete.toml` (21 cases; 15
+fail on the parent commit, the other 6 are negative guards).
+`difffuzz 2000 424242`: 277 divergences before, 274 after, none new (the six
+"new" ones reproduce identically on the old binary — they are shrinking noise).
+
+- **`<Home>` opens the fold; vim's does not.** `parse_motion` maps `Key::Home`
+  to `Motion::LineStart`, the `0` motion. vim's `<Home>` is `nv_home` →
+  `nv_pipe`, which has no `'foldopen'` check (`zfj<Home>dd` deletes the whole
+  fold in nvim). Fixing it needs `<Home>` to be its own motion, or `GotoColumn`
+  with a forced count of 1.
+- **"Moved" stands in for each handler's success test.** Divergent edges, none
+  measured against nvim: a `b` / `B` whose only movement is the snap to a closed
+  fold's first row at buffer start (vim's `bck_word` then fails and opens
+  nothing; measured — `zfjbdd` at (0,2) leaves the fold closed in nvim, hjkl
+  opens it); a `t` that succeeds without moving, and an `n` whose only match is
+  under the cursor (vim succeeds and opens; hjkl does not move, so does not).
+- **Not implemented:** the `quickfix` and `tag` classes. `undo` predates this
+  and uses `reveal_row`, which does not open a fold whose FIRST row the cursor
+  is on — vim's `foldOpenCursor` would. Not measured.
+- **Visual mode is gated out entirely.** Measured: `zfjvl<Esc>dd` keeps the fold
+  closed in nvim. But nvim's `v/cc<CR>` DOES open a fold (`normal_search` has no
+  Visual check). Not comparable today: the hjkl oracle driver mishandles `/` in
+  Visual (`zfjkv/cc<CR><Esc>dd` gives garbage on the old and new binary alike).
+- **`k` off a closed fold keeps its column; nvim lands at column 0.** `jzfjkdw`
+  @ (0,3) on `"xx yy\nabc def\nghi\njkl\n"`: nvim deletes `xx `, hjkl `yy` — the
+  curswant nvim keeps on a closed fold line is 0. Same on the old binary; not
+  investigated.
+- **Observed in the oracle driver, not investigated:** `d'a` (operator + line
+  mark) does nothing in hjkl where nvim deletes linewise to the mark, and a
+  macro recorded with `/g<CR>` (`qq/g<CR>q…@q`) does not replay. Both reproduce
+  on the old binary; may be driver-only.
+- **Surprise, not a bug: `dfcase` and the corpus run nvim with different
+  `'startofline'`.** The nvim driver sets `startofline` only when a case pins
+  `shiftwidth` / `expandtab`; `dfcase` always pins them. Expectations copied
+  from `dfcase` output therefore need `shiftwidth = 4` / `expandtab = true` in
+  the case, or the cursor after `dd` disagrees (nvim's default `nosol` keeps the
+  column, hjkl follows `sol`).
+- **Two formatter tests panic on this Windows machine, green in CI.**
+  `app::tests::formatter::auto_indent_invokes_rustfmt_for_rs_files` and
+  `auto_indent_format_result_is_undoable` panic in `hjkl-syntax` `lib.rs`
+  (`cache_spans[offset..offset + len]`: "range end index 5 out of range for
+  slice of length 4") with rustfmt 1.10.0. Same on `6495e8bc`. The trigger is
+  local, but the slice itself is an unguarded panic in the render-cache path.
+
 ## 2. Blocked on platform access
 
 | Finding                                                      | Location                                                         | Blocker                                                                             |
@@ -3186,17 +3235,8 @@ verified its findings against nvim 0.12.5 directly.
 
 ### Findings — ranked
 
-1. **LOW — `'foldopen'` is unimplemented, and a column-0 proxy stands in for it
-   (measured 2026-09-16, while fixing the counted/word-end items that were
-   here).** nvim's default `'foldopen'` contains `hor`, so a horizontal motion
-   OPENS the fold as the command finishes: `zfjldd` deletes one row there,
-   `zfjlj` lands on row 1. hjkl has no `'foldopen'`, so `cursor_left_fold_open`
-   (`hjkl-vim` `vim/linewise.rs`) approximates it by treating column > 0 as "the
-   fold is open", which is why the corpus's column > 0 cases pass. Divergences
-   that remain from the missing option: `zfjldd` (hjkl deletes both fold rows),
-   `zfjlyy`, `zfjlj` (hjkl (2,1), nvim (1,1)), and a `d3e` whose INTERMEDIATE
-   landing sits at column > 0 of a fold when the operator started at column > 0
-   on a folded row. Implementing `'foldopen'` is what lets the proxy be deleted.
+None open. Finding 1 (`'foldopen'` unimplemented, with a column-0 proxy standing
+in) shipped 2026-10-18; what it left open is §1.15.
 
 ### Refinement of an already-open item (not counted)
 

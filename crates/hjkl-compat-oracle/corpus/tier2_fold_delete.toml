@@ -202,13 +202,10 @@ expected_buffer = "bc\n"
 expected_mode = "normal"
 expected_register = ['"', "a"]
 
-# At column > 0 of a closed fold, nvim keeps normal charwise semantics. The
-# reason is `'foldopen'`, whose default contains `hor`: the `l` that moved to
-# column 1 OPENED the fold as it finished, so the `x` / `dw` that follows is
-# looking at an open fold. hjkl has no `'foldopen'` yet and leaves the fold
-# closed, so it stands column 0 in for "nothing has opened this fold yet"
-# (`cursor_left_fold_open`); these two cases are what pins that. Within ONE
-# command the fold does stay closed in nvim too — see `3e` below.
+# After `l`, the `x` / `dw` that follows is charwise. The reason is
+# `'foldopen'`, whose default contains `hor`: the `l` that moved to column 1
+# OPENED the fold as it finished, so the operator is looking at an open fold.
+# Within ONE command the fold does stay closed — see `3e` below.
 [[cases]]
 name = "x_at_col1_on_closed_fold_stays_charwise"
 initial_buffer = "abc\ndef\nghi\n"
@@ -229,6 +226,295 @@ foldmethod = "manual"
 expected_buffer = "a\ndef\nghi\n"
 expected_mode = "normal"
 expected_register = ['"', "bc"]
+
+# ── `'foldopen'` ─────────────────────────────────────────────────────────────
+#
+# nvim's default `'foldopen'` is `block,hor,mark,percent,quickfix,search,tag,
+# undo`: once a command TYPED in Normal mode finishes, these classes open every
+# fold holding the cursor row. Not under an operator, not in Visual, and not
+# while `@q` replays keys. A `hor` motion has to succeed — a failed `l` opens
+# nothing — except `0` / `^` / `$`, which succeed without moving. `g_`, `|`,
+# `ge` and the vertical motions are in no class.
+
+[[cases]]
+name = "foldopen_hor_l_then_dd_deletes_one_row"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "zfjldd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "def\nghi\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc\n"]
+
+[[cases]]
+name = "foldopen_hor_l_then_j_moves_into_the_opened_fold"
+initial_buffer = "abc\ndef\nghi\n"
+initial_cursor = [0, 0]
+keys = "zfjlj"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "abc\ndef\nghi\n"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+expected_register = ['"', ""]
+
+[[cases]]
+name = "foldopen_hor_0_opens_without_moving"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = "zfj0dd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "b\nc\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "a\n"]
+
+[[cases]]
+name = "foldopen_hor_failed_l_leaves_the_fold_closed"
+initial_buffer = "a\nb\nc\n"
+initial_cursor = [0, 0]
+keys = "zfjldd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "c\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "a\nb\n"]
+
+[[cases]]
+name = "foldopen_g_underscore_is_not_hor"
+initial_buffer = "a(c def\nghi)\njkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfjg_dd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "a(c def\nghi)\n"]
+
+[[cases]]
+name = "foldopen_bar_is_not_hor"
+initial_buffer = "a(c def\nghi)\njkl\nmno\n"
+initial_cursor = [0, 0]
+keys = "zfj3|dd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "a(c def\nghi)\n"]
+
+[[cases]]
+name = "foldopen_word_landing_on_a_fold_opens_it"
+initial_buffer = "xx\naa\ncc dd\nee\nff\n"
+initial_cursor = [2, 0]
+keys = "zfjkwdd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "xx\naa\nee\nff\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+expected_register = ['"', "cc dd\n"]
+
+[[cases]]
+name = "foldopen_block_paragraph"
+initial_buffer = "aa\n\nbb\ncc\n"
+initial_cursor = [1, 0]
+keys = "zfjgg}dd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "aa\nbb\ncc\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', "\n"]
+
+[[cases]]
+name = "foldopen_block_section"
+initial_buffer = "x\ny\n{\nq\nr\n"
+initial_cursor = [2, 0]
+keys = "zfjgg]]dd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "x\ny\nq\nr\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+expected_register = ['"', "{\n"]
+
+[[cases]]
+name = "foldopen_percent_into_the_fold_body"
+initial_buffer = "x (\na\nb )\nc\n"
+initial_cursor = [1, 0]
+keys = "zfjk$%dd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "x (\na\nc\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+expected_register = ['"', "b )\n"]
+
+[[cases]]
+name = "foldopen_search_star"
+initial_buffer = "x cc\ncc\nb\n"
+initial_cursor = [1, 0]
+keys = "zfjk$*dd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "x cc\nb\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', "cc\n"]
+
+[[cases]]
+name = "foldopen_search_slash_commit"
+initial_buffer = "cc x\ny\ncc\nq\nr\n"
+initial_cursor = [2, 0]
+keys = "zfjgg/cc<CR>dd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "cc x\ny\nq\nr\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+expected_register = ['"', "cc\n"]
+
+[[cases]]
+name = "foldopen_search_n"
+initial_buffer = "cc x\ny\ncc\nq\nr\n"
+initial_cursor = [2, 0]
+keys = "zfjgg*ggndd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "cc x\ny\nq\nr\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+expected_register = ['"', "cc\n"]
+
+[[cases]]
+name = "foldopen_mark_jump"
+initial_buffer = "xx (\ncc dd\nee )\nff\ngg hh\n"
+initial_cursor = [1, 0]
+keys = "mazfjjj'add"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "xx (\nee )\nff\ngg hh\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', "cc dd\n"]
+
+[[cases]]
+name = "foldopen_not_in_visual"
+initial_buffer = "a(c def\nghi)\njkl\nmno\n"
+initial_cursor = [0, 2]
+keys = "zfjvl<Esc>dd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "jkl\nmno\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "a(c def\nghi)\n"]
+
+[[cases]]
+name = "foldopen_not_during_macro_replay"
+initial_buffer = "abc\nghi\njkl\n"
+initial_cursor = [0, 0]
+keys = "qqlq0zfj@qdd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "jkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc\nghi\n"]
+
+[[cases]]
+name = "foldopen_typed_l_before_replay_still_opens"
+initial_buffer = "abc\nghi\njkl\n"
+initial_cursor = [0, 0]
+keys = "qqlq0zfjl@qdd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "ghi\njkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc\n"]
+
+# ── A closed fold under the operator, without `'foldopen'` ───────────────────
+#
+# With nothing having opened it, a fold the cursor sits in at column > 0 is
+# still closed: a FORWARD charwise operator starts at its column 0 and takes it
+# whole. A BACKWARD charwise one (`db`, `d0`) is left exactly as the motion
+# made it — nvim widens backward ranges over folds only when they are linewise.
+
+[[cases]]
+name = "x_at_col2_of_a_closed_fold_takes_the_whole_fold"
+initial_buffer = "abc def\nghi\njkl\n"
+initial_cursor = [0, 2]
+keys = "zfjx"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "jkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc def\nghi\n"]
+
+[[cases]]
+name = "dw_at_col2_of_a_closed_fold_starts_at_col0"
+initial_buffer = "abc def\nghi\njkl\n"
+initial_cursor = [0, 2]
+keys = "zfjdw"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "jkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "abc def\nghi\n"]
+
+[[cases]]
+name = "db_from_inside_a_closed_fold_stays_charwise"
+initial_buffer = "xx\nabc def\nghi\njkl\n"
+initial_cursor = [1, 2]
+keys = "zfjdb"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "c def\nghi\njkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "xx\nab"]
+
+[[cases]]
+name = "d0_from_inside_a_closed_fold_stays_charwise"
+initial_buffer = "xx\nabc def\nghi\njkl\n"
+initial_cursor = [1, 2]
+keys = "zfjd0"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "xx\nc def\nghi\njkl\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', "ab"]
 
 # ── Word MOTIONS over a closed fold ───────────────────────────────────────────
 #

@@ -627,11 +627,24 @@ impl crate::View {
     /// target line instead of stranding the cursor on a hidden row.
     /// Returns `true` if any fold was opened.
     pub fn reveal_row(&mut self, row: usize) -> bool {
+        self.open_folds_where(|f| f.hides(row))
+    }
+
+    /// Open every closed fold that contains `row`, its marker line included
+    /// — vim's `foldOpenCursor()`, which `'foldopen'` runs after a motion.
+    /// Unlike [`Self::reveal_row`], a cursor sitting on a closed fold's first
+    /// row opens that fold too; unlike `zO`, nested folds that do not contain
+    /// `row` stay as they are. Returns `true` if any fold was opened.
+    pub fn open_folds_containing(&mut self, row: usize) -> bool {
+        self.open_folds_where(|f| f.closed && f.contains(row))
+    }
+
+    fn open_folds_where(&mut self, pred: impl Fn(&Fold) -> bool) -> bool {
         let changed = {
             let mut c = self.content_lock_mut();
             let mut any = false;
             for f in c.folds.iter_mut() {
-                if f.hides(row) {
+                if pred(f) {
                     f.closed = false;
                     any = true;
                 }
@@ -961,6 +974,21 @@ mod tests {
         let mut buf = b();
         buf.add_fold(3, 1, true);
         assert!(buf.folds().is_empty());
+    }
+
+    #[test]
+    fn open_folds_containing_opens_the_marker_row_fold_and_nothing_else() {
+        let mut buf = b();
+        buf.add_fold(0, 4, true);
+        buf.add_fold(0, 1, true);
+        buf.add_fold(3, 4, true);
+        // `reveal_row` leaves a fold whose marker line the row is on.
+        assert!(!buf.reveal_row(0));
+        assert!(buf.open_folds_containing(0));
+        for f in buf.folds() {
+            assert_eq!(f.closed, !f.contains(0), "{f:?}");
+        }
+        assert!(!buf.open_folds_containing(0));
     }
 
     #[test]
@@ -1630,7 +1658,7 @@ mod tests {
         }
         /// (name, setup, mutation-that-must-bump)
         type Case = (&'static str, fn(&mut View), fn(&mut View));
-        let cases: [Case; 13] = [
+        let cases: [Case; 14] = [
             ("add_fold", none, |b| b.add_fold(1, 3, false)),
             ("set_auto_folds", none, |b| b.set_auto_folds(&[(1, 3)], 99)),
             ("remove_fold_at", open_fold, |b| {
@@ -1650,6 +1678,9 @@ mod tests {
             ("clear_all_folds", open_fold, View::clear_all_folds),
             ("reveal_row", closed_fold, |b| {
                 assert!(b.reveal_row(2));
+            }),
+            ("open_folds_containing", closed_fold, |b| {
+                assert!(b.open_folds_containing(1));
             }),
             ("invalidate_folds_in_range", closed_fold, |b| {
                 b.invalidate_folds_in_range(2, 2);

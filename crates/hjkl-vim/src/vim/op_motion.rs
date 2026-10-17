@@ -157,7 +157,7 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     //
     // `Comment` is dispatched to `toggle_comment_range` below, so it keeps its
     // normal motion-driven path.
-    if op != Operator::Comment && !cursor_left_fold_open(ed.buffer(), cursor_restore) {
+    if op != Operator::Comment {
         let (top, bot) = order(start, end);
         if kind == RangeKind::Linewise {
             // Linewise: both edges grow to cover every closed fold the row
@@ -169,9 +169,21 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
             } else {
                 (start, end) = (new_bot, new_top);
             }
-        } else {
-            let (_, fold_end) = expand_linewise_over_closed_folds(ed.buffer(), bot.0, bot.0);
-            if fold_end > bot.0 {
+        } else if start < end {
+            // Charwise, only when the motion went FORWARD: a backward or
+            // zero-length charwise motion keeps its range as-is (`db` / `d0`
+            // from inside a closed fold delete just the characters before
+            // the cursor). The near edge goes to column 0 of the fold it sits
+            // in, so `x` / `dw` from column 2 of a closed fold take the fold
+            // from its first character.
+            let start_fold = expand_linewise_over_closed_folds(ed.buffer(), start.0, start.0);
+            if start_fold != (start.0, start.0) {
+                start = (start_fold.0, 0);
+            }
+            // The far edge grows unless it is an exclusive column 0, which
+            // covers nothing on its row.
+            let (_, fold_end) = expand_linewise_over_closed_folds(ed.buffer(), end.0, end.0);
+            if fold_end > end.0 && (end.1 > 0 || kind == RangeKind::Inclusive) {
                 // Vim parks the endpoint on the fold's last row at
                 // `strlen(line)`, one past its final character; the equivalent
                 // hjkl range is that final character, INCLUSIVE. The
@@ -180,11 +192,7 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
                 // `cw` keep the charwise one.
                 let last_col = buf_line_chars(ed.buffer(), fold_end).saturating_sub(1);
                 kind = RangeKind::Inclusive;
-                if start == top {
-                    end = (fold_end, last_col);
-                } else {
-                    start = (fold_end, last_col);
-                }
+                end = (fold_end, last_col);
             }
         }
     }
@@ -743,7 +751,9 @@ mod fold_charwise_tests {
     #[test]
     fn dw_at_col1_on_closed_fold_stays_charwise() {
         let mut ed = make_editor("abc\ndef\nghi\n", Some((0, 1)));
-        ed.jump_cursor(0, 1);
+        // `l` opens the fold (`'foldopen'` `hor`), which is what keeps the
+        // `dw` charwise; a fold still closed under it would go whole.
+        crate::vim::execute_motion(&mut ed, Motion::Right, 1);
         apply_op_with_motion(&mut ed, Operator::Delete, &Motion::WordFwd, 1);
         assert_eq!(full_buffer(&ed), "a\ndef\nghi\n");
         assert_eq!(ed.yank(), "bc");

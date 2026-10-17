@@ -8,6 +8,25 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- The `hor`, `block`, `percent`, `search` and `mark` classes of vim's default
+  `'foldopen'`: a Normal-mode command typed from the keyboard now opens the
+  closed fold the cursor ends up in, as nvim does. That covers `h` / `l` / `0` /
+  `^` / `$` / `f` / `t` / `;` / `,` and the word motions, `{` / `}` / `(` / `)`
+  / `[[` / `]]` / `[(` / `])`, `%`, `/` / `?` / `n` / `N` / `*` / `#`, and `'a`
+  / `` `a ``. Not in Visual mode, not under an operator, and not while `@q`
+  replays keys. So `zfjldd` deletes one line rather than the whole fold, and
+  `zfjlj` moves into the opened fold.
+
+### Fixed
+
+- A forward charwise operator started inside a closed fold takes the fold whole
+  from any column: `x` / `dw` at column 2 used to delete characters, because
+  column 0 was standing in for "the fold is still closed". A backward charwise
+  one (`db`, `d0`) no longer grows over the fold; nvim widens backward ranges
+  over folds only when they are linewise.
+
 ## [0.42.2] - 2026-10-11
 
 ### Added

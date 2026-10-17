@@ -6,6 +6,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- `View::open_folds_containing(row)` opens every closed fold containing `row`,
+  its first line included — vim's `foldOpenCursor()`. `reveal_row` still opens
+  only the folds that hide the row.
+
 ## [0.41.0] - 2026-08-04
 
 ### Fixed

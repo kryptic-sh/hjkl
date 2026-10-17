@@ -8,7 +8,20 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Added
+
+- vim's default `'foldopen'`: after a Normal-mode motion of the `hor`, `block`,
+  `percent`, `search` or `mark` class, the closed folds holding the cursor row
+  open (`foldopen_cursor`). Gated as vim gates it — not in Visual, not under an
+  operator, not while `@q` replays.
+
 ### Fixed
+
+- A forward charwise operator started inside a closed fold takes the fold whole
+  from any column, and a backward charwise one (`db`, `d0`) is left as the
+  motion made it. The column-0 proxy for "the fold is still closed"
+  (`cursor_left_fold_open`) is gone, along with the fold-blind word-motion
+  provider it selected.
 
 - `cw` / `cW` on the last character of a word changes only that character, as
   vim's `end_word(stop)` does; it previously ran on to the next word's end,
