@@ -197,3 +197,90 @@ expected_buffer = "    one two three\nfour five six seven\n"
 expected_mode = "normal"
 textwidth = 20
 autoindent = false
+
+# ── Blank lines and the cursor ────────────────────────────────────────────────
+#
+# A blank line ends a paragraph and is left exactly as it is, whitespace and
+# all. The cursor ends on the LAST line of the range, a trailing blank line
+# included; when the exclusive-motion adjustment shrank the range (`gq}`,
+# `gq{`), on the line after it. On a whitespace-only line it lands on the last
+# char.
+
+[[cases]]
+name = "reflow_keeps_a_whitespace_only_line"
+initial_buffer = "aa bb\n  \ncc dd\n"
+initial_cursor = [0, 0]
+keys = "gqG"
+expected_buffer = "aa bb\n  \ncc dd\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 20
+
+[[cases]]
+name = "reflow_cursor_ends_on_a_trailing_blank_line"
+initial_buffer = "aa bb\n\ncc\n"
+initial_cursor = [0, 0]
+keys = "gqap"
+expected_buffer = "aa bb\n\ncc\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 20
+
+[[cases]]
+name = "reflow_gq_brace_lands_after_the_adjusted_range"
+initial_buffer = "aa bb cc dd ee ff gg hh\n\ncc\n"
+initial_cursor = [0, 0]
+keys = "gq}"
+expected_buffer = "aa bb cc dd ee ff gg\nhh\n\ncc\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 20
+
+[[cases]]
+name = "reflow_gq_back_brace_lands_after_the_adjusted_range"
+initial_buffer = "aa bb\n\ncc\n"
+initial_cursor = [2, 0]
+keys = "gq{"
+expected_buffer = "aa bb\n\ncc\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 20
+
+[[cases]]
+name = "reflow_cursor_on_a_whitespace_only_last_line"
+initial_buffer = "aa\n   \n"
+initial_cursor = [0, 0]
+keys = "gqj"
+expected_buffer = "aa\n   \n"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 20
+
+[[cases]]
+name = "reflow_gw_keeps_the_column_on_a_whitespace_only_line"
+initial_buffer = "aa\n   \nbb\n"
+initial_cursor = [1, 2]
+keys = "gwj"
+expected_buffer = "aa\n   \nbb\n"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 20
+

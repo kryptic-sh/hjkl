@@ -34,6 +34,12 @@ patch bumps.
   `\r`, which the rope counts as a line break but the highlighter's row table
   did not, so rendering the viewport sliced past the end of its span cache and
   panicked. Any lone `\r`, VT, FF, NEL, LS or PS line separator did the same.
+- **`I` on a line of only whitespace inserts after the whitespace**, as in vim;
+  it inserted before it. On such a line `^`, `_`, `+`, `-`, `<CR>`, `G`, `dd`
+  and `>>` now land on its last char rather than column 0.
+- **`gq` keeps whitespace-only lines and puts the cursor where vim does**: on
+  the last line of the range, a trailing blank line included, or the line after
+  `gq}`'s range.
 - `gq` / `gw` with `:set noautoindent` no longer indent the lines they open;
   only `'autoindent'` (on by default) copies the paragraph's indent onto them.
 - **Windows: a failed clipboard write no longer wipes the clipboard.** The

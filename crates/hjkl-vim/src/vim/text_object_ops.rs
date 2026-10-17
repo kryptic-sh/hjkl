@@ -103,7 +103,7 @@ pub fn text_object_around_tag_bridge<H: hjkl_engine::types::Host>(
 /// starts a new line, and the gap following the last word is kept verbatim.
 ///
 /// Paragraphs are runs of non-blank lines separated by blank lines (which are
-/// preserved as empty output lines). Joining a paragraph follows nvim's
+/// output unchanged, whitespace included). Joining a paragraph follows nvim's
 /// `do_join` rule: the next line's leading whitespace is dropped, and a single
 /// space separates two lines unless the previous line already ends in
 /// whitespace. The first line's leading whitespace is the paragraph "leader";
@@ -117,8 +117,10 @@ pub fn greedy_wrap(original: &[String], opts: WrapOpts) -> Vec<String> {
     let mut paragraph: Vec<String> = Vec::new();
     for line in original {
         if line.trim().is_empty() {
+            // A blank line ends the paragraph and is left exactly as it is —
+            // nvim keeps a whitespace-only line's whitespace.
             flush_paragraph(&mut paragraph, &mut wrapped, opts);
-            wrapped.push(String::new());
+            wrapped.push(line.clone());
         } else {
             paragraph.push(line.clone());
         }
@@ -332,8 +334,8 @@ fn wrap_tokens_with_map(
 /// Greedy word-wrap the rows in `[top, bot]` to `settings.textwidth`,
 /// preserving interior and trailing whitespace (see [`greedy_wrap`]).
 /// Splits on blank-line boundaries so paragraph structure is preserved.
-/// Cursor lands at the first non-blank of the last non-blank reflowed line
-/// (nvim's `gq` convention).
+/// Cursor lands at the first non-blank of the last reflowed line (nvim's `gq`
+/// convention).
 pub fn reflow_rows<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
@@ -349,13 +351,10 @@ pub fn reflow_rows<H: hjkl_engine::types::Host>(
     let original: Vec<String> = (top..=bot).map(|r| rope_line_to_str(&rope, r)).collect();
     let wrapped = greedy_wrap(&original, opts);
 
-    // vim leaves the cursor on the last NON-BLANK line of the reflowed range
-    // (a trailing blank from `ap` etc. is not counted).
-    let last_offset = wrapped
-        .iter()
-        .rposition(|l| !l.trim().is_empty())
-        .unwrap_or(0);
-    let last_row = top + last_offset;
+    // vim leaves the cursor on the LAST line of the reflowed range, a trailing
+    // blank line included (`gqap`, `gq}` and `gqj` over `"aa bb\n\ncc"` all land
+    // on row 1 in nvim 0.12.5).
+    let last_row = top + wrapped.len().saturating_sub(1);
 
     // Splice the reflowed rows back with ONE bounded Replace — the row count
     // changes, so a per-row edit can't express it. The span runs through the
@@ -463,8 +462,11 @@ pub fn reflow_keep_cursor(
     while before_i < before_lines.len() {
         if before_lines[before_i].trim().is_empty() {
             if before_i == relative_row {
-                // Cursor on a blank line: maps to the matching blank output row.
-                return (top + after_i, 0);
+                // Cursor on a blank line: maps to the matching output row,
+                // which is the same line, so a whitespace-only one keeps the
+                // cursor's column.
+                let last = before_lines[before_i].chars().count().saturating_sub(1);
+                return (top + after_i, cursor_col.min(last));
             }
             before_i += 1;
             after_i += 1;

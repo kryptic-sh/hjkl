@@ -117,7 +117,9 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // its own line, the whole range promotes to linewise. This is what makes
     // `d}` from column 0 delete its paragraph linewise (so `y}P` pastes above
     // like nvim) while `d}` from mid-line stops at end-of-line instead of
-    // eating the line break.
+    // eating the line break. Vim records that it did this (`end_adjusted`);
+    // `gq` reads it below.
+    let mut end_adjusted = false;
     if kind == RangeKind::Exclusive {
         let forward = end.0 >= start.0;
         let (top, bot) = if forward { (start, end) } else { (end, start) };
@@ -144,6 +146,7 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
             } else {
                 start = new_bot;
             }
+            end_adjusted = true;
         }
     }
     // Vim's `do_pending_operator()`: "Include folded lines completely." An
@@ -238,6 +241,17 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     }
 
     run_operator_over_range(ed, op, start, end, kind);
+
+    // vim's `op_format`: when the adjustment above pulled the range's end back
+    // a line, `gq` leaves the cursor on the line after the formatted text —
+    // `gq}` lands on the blank line the motion stopped at.
+    if op == Operator::Reflow && end_adjusted {
+        let row = ed.cursor().0;
+        if row < last_content_row(ed) {
+            buf_set_cursor_rc(ed.buffer_mut(), row + 1, 0);
+            move_first_non_whitespace(ed);
+        }
+    }
 }
 /// Position of the last non-blank char in the half-open range `[start, end)`,
 /// scanning rows from the bottom up. Used to clamp `dw`/`dW` at end-of-line

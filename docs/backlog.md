@@ -1013,14 +1013,27 @@ fail on the parent commit, the other 6 are negative guards).
   closed in nvim. But nvim's `v/cc<CR>` DOES open a fold (`normal_search` has no
   Visual check). Not comparable today: the hjkl oracle driver mishandles `/` in
   Visual (`zfjkv/cc<CR><Esc>dd` gives garbage on the old and new binary alike).
-- **`k` off a closed fold keeps its column; nvim lands at column 0.** `jzfjkdw`
-  @ (0,3) on `"xx yy\nabc def\nghi\njkl\n"`: nvim deletes `xx `, hjkl `yy` — the
-  curswant nvim keeps on a closed fold line is 0. Same on the old binary; not
-  investigated.
-- **Observed in the oracle driver, not investigated:** `d'a` (operator + line
-  mark) does nothing in hjkl where nvim deletes linewise to the mark, and a
-  macro recorded with `/g<CR>` (`qq/g<CR>q…@q`) does not replay. Both reproduce
-  on the old binary; may be driver-only.
+- **After `zf`, a vertical motion takes curswant 0; hjkl keeps the column.** On
+  `"xx yy\nabc def\nghi\njkl\n"` @ (0,3), measured with `dfcase`: `jzfjk` lands
+  (0,0) in nvim and (0,3) in hjkl, and so do `jzFk`, `jzfjj` (3,0), and even
+  `jzfjzok` / `jzfjzRk`, where the fold is open again by the time `k` runs.
+  `jyjk` and `jzfjzo$k` agree. The likely model — not confirmed in nvim's
+  source: an operator leaves `w_set_curswant` pending, the next vertical motion
+  sets curswant from `w_virtcol`, and vim holds `w_virtcol` at 0 while the
+  cursor line is folded. That `zo` before `k` still gives 0 suggests a
+  `w_virtcol` not recomputed between keys of one headless input batch, so
+  interactive nvim may differ there. hjkl has no "pending curswant" state to
+  hang this on; the closed-fold half (`jzfjk`) is the stable case to match.
+- **Operator + mark motion (`d'a`, ``y`a``, `c'a`) is not implemented.** nvim
+  deletes linewise to the mark; hjkl does nothing. Neither input path has it:
+  `handle_after_op` (`hjkl-vim` `normal.rs`) has no `'` / `` ` `` arm, so the
+  key falls through `parse_motion` and is dropped, and `pending.rs`'s
+  `PendingState` has no operator-then-mark state. Implementing it means both
+  paths: `'` linewise, `` ` `` charwise exclusive, through
+  `run_operator_over_range`.
+- **Observed in the oracle driver, not investigated:** a macro recorded with
+  `/g<CR>` (`qq/g<CR>q…@q`) does not replay. Reproduces on the old binary; may
+  be driver-only.
 - **Surprise, not a bug: `dfcase` and the corpus run nvim with different
   `'startofline'`.** The nvim driver sets `startofline` only when a case pins
   `shiftwidth` / `expandtab`; `dfcase` always pins them. Expectations copied
@@ -1036,25 +1049,29 @@ fail on the parent commit, the other 6 are negative guards).
   not investigated; installing CRLF formatter output raw matches how hjkl keeps
   a CRLF file, so it is not itself a defect.
 
-### 1.16 `gq` divergences left after the `'autoindent'` fix (2026-10-18)
+### 1.16 `gq` divergences left after the 2026-10-18 reflow fixes
 
 `difffuzz 2000 424242` reported 39 divergences involving `gq`. Replayed with
-`dfcase … 20` (the fuzzer's `textwidth`): 5 agreed before the fix, 16 after,
-none regressed. Patterns among the 23 left, each seen in at least one case, none
-investigated:
+`dfcase … 20` (the fuzzer's `textwidth`): 5 agreed with nvim before the
+`'autoindent'` fix, 16 after it, 19 after the blank-line and cursor fixes; none
+regressed at either step. Patterns among the 20 left, each seen in at least one
+case, none investigated:
 
-- **Cursor after a range ending on a blank line.** `gq}` on
-  `"'A-B'.[foo]  (bar).\"a\"\n\n{it's}"` @ (0,5): nvim leaves the cursor on the
-  blank row 2, hjkl on row 1. `reflow_rows` deliberately skips a trailing blank
-  ("a trailing blank from `ap` etc. is not counted"), so `gq}` and `gqap` may
-  want different rules — measure both before changing it.
 - **A tab indent is retabbed.** `(gq}` on `"\ta"` @ (0,1): nvim rewrites the
   indent as four spaces (`expandtab`, `shiftwidth=4`), hjkl keeps the tab.
-- **A whitespace-only line survives.** `O <Esc>gqq` on `"'foo'  bar.(A-B)"`:
-  nvim keeps the `" "` line, hjkl empties it (it treats the line as a blank
-  paragraph separator).
 - **Insert-mode auto-wrap at `textwidth`** (`gq}Aab cd`) — hjkl does not wrap
   while typing; the fuzzer pins `textwidth` only for `gq` cases for that reason.
+
+Seen while measuring, not `gq`:
+
+- **`.` after `I` leaves the cursor one column right.** `jIx<Esc>j.` on
+  `"abc\n  q\nxyz\n"`: the buffers agree, nvim's cursor is (2,0) and hjkl's
+  (2,1). Same on the parent commit, so not caused by `move_to_insert_start`.
+- **`gI` is not implemented** (insert at column 0, `:h gI`); hjkl ignores it.
+- **"Blank" is any Unicode whitespace to hjkl, only space and tab to vim.**
+  `move_first_non_blank` and `greedy_wrap` test `char::is_whitespace`, while
+  vim's `skipwhite` skips only `' '` and `'\t'`, so a line led by U+3000 or
+  U+00A0 differs. Not measured.
 
 ## 2. Blocked on platform access
 

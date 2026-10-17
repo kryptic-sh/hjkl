@@ -206,13 +206,16 @@ pub fn move_line_start<B: Cursor + Query>(buf: &mut B) {
     write_cursor(buf, Position::new(row, 0));
 }
 
-/// `^` — first non-blank column. On a blank line it lands on 0.
+/// `^` — first non-blank column. On a row that is all whitespace it lands on
+/// the last char, and on an empty row on 0: vim's
+/// `beginline(BL_WHITE | BL_FIX)`, which never leaves the cursor past the end.
 pub fn move_first_non_blank<B: Cursor + Query>(buf: &mut B) {
     let row = read_cursor(buf).row;
-    let col = read_line(buf, row)
+    let line = read_line(buf, row);
+    let col = line
         .chars()
         .position(|c| !c.is_whitespace())
-        .unwrap_or(0);
+        .unwrap_or_else(|| last_col(&line));
     write_cursor(buf, Position::new(row, col));
 }
 

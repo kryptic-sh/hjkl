@@ -297,7 +297,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             ed.push_undo();
             match entry {
                 InsertEntry::I => {}
-                InsertEntry::ShiftI => move_first_non_whitespace(ed),
+                InsertEntry::ShiftI => move_to_insert_start(ed),
                 InsertEntry::A => {
                     hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
                 }

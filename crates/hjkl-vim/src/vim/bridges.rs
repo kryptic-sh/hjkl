@@ -19,12 +19,13 @@ pub fn enter_insert_i_bridge<H: hjkl_engine::types::Host>(
 ) {
     begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::I));
 }
-/// `I` — move to first non-blank then begin Insert. `count` stored for replay.
+/// `I` — move to the insert start (see [`move_to_insert_start`]) then begin
+/// Insert. `count` stored for replay.
 pub fn enter_insert_shift_i_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
-    move_first_non_whitespace(ed);
+    move_to_insert_start(ed);
     begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::ShiftI));
 }
 /// `a` — advance past the cursor char then begin Insert. `count` for replay.

@@ -17,6 +17,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `motions::move_first_non_blank` on a row that is all whitespace lands on its
+  last char, as vim's `beginline(BL_WHITE | BL_FIX)` does, instead of column 0.
+  An empty row still lands on 0. The motions built on it move with it; `^`, `_`,
+  `+`, `-`, `<CR>`, `G`, `L` and `M` were measured against nvim 0.12.5.
 - Counted word operators over a closed fold apply the count on top of the fold
   instead of stopping at its end (`2dw`, `2yw`, `2de`), and `db` / `d0` at a
   fold's start are no-ops, as in vim.

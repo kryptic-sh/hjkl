@@ -302,3 +302,58 @@ initial_cursor = [0, 3]
 keys = "e"
 expected_buffer = "foo  bar\nbaz\n"
 expected_cursor = [0, 7]
+
+# ── First non-blank on an all-blank line ─────────────────────────────────────
+#
+# vim's `beginline(BL_WHITE | BL_FIX)`: with no non-blank on the line, the
+# cursor lands on its last char, never on column 0. `I` is the one user
+# without `BL_FIX`, so it inserts after the whitespace.
+
+[[cases]]
+name = "first_non_blank_on_an_all_blank_line_is_its_last_char"
+initial_buffer = "abc\n    \nxyz\n"
+initial_cursor = [0, 1]
+keys = "j^"
+expected_buffer = "abc\n    \nxyz\n"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "first_non_blank_line_motion_on_an_all_blank_line"
+initial_buffer = "abc\n    \nxyz\n"
+initial_cursor = [0, 1]
+keys = "<CR>"
+expected_buffer = "abc\n    \nxyz\n"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dd_onto_an_all_blank_line_lands_on_its_last_char"
+initial_buffer = "abc\n    \nxyz\n"
+initial_cursor = [0, 1]
+keys = "dd"
+expected_buffer = "    \nxyz\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "insert_I_on_an_all_blank_line_goes_after_the_whitespace"
+initial_buffer = "abc\n    \nxyz\n"
+initial_cursor = [0, 1]
+keys = "jIx<Esc>"
+expected_buffer = "abc\n    x\nxyz\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

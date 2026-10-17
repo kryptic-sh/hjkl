@@ -17,6 +17,13 @@ and this project adheres to
 
 ### Fixed
 
+- On a line that is all whitespace, `^`, `_`, `+`, `-`, `<CR>`, `G`, `dd` and
+  `>>` land on its last char, as in vim, and `I` inserts after the whitespace
+  rather than before it (`move_to_insert_start`).
+- `gq` keeps a whitespace-only line as it is instead of emptying it, and leaves
+  the cursor on the last line of the range, a trailing blank line included — or,
+  for `gq}` / `gq{`, whose range the exclusive-motion rule shrank, on the line
+  after it. `gw` with the cursor on a whitespace-only line keeps its column.
 - `gq` / `gw` under `noautoindent` start the lines they open at column 0, as vim
   does; they copied the paragraph's indent onto every line regardless.
   `'autoindent'` (hjkl's default) keeps the indent. The wrap now takes a

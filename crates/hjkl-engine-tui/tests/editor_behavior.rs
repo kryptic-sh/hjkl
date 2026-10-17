@@ -936,15 +936,16 @@ fn apply_motion_first_non_blank_lands_on_first_non_blank() {
 }
 
 #[test]
-fn apply_motion_first_non_blank_on_blank_line_lands_at_zero() {
-    // "   \n": all whitespace — `^` must land at col 0.
+fn apply_motion_first_non_blank_on_blank_line_lands_on_its_last_char() {
+    // "   \n": all whitespace — `^` lands on the last char, as vim's
+    // `beginline(BL_WHITE | BL_FIX)` does (nvim 0.12.5: `j^` on "    " → col 3).
     let mut e = fresh_editor("   \n");
-    e.jump_cursor(0, 2);
+    e.jump_cursor(0, 0);
     e.apply_motion(hjkl_engine::MotionKind::FirstNonBlank, 1);
     assert_eq!(
         e.cursor(),
-        (0, 0),
-        "FirstNonBlank on blank line stays at col 0"
+        (0, 2),
+        "FirstNonBlank on an all-whitespace line lands on its last char"
     );
 }
 

@@ -912,6 +912,17 @@ pub fn move_first_non_whitespace<H: hjkl_engine::types::Host>(
     ed.sync_buffer_content_from_textarea();
     hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
 }
+/// Where `I` starts inserting: before the first non-blank, or — on a row that
+/// is all whitespace — after it. That is vim's `beginline(BL_WHITE)` without
+/// the `BL_FIX` that keeps `^` on the row's last char.
+pub fn move_to_insert_start<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
+    move_first_non_whitespace(ed);
+    let row = ed.cursor().0;
+    let line = buf_line(ed.buffer(), row).unwrap_or_default();
+    if !line.is_empty() && line.chars().all(char::is_whitespace) {
+        buf_set_cursor_rc(ed.buffer_mut(), row, line.chars().count());
+    }
+}
 pub fn find_char_on_line<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     ch: char,
