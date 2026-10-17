@@ -17,6 +17,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A linewise delete whose motion went upward (`dk`, `d'a`) drops the marks,
+  jumplist entries and folds on the rows it removes. `mutate_edit` rebased them
+  from the cursor row, which is the range's bottom row in that case, so the
+  marks on the top row survived the delete and the band was off by the motion's
+  length.
 - `motions::move_first_non_blank` on a row that is all whitespace lands on its
   last char, as vim's `beginline(BL_WHITE | BL_FIX)` does, instead of column 0.
   An empty row still lands on 0. The motions built on it move with it; `^`, `_`,

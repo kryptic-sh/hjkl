@@ -8,7 +8,19 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+
+- `PendingState::OpMark`, `EngineCmd::ApplyOpMark` and the required
+  `VimEditorExt::apply_op_mark` are new, for an operator over a mark motion. A
+  host matching `Outcome::Commit(EngineCmd::..)` exhaustively must handle
+  `ApplyOpMark` by calling `apply_op_mark`, as `hjkl`'s chord routing does.
+
 ### Added
+
+- Operator + mark motion: `d'a` / `y'a` / `c'a` / `>'a` … run linewise to mark
+  `a`'s row, ``d`a`` … charwise exclusive to its position, on both the engine
+  FSM and the keymap path, and `.` repeats them. An unset mark aborts, as in
+  vim.
 
 - vim's default `'foldopen'`: after a Normal-mode motion of the `hor`, `block`,
   `percent`, `search` or `mark` class, the closed folds holding the cursor row
@@ -17,6 +29,8 @@ and this project adheres to
 
 ### Fixed
 
+- A same-buffer uppercase mark jump (`'A`) opens a closed fold it lands in, like
+  the lowercase ones; it had its own copy of the jump that missed `'foldopen'`.
 - On a line that is all whitespace, `^`, `_`, `+`, `-`, `<CR>`, `G`, `dd` and
   `>>` land on its last char, as in vim, and `I` inserts after the whitespace
   rather than before it (`move_to_insert_start`).

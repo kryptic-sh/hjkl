@@ -77,6 +77,13 @@ pub enum PendingState {
         op: crate::operator::OperatorKind,
         total_count: usize,
     },
+    /// `d'<x>` / ``d`<x>`` — reached from `AfterOp` when the next key after
+    /// the operator is `'` (`linewise`) or `` ` ``. The next char names the
+    /// mark; vim ignores a count on mark motions, so none is carried.
+    OpMark {
+        op: crate::operator::OperatorKind,
+        linewise: bool,
+    },
     /// `"<reg>` — register-prefix chord in Normal mode. The next char names
     /// a register that the next y/d/c/p operation will use. Engine validates
     /// the char; invalid chars silently no-op.
@@ -260,6 +267,11 @@ pub fn step(state: PendingState, key: Key) -> Outcome {
                         forward: false,
                         till: true,
                     })
+                } else if ch == '\'' || ch == '`' {
+                    Outcome::Wait(PendingState::OpMark {
+                        op,
+                        linewise: ch == '\'',
+                    })
                 } else {
                     // All other chars: treat as motion key and let the engine
                     // parse it via parse_motion. Unknown keys no-op in the engine.
@@ -314,6 +326,14 @@ pub fn step(state: PendingState, key: Key) -> Outcome {
             }),
             // Any non-char key cancels; engine apply_op_g handles unknown chars
             // as a no-op (mirrors OpTextObj arm).
+            _ => Outcome::Cancel,
+        },
+        PendingState::OpMark { op, linewise } => match key {
+            Key::Esc => Outcome::Cancel,
+            Key::Char(ch) => {
+                Outcome::Commit(crate::cmd::EngineCmd::ApplyOpMark { op, ch, linewise })
+            }
+            // Any non-char key cancels (mirrors the GotoMark arms).
             _ => Outcome::Cancel,
         },
         PendingState::SelectRegister => match key {
@@ -685,6 +705,36 @@ mod tests {
             total_count,
             forward,
             till,
+        }
+    }
+
+    #[test]
+    fn op_then_quote_or_backtick_then_mark_commits_apply_op_mark() {
+        let after_d = PendingState::AfterOp {
+            op: OperatorKind::Delete,
+            count1: 1,
+            inner_count: 0,
+        };
+        for (key, linewise) in [('\'', true), ('`', false)] {
+            let Outcome::Wait(state) = step(after_d, Key::Char(key)) else {
+                panic!("`d{key}` should wait for the mark name");
+            };
+            assert_eq!(
+                state,
+                PendingState::OpMark {
+                    op: OperatorKind::Delete,
+                    linewise,
+                }
+            );
+            assert_eq!(
+                step(state, Key::Char('a')),
+                Outcome::Commit(EngineCmd::ApplyOpMark {
+                    op: OperatorKind::Delete,
+                    ch: 'a',
+                    linewise,
+                })
+            );
+            assert_eq!(step(state, Key::Esc), Outcome::Cancel);
         }
     }
 

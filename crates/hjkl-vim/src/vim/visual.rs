@@ -268,18 +268,41 @@ pub fn goto_mark<H: hjkl_engine::types::Host>(
     ch: char,
     linewise: bool,
 ) {
-    let target = match ch {
-        'a'..='z' => ed.mark(ch),
+    if let Some(pos) = mark_pos(ed, ch) {
+        jump_to_mark(ed, pos, linewise);
+    }
+}
+/// Where lowercase or special mark `ch` points, or `None` when it is unset or
+/// `ch` names no such mark.
+pub fn mark_pos<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    ch: char,
+) -> Option<(usize, usize)> {
+    match ch {
+        'a'..='z' | '[' | ']' | '<' | '>' => ed.mark(ch),
         '\'' | '`' => ed.jump_back_list().last().copied(),
         '.' => ed.last_edit_pos(),
-        '[' | ']' | '<' | '>' => ed.mark(ch),
         _ => None,
-    };
-    let Some((row, col)) = target else {
-        return;
-    };
+    }
+}
+/// Where uppercase mark `ch` points when it is set in THIS buffer.
+pub fn same_buffer_global_mark_pos<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    ch: char,
+) -> Option<(usize, usize)> {
+    ed.global_mark(ch)
+        .filter(|(bid, _, _)| *bid == ed.current_buffer_id())
+        .map(|(_, row, col)| (row, col))
+}
+/// Move the cursor to a mark at `pos`: its row's first non-blank when
+/// `linewise`, else the position itself (clamped to the buffer).
+fn jump_to_mark<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    pos: (usize, usize),
+    linewise: bool,
+) {
     let pre = ed.cursor();
-    let (r, c_clamped) = clamp_pos(ed, (row, col));
+    let (r, c_clamped) = clamp_pos(ed, pos);
     if linewise {
         buf_set_cursor_rc(ed.buffer_mut(), r, 0);
         move_first_non_whitespace(ed);
@@ -326,19 +349,7 @@ pub fn try_goto_mark<H: hjkl_engine::types::Host>(
                     col,
                 };
             }
-            // Same buffer — execute the jump normally.
-            let pre = ed.cursor();
-            let (r, c_clamped) = clamp_pos(ed, (row, col));
-            if linewise {
-                buf_set_cursor_rc(ed.buffer_mut(), r, 0);
-                move_first_non_whitespace(ed);
-            } else {
-                buf_set_cursor_rc(ed.buffer_mut(), r, c_clamped);
-            }
-            if ed.cursor() != pre {
-                ed.push_jump(pre);
-            }
-            ed.set_sticky_col(Some(ed.cursor().1));
+            jump_to_mark(ed, (row, col), linewise);
             MarkJump::SameBuffer
         }
         'a'..='z' | '\'' | '`' | '.' | '[' | ']' | '<' | '>' => {

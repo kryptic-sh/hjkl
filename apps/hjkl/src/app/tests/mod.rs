@@ -350,6 +350,13 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
                     app.sync_viewport_from_editor();
                     return;
                 }
+                Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpMark { op, ch, linewise }) => {
+                    app.pending_state = None;
+                    app.active_editor_mut()
+                        .apply_op_mark(op_kind_to_operator(op), ch, linewise);
+                    app.sync_viewport_from_editor();
+                    return;
+                }
                 Outcome::Commit(hjkl_vim::EngineCmd::SetPendingRegister { reg }) => {
                     app.pending_state = None;
                     app.active_editor_mut().set_pending_register(reg);

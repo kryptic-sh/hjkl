@@ -750,6 +750,24 @@ impl App {
                         self.sync_after_engine_mutation();
                         return true;
                     }
+                    Outcome::Commit(hjkl_vim::EngineCmd::ApplyOpMark { op, ch, linewise }) => {
+                        self.pending_state = None;
+                        self.active_editor_mut().apply_op_mark(
+                            super::event_loop::op_kind_to_operator(op),
+                            ch,
+                            linewise,
+                        );
+                        if let Some((top, bot)) = self.active_editor_mut().take_last_indent_range()
+                        {
+                            self.indent_flash = Some(super::IndentFlash {
+                                top,
+                                bot,
+                                started_at: std::time::Instant::now(),
+                            });
+                        }
+                        self.sync_after_engine_mutation();
+                        return true;
+                    }
                     Outcome::Commit(hjkl_vim::EngineCmd::SetPendingRegister { reg }) => {
                         self.pending_state = None;
                         self.active_editor_mut().set_pending_register(reg);

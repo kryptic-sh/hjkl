@@ -419,6 +419,19 @@ expected_mode = "normal"
 expected_register = ['"', "cc dd\n"]
 
 [[cases]]
+name = "foldopen_uppercase_mark_jump"
+initial_buffer = "aa\nbb\ncc\ndd\n"
+initial_cursor = [1, 0]
+keys = "mAzfjgg'Add"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "aa\ncc\ndd\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', "bb\n"]
+
+[[cases]]
 name = "foldopen_not_in_visual"
 initial_buffer = "a(c def\nghi)\njkl\nmno\n"
 initial_cursor = [0, 2]

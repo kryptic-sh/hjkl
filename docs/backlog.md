@@ -1024,13 +1024,20 @@ fail on the parent commit, the other 6 are negative guards).
   `w_virtcol` not recomputed between keys of one headless input batch, so
   interactive nvim may differ there. hjkl has no "pending curswant" state to
   hang this on; the closed-fold half (`jzfjk`) is the stable case to match.
-- **Operator + mark motion (`d'a`, ``y`a``, `c'a`) is not implemented.** nvim
-  deletes linewise to the mark; hjkl does nothing. Neither input path has it:
-  `handle_after_op` (`hjkl-vim` `normal.rs`) has no `'` / `` ` `` arm, so the
-  key falls through `parse_motion` and is dropped, and `pending.rs`'s
-  `PendingState` has no operator-then-mark state. Implementing it means both
-  paths: `'` linewise, `` ` `` charwise exclusive, through
-  `run_operator_over_range`.
+- **Left by the operator + mark work (2026-10-18):**
+  - **The cursor after undoing a linewise delete.** `jjd2ku` on
+    `"aa bb\ncc dd\nee ff\ngg hh\n"` @ (0,3): nvim (0,3), hjkl (2,3). Same for
+    `d'a` then `u`, and on the parent commit.
+  - **Mark rebasing after a CHARWISE multi-row delete still keys off the cursor
+    row.** `mutate_edit`'s `rebase_row` uses the edit's own top row only for a
+    linewise `DeleteRange`; a backward charwise delete across rows (``d`a``
+    upward) and `Replace` edits still rebase from the cursor, and the band
+    `[row, row + rows_removed)` drops the first row's marks though that row
+    survives a charwise delete. Not measured against nvim.
+  - **Crate changelogs are not rolled at a release.** `hjkl-vim-types`'s
+    `[Unreleased]` still lists `Motion::ChangeWordEnd`, which the root changelog
+    records as shipped in 0.42.0. BCTP moves the root changelog only; whether
+    the per-crate ones should move with it is the owner's call.
 - **Observed in the oracle driver, not investigated:** a macro recorded with
   `/g<CR>` (`qq/g<CR>q…@q`) does not replay. Reproduces on the old binary; may
   be driver-only.

@@ -8,6 +8,13 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+
+- For crates consuming `hjkl-vim` / `hjkl-vim-types`: `Pending`, `LastChange`,
+  `PendingState` and `EngineCmd` each gained an `OpMark` variant, and
+  `VimEditorExt` a required `apply_op_mark`, for operator + mark motions. An
+  exhaustive `match` over any of them must add the arm.
+
 ### Added
 
 - The `hor`, `block`, `percent`, `search` and `mark` classes of vim's default
@@ -18,6 +25,9 @@ patch bumps.
   / `` `a ``. Not in Visual mode, not under an operator, and not while `@q`
   replays keys. So `zfjldd` deletes one line rather than the whole fold, and
   `zfjlj` moves into the opened fold.
+- **Operator + mark motion**: `d'a`, `y'a`, `c'a`, `>'a` and the rest run
+  linewise to mark `a`'s row, ``d`a`` charwise to its position, and `.` repeats
+  them. hjkl ignored the `'` / `` ` `` after an operator.
 
 ### Changed
 
@@ -29,6 +39,9 @@ patch bumps.
 
 ### Fixed
 
+- **Deleting lines upward (`dk`, `d'a`) clears the marks on them.** A mark on
+  the top deleted row survived and pointed at whatever moved up into its place.
+- `'A` to a mark in the same buffer opens the closed fold it lands in.
 - **Opening a CRLF file with syntax highlighting no longer crashes once its last
   line is on screen.** hjkl keeps a CRLF file's final line ending as a lone
   `\r`, which the rope counts as a line break but the highlighter's row table

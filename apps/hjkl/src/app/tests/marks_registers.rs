@@ -1577,3 +1577,20 @@ fn registers_are_global_across_buffers() {
     let _ = std::fs::remove_file(&path_a);
     let _ = std::fs::remove_file(&path_b);
 }
+
+/// `d'a` / ``d`a`` through the app's own chord routing (`route_chord_key`),
+/// which reaches `apply_op_mark` by a different path than the engine FSM.
+/// Expected buffers measured with nvim 0.12.5.
+#[test]
+fn operator_then_mark_runs_through_the_app_chord_path() {
+    for (mark_key, want) in [('\'', vec!["dd"]), ('`', vec!["ac", "dd"])] {
+        let mut app = App::new(None, false, None, None).unwrap();
+        seed_buffer(&mut app, "aa\nbb\ncc\ndd");
+        app.active_editor_mut().jump_cursor(0, 1);
+        for c in ['m', 'a', 'j', 'j', 'l', 'd', mark_key, 'a'] {
+            app.route_chord_key(key(KeyCode::Char(c)));
+        }
+        let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
+        assert_eq!(lines, want, "d{mark_key}a");
+    }
+}

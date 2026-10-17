@@ -450,6 +450,10 @@ pub trait VimEditorExt {
     /// `last_change` when `op` is Change (dot-repeat).
     fn apply_op_find(&mut self, op: Operator, ch: char, forward: bool, till: bool, count: usize);
 
+    /// Apply an operator over the motion to mark `ch` (`d'a` linewise, ``d`a``
+    /// charwise exclusive). An unset mark is a no-op.
+    fn apply_op_mark(&mut self, op: Operator, ch: char, linewise: bool);
+
     /// Apply an operator over a text-object range (`diw` / `daw` / `di"` …).
     /// Unknown `ch` values are silently ignored, matching the FSM.
     fn apply_op_text_obj(&mut self, op: Operator, ch: char, inner: bool, total_count: usize);
@@ -1523,6 +1527,10 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
 
     fn apply_op_find(&mut self, op: Operator, ch: char, forward: bool, till: bool, count: usize) {
         crate::vim::apply_op_find_motion(self, op, ch, forward, till, count);
+    }
+
+    fn apply_op_mark(&mut self, op: Operator, ch: char, linewise: bool) {
+        crate::vim::apply_op_mark(self, op, ch, linewise);
     }
 
     fn apply_op_text_obj(&mut self, op: Operator, ch: char, inner: bool, total_count: usize) {

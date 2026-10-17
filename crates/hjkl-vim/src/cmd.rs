@@ -72,6 +72,14 @@ pub enum EngineCmd {
         till: bool,
         total_count: usize,
     },
+    /// `d'<ch>` / ``d`<ch>`` — apply operator over the motion to mark `ch`,
+    /// linewise for `'`. Host calls `Editor::apply_op_mark`. Unset marks are a
+    /// no-op.
+    ApplyOpMark {
+        op: crate::operator::OperatorKind,
+        ch: char,
+        linewise: bool,
+    },
     /// `"<reg>` chord completion. Engine validates `reg` against
     /// `[a-zA-Z0-9"+*_]` and sets `vim.pending_register` if valid. Invalid
     /// chars are silently ignored (no-op), matching the engine FSM behaviour.

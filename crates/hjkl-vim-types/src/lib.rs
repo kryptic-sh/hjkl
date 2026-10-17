@@ -42,6 +42,8 @@ pub enum Pending {
         forward: bool,
         till: bool,
     },
+    /// Operator + `'` (`linewise`) or `` ` `` — looking for the mark name.
+    OpMark { op: Operator, linewise: bool },
     /// `r` pressed — waiting for the replacement char.
     Replace,
     /// Visual mode + `i` or `a` pressed — waiting for the text-object
@@ -323,6 +325,16 @@ pub enum LastChange {
         inner: bool,
         inserted: Option<String>,
         /// The explicit register the original change used (`"adiw`), if any.
+        /// See [`LastChange::LineOp::register`].
+        register: Option<char>,
+    },
+    /// Operator over the motion to mark `ch` (`d'a` when `linewise`, else
+    /// ``d`a``). Replays against the mark's position at repeat time.
+    OpMark {
+        op: Operator,
+        ch: char,
+        linewise: bool,
+        inserted: Option<String>,
         /// See [`LastChange::LineOp::register`].
         register: Option<char>,
     },

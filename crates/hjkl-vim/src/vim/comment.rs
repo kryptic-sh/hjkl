@@ -342,6 +342,7 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
             if let Some(
                 LastChange::OpMotion { inserted: ins, .. }
                 | LastChange::OpTextObj { inserted: ins, .. }
+                | LastChange::OpMark { inserted: ins, .. }
                 | LastChange::LineOp { inserted: ins, .. }
                 | LastChange::GnOp { inserted: ins, .. }
                 | LastChange::VisualOp { inserted: ins, .. },

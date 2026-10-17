@@ -266,6 +266,7 @@ impl VimState {
             | Pending::OpTextObj { op, .. }
             | Pending::OpG { op, .. }
             | Pending::OpFind { op, .. }
+            | Pending::OpMark { op, .. }
             | Pending::OpSquareBracketOpen { op, .. }
             | Pending::OpSquareBracketClose { op, .. } => Some(*op),
             _ => None,

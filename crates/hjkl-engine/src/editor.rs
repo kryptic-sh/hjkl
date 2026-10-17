@@ -2679,6 +2679,17 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         }
         let pre_row = buf_cursor_row(&self.buffer);
         let pre_rows = buf_row_count(&self.buffer);
+        // The row marks, folds and jumps rebase from. A linewise delete removes
+        // exactly its own rows, which start above the cursor when the motion
+        // went upward (`dk`, `d'a`); every other edit rebases from the cursor.
+        let rebase_row = match &edit {
+            hjkl_buffer::Edit::DeleteRange {
+                start,
+                end,
+                kind: hjkl_buffer::MotionKind::Line,
+            } => start.row.min(end.row),
+            _ => pre_row,
+        };
         // `U` (`:h U`) bookkeeping: remember `pre_row`'s text before the
         // first change lands on it, so `undo_line` can restore it later.
         // Reset (fresh snapshot) whenever a change lands on a DIFFERENT
@@ -2798,7 +2809,7 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // delta the edit produced. Without this, every line-changing
         // edit silently invalidates `'a`-style positions.
         if delta != 0 {
-            self.shift_marks_after_edit(pre_row, delta);
+            self.shift_marks_after_edit(rebase_row, delta);
         }
         self.mark_content_dirty();
         inverse

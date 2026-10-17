@@ -2,10 +2,10 @@
 //!
 //! Split out of the monolithic `vim.rs` (#267 follow-up).
 
-use hjkl_vim_types::{InsertReason, Mode, Motion, Operator, RangeKind, TextObject};
+use hjkl_vim_types::{InsertReason, LastChange, Mode, Motion, Operator, RangeKind, TextObject};
 
 use super::*;
-use crate::vim_state::vim_mut;
+use crate::vim_state::{vim, vim_mut};
 use hjkl_engine::Editor;
 use hjkl_engine::buf_helpers::{buf_line, buf_line_chars, buf_row_count, buf_set_cursor_rc};
 
@@ -86,6 +86,51 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     }
     let word_fwd = matches!(motion, Motion::WordFwd | Motion::BigWordFwd);
     operate_over_motion_range(ed, op, start, end, kind, word_fwd);
+}
+
+/// `d'a` / ``d`a`` — `op` over the motion to mark `ch`: linewise for `'`,
+/// charwise exclusive for `` ` ``. An unset mark, or an uppercase one set in
+/// another buffer, aborts the operator as it does in vim. A count is ignored,
+/// as vim ignores it for mark motions.
+pub fn apply_op_mark<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    op: Operator,
+    ch: char,
+    linewise: bool,
+) {
+    let target = if ch.is_ascii_uppercase() {
+        same_buffer_global_mark_pos(ed, ch)
+    } else {
+        mark_pos(ed, ch)
+    };
+    let Some(target) = target else {
+        return;
+    };
+    // Read before the operator consumes it, so `.` can reuse it. A `.` of this
+    // change looks the mark up again, and does nothing if it is gone by then.
+    let register = vim(ed).pending_register;
+    if !vim(ed).replaying && op_is_change(op) {
+        vim_mut(ed).last_change = Some(LastChange::OpMark {
+            op,
+            ch,
+            linewise,
+            inserted: None,
+            register,
+        });
+    }
+    let start = ed.cursor();
+    let (row, col) = clamp_pos(ed, target);
+    // The endpoint is where the motion lands: for `'` that is the mark row's
+    // first non-blank, not the mark's own column, so a backward `y'a` leaves
+    // the cursor there.
+    let (end, kind) = if linewise {
+        buf_set_cursor_rc(ed.buffer_mut(), row, 0);
+        move_first_non_whitespace(ed);
+        (ed.cursor(), RangeKind::Linewise)
+    } else {
+        ((row, col), RangeKind::Exclusive)
+    };
+    operate_over_motion_range(ed, op, start, end, kind, false);
 }
 
 /// The half of [`apply_op_with_motion`] that runs once the motion's endpoint

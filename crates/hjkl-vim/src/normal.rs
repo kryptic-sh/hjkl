@@ -39,6 +39,7 @@ pub fn step_normal<H: Host>(
                 | Pending::SetMark
                 | Pending::GotoMarkLine
                 | Pending::GotoMarkChar
+                | Pending::OpMark { .. }
                 | Pending::RecordMacroTarget
                 | Pending::PlayMacroTarget { .. }
                 | SneakFirst { .. }
@@ -62,6 +63,12 @@ pub fn step_normal<H: Host>(
             forward,
             till,
         } => return handle_op_find_target(ed, input, op, count1, forward, till),
+        Pending::OpMark { op, linewise } => {
+            if let Key::Char(ch) = input.key {
+                ed.apply_op_mark(op, ch, linewise);
+            }
+            return true;
+        }
         Pending::G => return handle_after_g(ed, input),
         Pending::OpG { op, count1 } => return handle_op_after_g(ed, input, op, count1),
         Pending::Op { op, count1 } => return handle_after_op(ed, input, op, count1),
@@ -990,6 +997,17 @@ fn handle_after_op<H: Host>(
             count1,
             forward,
             till,
+        });
+        return true;
+    }
+
+    // `'` / `` ` `` — operator + mark motion (`d'a`, ``y`a``). The count, if
+    // any, is dropped: vim ignores it for mark motions.
+    if !input.ctrl && matches!(input.key, Key::Char('\'') | Key::Char('`')) {
+        ed.reset_count();
+        ed.set_pending(Pending::OpMark {
+            op,
+            linewise: input.key == Key::Char('\''),
         });
         return true;
     }

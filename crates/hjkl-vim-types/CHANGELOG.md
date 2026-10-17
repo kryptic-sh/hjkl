@@ -10,6 +10,11 @@ and this project adheres to
 
 ### Added
 
+- `Pending::OpMark { op, linewise }` and
+  `LastChange::OpMark { op, ch, linewise, inserted, register }`, for an operator
+  over a mark motion (`d'a`, ``d`a``) and its dot-repeat. Both enums are
+  exhaustive, so an external `match` over either breaks.
+
 - `Motion::ChangeWordEnd { big }` — the word-end motion `cw` / `cW` runs, which
   is not the same as `e` / `E`. Adding a variant to the non-`non_exhaustive`
   `Motion` enum breaks any external `match` over it.

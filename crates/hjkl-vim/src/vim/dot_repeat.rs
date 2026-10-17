@@ -79,6 +79,19 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                 replay_insert_and_finish(ed, &text);
             }
         }
+        LastChange::OpMark {
+            op,
+            ch,
+            linewise,
+            inserted,
+            register,
+        } => {
+            vim_mut(ed).pending_register = register;
+            apply_op_mark(ed, op, ch, linewise);
+            if let Some(text) = inserted {
+                replay_insert_and_finish(ed, &text);
+            }
+        }
         LastChange::LineOp {
             op,
             count,

@@ -119,3 +119,155 @@ keys = "jmaggONEW<Esc>`a"
 expected_buffer = "NEW\none\ntwo\nthree\n"
 expected_cursor = [2, 0]
 expected_mode = "normal"
+
+# ── Operator + mark motion ───────────────────────────────────────────────────
+#
+# `'a` is linewise and lands on the mark row's first non-blank; `` `a `` is
+# charwise exclusive. An unset mark aborts the operator. `.` looks the mark up
+# again. A linewise delete drops the marks on the rows it removes and shifts
+# the ones below, whichever direction its motion went.
+
+[[cases]]
+name = "op_mark_d_quote_deletes_linewise_to_the_mark"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "majjd'a"
+expected_buffer = "gg hh\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_mark_d_backtick_deletes_charwise_exclusive"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "majjld`a"
+expected_buffer = "aa f\ngg hh\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_mark_upward_backtick"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\n"
+initial_cursor = [2, 4]
+keys = "makkd`a"
+expected_buffer = "aa bf\ngg hh\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_mark_y_backtick_leaves_the_cursor_at_the_mark"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "majjy`a"
+expected_buffer = "aa bb\ncc dd\nee ff\ngg hh\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_mark_c_quote"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "majjc'ax<Esc>"
+expected_buffer = "x\ngg hh\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_mark_indent"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "majj>'a"
+expected_buffer = "    aa bb\n    cc dd\n    ee ff\ngg hh\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_mark_unset_mark_is_a_no_op"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "d'z"
+expected_buffer = "aa bb\ncc dd\nee ff\ngg hh\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_mark_dot_repeats_the_mark_operator"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\nkk ll\n"
+initial_cursor = [0, 0]
+keys = "majc'aZ<Esc>j."
+expected_buffer = "Z\ngg hh\nii jj\nkk ll\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_mark_dot_after_the_mark_line_is_gone_does_nothing"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\nkk ll\n"
+initial_cursor = [0, 0]
+keys = "xmajd'a."
+expected_buffer = "ee ff\ngg hh\nii jj\nkk ll\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "backward_linewise_delete_drops_the_marks_on_its_rows"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\nkk ll\n"
+initial_cursor = [0, 0]
+keys = "majdkG'ax"
+expected_buffer = "ee ff\ngg hh\nii jj\nk ll\n"
+expected_cursor = [3, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_mark_y_quote_upward_lands_on_the_first_non_blank"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "majjy'a"
+expected_buffer = "aa bb\ncc dd\nee ff\ngg hh\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "backward_linewise_delete_shifts_the_mark_below_it"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\nkk ll\n"
+initial_cursor = [0, 0]
+keys = "4jmbggma3jd2kgg'bx"
+expected_buffer = "aa bb\ni jj\nkk ll\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
