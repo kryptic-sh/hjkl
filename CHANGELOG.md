@@ -29,6 +29,11 @@ patch bumps.
 
 ### Fixed
 
+- **Opening a CRLF file with syntax highlighting no longer crashes once its last
+  line is on screen.** hjkl keeps a CRLF file's final line ending as a lone
+  `\r`, which the rope counts as a line break but the highlighter's row table
+  did not, so rendering the viewport sliced past the end of its span cache and
+  panicked. Any lone `\r`, VT, FF, NEL, LS or PS line separator did the same.
 - A forward charwise operator started inside a closed fold takes the fold whole
   from any column: `x` / `dw` at column 2 used to delete characters, because
   column 0 was standing in for "the fold is still closed". A backward charwise

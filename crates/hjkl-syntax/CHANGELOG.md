@@ -10,6 +10,13 @@ and this project adheres to
 
 ### Fixed
 
+- `render_viewport` / `render_viewport_ref` no longer panic ("range end index
+  out of range") on a buffer whose rows are split by anything but `\n`. The row
+  table was built from `\n` alone while the row count came from the rope, which
+  also breaks on lone `\r`, VT, FF, NEL, LS and PS, so the span cache came up
+  short of the viewport. Every CRLF file hit it, since its last line ending
+  stays in the buffer as a lone `\r`. The row starts now follow the rope's own
+  lines, and the CRLF ending keeps the `\n`-scan speed.
 - `SyntaxLayer::apply_edits` drops the span cache along with the parse,
   row-start and sign caches. It cleared only the latter three and left
   `cache_spans` to be dropped by the `dirty_gen` mismatch in `render_viewport` —

@@ -860,8 +860,6 @@ impl SyntaxLayer {
         let rope = buffer.rope();
 
         // Get or build row_starts, cached per dirty_gen.
-        // Scan newlines chunk-by-chunk from the rope so we never materialise
-        // the full document as a contiguous byte slice.
         let row_starts: Arc<Vec<usize>> = if client
             .cache_row_starts
             .as_ref()
@@ -869,18 +867,7 @@ impl SyntaxLayer {
         {
             Arc::clone(&client.cache_row_starts.as_ref().unwrap().1)
         } else {
-            // SIMD-vectorised newline scan via memchr — measurably faster than
-            // a per-byte loop. Pre-sized to row_count + 1 to avoid realloc churn.
-            let mut rs: Vec<usize> = Vec::with_capacity(row_count + 1);
-            rs.push(0);
-            let mut chunk_pos = 0usize;
-            for chunk in rope.chunks() {
-                for nl in memchr::memchr_iter(b'\n', chunk.as_bytes()) {
-                    rs.push(chunk_pos + nl + 1);
-                }
-                chunk_pos += chunk.len();
-            }
-            let arc = Arc::new(rs);
+            let arc = Arc::new(row_starts(&rope, row_count));
             client.cache_row_starts = Some((dg, Arc::clone(&arc)));
             arc
         };
@@ -1105,6 +1092,46 @@ const RAINBOW_PALETTE: [Color; 7] = [
     Color::rgb(100, 140, 255), // blue
     Color::rgb(190, 120, 255), // violet
 ];
+
+/// Byte offset of the start of each of the rope's `row_count` rows.
+///
+/// Scans newlines chunk-by-chunk so the document is never materialised as
+/// one contiguous byte slice; the memchr scan is measurably faster than a
+/// per-byte loop. But the rows are the rope's lines, and ropey also breaks
+/// on lone `\r`, VT, FF, NEL, LS and PS. When the `\n` scan disagrees with
+/// `row_count`, one of those is present, and the row starts come from
+/// ropey's own line iterator instead — so the span table built from them
+/// always has a row per buffer row.
+fn row_starts(rope: &ropey::Rope, row_count: usize) -> Vec<usize> {
+    let mut rs: Vec<usize> = Vec::with_capacity(row_count + 1);
+    rs.push(0);
+    let mut chunk_pos = 0usize;
+    for chunk in rope.chunks() {
+        for nl in memchr::memchr_iter(b'\n', chunk.as_bytes()) {
+            rs.push(chunk_pos + nl + 1);
+        }
+        chunk_pos += chunk.len();
+    }
+    if rs.len() == row_count {
+        return rs;
+    }
+    let len = rope.len_bytes();
+    if rs.len() + 1 == row_count && len > 0 && rope.byte(len - 1) == b'\r' {
+        // Every CRLF file: load strips only the final `\n`, so its last line
+        // ending is a lone `\r`, and the one row the scan missed is the empty
+        // row after it. Kept off the slower line iterator because this runs
+        // on every edit of such a file.
+        rs.push(len);
+        return rs;
+    }
+    rs.clear();
+    let mut start = 0usize;
+    for line in rope.lines() {
+        rs.push(start);
+        start += line.len_bytes();
+    }
+    rs
+}
 
 // ---------------------------------------------------------------------------
 // Helper: walk a row range against the retained tree
@@ -1477,6 +1504,28 @@ mod tests {
         assert_eq!(p.highlight_us, 0);
         assert_eq!(p.by_row_us, 0);
         assert_eq!(p.diag_us, 0);
+    }
+
+    // --- row_starts ---
+
+    #[test]
+    fn row_starts_match_the_ropes_own_line_starts() {
+        for src in [
+            "",
+            "a",
+            "a\nb\n",
+            "a\r\nb\r\n",
+            // A CRLF file as loaded: the final `\n` stripped, its `\r` kept.
+            "a\r\nb\r",
+            "\r",
+            "a\rb\u{b}c\u{c}d\u{85}e\u{2028}f\u{2029}g\r\nh\n",
+            "only\u{2028}",
+        ] {
+            let rope = ropey::Rope::from_str(src);
+            let rows = rope.len_lines();
+            let want: Vec<usize> = (0..rows).map(|r| rope.line_to_byte(r)).collect();
+            assert_eq!(row_starts(&rope, rows), want, "{src:?}");
+        }
     }
 
     // --- SetLanguageOutcome ---
@@ -1853,6 +1902,48 @@ mod tests {
             out.spans.iter().any(|r| !r.is_empty()),
             "expected at least one styled span"
         );
+    }
+
+    /// Every line separator ropey splits on — lone `\r`, VT, FF, NEL, LS, PS —
+    /// is a row of the buffer, so the render cache must hold one span row for
+    /// each. A `\n`-only row table came up short and the viewport slice
+    /// panicked out of range.
+    #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
+    fn render_gives_one_row_per_rope_line_for_every_separator() {
+        let src = "fn a() {}\rfn b() {}\u{b}fn c() {}\u{c}fn d() {}\u{85}\
+                   fn e() {}\u{2028}fn f() {}\u{2029}fn g() {}\r\nfn h() {}\n";
+        let buf = View::from_str(src);
+        let rows = buf.rope().len_lines();
+        let mut layer = default_layer();
+        attach_grammar_when_ready(&mut layer, TID, "a.rs");
+        let out = layer
+            .render_viewport(TID, &buf, 0, rows)
+            .expect("render output");
+        assert_eq!(out.spans.len(), rows);
+        // Each `fn` keyword starts its own row.
+        for (row, spans) in out.spans.iter().enumerate().take(rows - 1) {
+            assert!(
+                spans.iter().any(|&(start, _, _)| start == 0),
+                "row {row} has no span at column 0: {spans:?}"
+            );
+        }
+    }
+
+    /// A CRLF file is loaded with only its final `\n` stripped, so its last
+    /// line ending stays in the buffer as a lone `\r` — the everyday shape of
+    /// the case above.
+    #[test]
+    #[ignore = "network + compiler: needs tree-sitter-rust grammar"]
+    fn render_covers_the_last_row_of_a_crlf_file_as_loaded() {
+        let buf = View::from_str("fn a() {}\r\nfn b() {}\r");
+        let rows = buf.rope().len_lines();
+        let mut layer = default_layer();
+        attach_grammar_when_ready(&mut layer, TID, "a.rs");
+        let out = layer
+            .render_viewport(TID, &buf, 0, rows)
+            .expect("render output");
+        assert_eq!(out.spans.len(), rows);
     }
 
     #[test]

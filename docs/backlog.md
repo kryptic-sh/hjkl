@@ -1031,12 +1031,14 @@ fail on the parent commit, the other 6 are negative guards).
   from `dfcase` output therefore need `shiftwidth = 4` / `expandtab = true` in
   the case, or the cursor after `dd` disagrees (nvim's default `nosol` keeps the
   column, hjkl follows `sol`).
-- **Two formatter tests panic on this Windows machine, green in CI.**
-  `app::tests::formatter::auto_indent_invokes_rustfmt_for_rs_files` and
-  `auto_indent_format_result_is_undoable` panic in `hjkl-syntax` `lib.rs`
-  (`cache_spans[offset..offset + len]`: "range end index 5 out of range for
-  slice of length 4") with rustfmt 1.10.0. Same on `6495e8bc`. The trigger is
-  local, but the slice itself is an unguarded panic in the render-cache path.
+- **Unexplained: the app's rustfmt run returns CRLF on one Windows machine.**
+  `app::tests::formatter::auto_indent_invokes_rustfmt_for_rs_files` feeds an LF
+  file and got back `"fn main() {\r\n…}\r"` locally (rustfmt 1.10.0,
+  `newline_style = "Auto"`), while Windows CI and the same rustfmt on stdin emit
+  LF. That CRLF is what exposed the render-cache row-count panic, fixed
+  2026-10-18 (`row_starts` in `hjkl-syntax`). Why `Auto` picks CRLF there was
+  not investigated; installing CRLF formatter output raw matches how hjkl keeps
+  a CRLF file, so it is not itself a defect.
 
 ## 2. Blocked on platform access
 
