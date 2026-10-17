@@ -19,6 +19,14 @@ patch bumps.
   replays keys. So `zfjldd` deletes one line rather than the whole fold, and
   `zfjlj` moves into the opened fold.
 
+### Changed
+
+- **Dependency updates**, all within existing ranges (`Cargo.lock` only): `cc`
+  1.7.0, which `hjkl-bonsai` uses on MSVC builds to find `cl.exe` for runtime
+  grammar compiles; `tree-sitter` 0.27.1 and `tree-sitter-language` 0.1.9;
+  `serde_json` 1.0.152, `thiserror` 2.0.21, `libc` 0.2.190 and `tokio` 1.53.2;
+  `proptest` 1.12.0 (tests only). No hjkl code changed with them.
+
 ### Fixed
 
 - A forward charwise operator started inside a closed fold takes the fold whole
