@@ -106,45 +106,63 @@ pub fn text_object_around_tag_bridge<H: hjkl_engine::types::Host>(
 /// preserved as empty output lines). Joining a paragraph follows nvim's
 /// `do_join` rule: the next line's leading whitespace is dropped, and a single
 /// space separates two lines unless the previous line already ends in
-/// whitespace. The first line's leading whitespace is the paragraph "leader"
-/// and is re-emitted at the start of every wrapped line. `tabstop` measures
-/// display columns, so a `\t` inside a gap advances to the next tab stop while
-/// the tab character itself is preserved in the output.
-pub fn greedy_wrap(original: &[String], width: usize, tabstop: usize) -> Vec<String> {
+/// whitespace. The first line's leading whitespace is the paragraph "leader";
+/// under `'autoindent'` it is re-emitted at the start of every wrapped line,
+/// as vim's auto-wrap copies the indent onto each line it opens, and without
+/// it the continuation lines start at column 0. `tabstop` measures display
+/// columns, so a `\t` inside a gap advances to the next tab stop while the tab
+/// character itself is preserved in the output.
+pub fn greedy_wrap(original: &[String], opts: WrapOpts) -> Vec<String> {
     let mut wrapped: Vec<String> = Vec::new();
     let mut paragraph: Vec<String> = Vec::new();
     for line in original {
         if line.trim().is_empty() {
-            flush_paragraph(&mut paragraph, &mut wrapped, width, tabstop);
+            flush_paragraph(&mut paragraph, &mut wrapped, opts);
             wrapped.push(String::new());
         } else {
             paragraph.push(line.clone());
         }
     }
-    flush_paragraph(&mut paragraph, &mut wrapped, width, tabstop);
+    flush_paragraph(&mut paragraph, &mut wrapped, opts);
     wrapped
+}
+
+/// The settings `gq` / `gw` wrap by, read once from the editor.
+#[derive(Debug, Clone, Copy)]
+pub struct WrapOpts {
+    /// `'textwidth'`, at least 1.
+    pub width: usize,
+    /// `'tabstop'`, at least 1.
+    pub tabstop: usize,
+    /// `'autoindent'`: continuation lines take the paragraph's indent.
+    pub autoindent: bool,
+}
+
+impl WrapOpts {
+    pub fn from_settings(settings: &hjkl_engine::Settings) -> Self {
+        Self {
+            width: settings.textwidth.max(1),
+            tabstop: settings.tabstop.max(1),
+            autoindent: settings.autoindent,
+        }
+    }
 }
 
 /// Wrap `paragraph` (a run of non-blank lines) and append its wrapped lines to
 /// `out`, then clear the paragraph buffer.
-fn flush_paragraph(
-    paragraph: &mut Vec<String>,
-    out: &mut Vec<String>,
-    width: usize,
-    tabstop: usize,
-) {
+fn flush_paragraph(paragraph: &mut Vec<String>, out: &mut Vec<String>, opts: WrapOpts) {
     if paragraph.is_empty() {
         return;
     }
-    out.extend(wrap_paragraph(paragraph, width, tabstop));
+    out.extend(wrap_paragraph(paragraph, opts));
     paragraph.clear();
 }
 
 /// Wrap a single paragraph (a run of non-blank lines) into lines bounded by
-/// `width` display columns.
-fn wrap_paragraph(lines: &[String], width: usize, tabstop: usize) -> Vec<String> {
+/// `opts.width` display columns.
+fn wrap_paragraph(lines: &[String], opts: WrapOpts) -> Vec<String> {
     let (leader, tokens) = paragraph_tokens(lines);
-    wrap_tokens(&tokens, &leader, width, tabstop)
+    wrap_tokens(&tokens, &leader, opts)
 }
 
 /// Join a paragraph's lines the way nvim's `do_join` does: the next line's
@@ -218,29 +236,27 @@ fn display_width(s: &str, tabstop: usize) -> usize {
     hjkl_buffer::char_col_to_visual_col(s, s.chars().count(), tabstop)
 }
 
-/// Greedy-wrap `tokens` with `leader` re-emitted at the start of every line.
-fn wrap_tokens(
-    tokens: &[(String, String)],
-    leader: &str,
-    width: usize,
-    tabstop: usize,
-) -> Vec<String> {
-    wrap_tokens_with_map(tokens, leader, width, tabstop).0
+/// Greedy-wrap `tokens` after `leader` — see [`wrap_tokens_with_map`].
+fn wrap_tokens(tokens: &[(String, String)], leader: &str, opts: WrapOpts) -> Vec<String> {
+    wrap_tokens_with_map(tokens, leader, opts).0
 }
 
-/// Greedy-wrap `tokens` (each `(word, following_gap)`) with `leader` re-emitted
-/// on every line. Returns the wrapped lines and, indexed by char position in
-/// the joined text (`leader` + words + gaps, in order), the output `(row, col)`
-/// of each char — `None` for gap chars dropped at a line break. Re-emitted
-/// leader chars have no joined-text counterpart and are simply absent from the
-/// map (the vector only ever indexes joined chars).
+/// Greedy-wrap `tokens` (each `(word, following_gap)`) after `leader`, which
+/// opens the first line and, under `'autoindent'`, every continuation line
+/// too. Returns the wrapped lines and, indexed by char position in the joined
+/// text (`leader` + words + gaps, in order), the output `(row, col)` of each
+/// char — `None` for gap chars dropped at a line break. Re-emitted leader
+/// chars have no joined-text counterpart and are simply absent from the map
+/// (the vector only ever indexes joined chars).
 fn wrap_tokens_with_map(
     tokens: &[(String, String)],
     leader: &str,
-    width: usize,
-    tabstop: usize,
+    opts: WrapOpts,
 ) -> (Vec<String>, Vec<Option<(usize, usize)>>) {
+    let WrapOpts { width, tabstop, .. } = opts;
+    let indent = if opts.autoindent { leader } else { "" };
     let leader_width = display_width(leader, tabstop);
+    let indent_width = display_width(indent, tabstop);
     let mut lines: Vec<String> = Vec::new();
     let mut map: Vec<Option<(usize, usize)>> = Vec::new();
 
@@ -271,14 +287,14 @@ fn wrap_tokens_with_map(
             if current_width + gap_width + word_width > width {
                 // Break before this word: drop the pending gap (its map entries
                 // stay `None`), flush the line, and start a new line with the
-                // re-emitted leader.
+                // continuation indent.
                 lines.push(std::mem::take(&mut current));
-                current.push_str(leader);
+                current.push_str(indent);
                 for ch in word.chars() {
                     map.push(Some((lines.len(), current.chars().count())));
                     current.push(ch);
                 }
-                current_width = leader_width + word_width;
+                current_width = indent_width + word_width;
             } else {
                 // Same line: keep the gap (back-fill its map entries).
                 for (k, ch) in gap_str.chars().enumerate() {
@@ -323,8 +339,7 @@ pub fn reflow_rows<H: hjkl_engine::types::Host>(
     top: usize,
     bot: usize,
 ) {
-    let width = ed.settings().textwidth.max(1);
-    let tabstop = ed.settings().tabstop.max(1);
+    let opts = WrapOpts::from_settings(ed.settings());
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let n = rope.len_lines();
     let bot = bot.min(n.saturating_sub(1));
@@ -332,7 +347,7 @@ pub fn reflow_rows<H: hjkl_engine::types::Host>(
         return;
     }
     let original: Vec<String> = (top..=bot).map(|r| rope_line_to_str(&rope, r)).collect();
-    let wrapped = greedy_wrap(&original, width, tabstop);
+    let wrapped = greedy_wrap(&original, opts);
 
     // vim leaves the cursor on the last NON-BLANK line of the reflowed range
     // (a trailing blank from `ap` etc. is not counted).
@@ -375,23 +390,22 @@ pub fn reflow_rows<H: hjkl_engine::types::Host>(
     ed.mark_content_dirty();
 }
 /// Same reflow as `reflow_rows` but also returns the pre-reflow slice, the
-/// wrapped lines, and the `(width, tabstop)` used, so the caller can compute a
+/// wrapped lines, and the [`WrapOpts`] used, so the caller can compute a
 /// character-preserving cursor position via [`reflow_keep_cursor`].
 pub fn reflow_rows_keep_cursor<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
-) -> (Vec<String>, Vec<String>, usize, usize) {
-    let width = ed.settings().textwidth.max(1);
-    let tabstop = ed.settings().tabstop.max(1);
+) -> (Vec<String>, Vec<String>, WrapOpts) {
+    let opts = WrapOpts::from_settings(ed.settings());
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let n = rope.len_lines();
     let bot = bot.min(n.saturating_sub(1));
     if top > bot {
-        return (Vec::new(), Vec::new(), width, tabstop);
+        return (Vec::new(), Vec::new(), opts);
     }
     let original: Vec<String> = (top..=bot).map(|r| rope_line_to_str(&rope, r)).collect();
-    let wrapped = greedy_wrap(&original, width, tabstop);
+    let wrapped = greedy_wrap(&original, opts);
 
     // Same single bounded splice as `reflow_rows` — see that fn for the
     // boundary-newline rationale.
@@ -419,13 +433,13 @@ pub fn reflow_rows_keep_cursor<H: hjkl_engine::types::Host>(
     ed.mutate_edit(Edit::Replace { start, end, with });
     buf_set_cursor_rc(ed.buffer_mut(), top, 0);
     ed.mark_content_dirty();
-    (original, wrapped, width, tabstop)
+    (original, wrapped, opts)
 }
 /// Compute the new `(row, col)` that preserves the character the cursor
 /// was on after `reflow_rows` has been applied to `[top, bot]`.
 ///
 /// `before_lines`/`after_lines` are the pre-reflow snapshot and the wrapped
-/// output; `width`/`tabstop` are the same values `greedy_wrap` was called with.
+/// output; `opts` is what `greedy_wrap` was called with.
 /// The cursor is mapped by character identity through the whitespace-preserving
 /// join + wrap: a cursor on a word char lands on that same char in the wrapped
 /// output; a cursor on a gap char that was dropped at a line break clamps to the
@@ -437,8 +451,7 @@ pub fn reflow_keep_cursor(
     cursor_col: usize,
     before_lines: &[String],
     after_lines: &[String],
-    width: usize,
-    tabstop: usize,
+    opts: WrapOpts,
 ) -> (usize, usize) {
     let relative_row = cursor_row.saturating_sub(top);
 
@@ -463,7 +476,7 @@ pub fn reflow_keep_cursor(
         }
         let para = &before_lines[para_start..before_i];
         let (leader, tokens) = paragraph_tokens(para);
-        let (wrapped, map) = wrap_tokens_with_map(&tokens, &leader, width, tabstop);
+        let (wrapped, map) = wrap_tokens_with_map(&tokens, &leader, opts);
         if relative_row >= para_start && relative_row < before_i {
             let offset = cursor_joined_offset(para, relative_row - para_start, cursor_col);
             let (r, c) = map
@@ -1049,8 +1062,8 @@ pub fn clamp_cursor_to_normal_mode<H: hjkl_engine::types::Host>(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_case_op_to_selection, greedy_wrap, indent_rows, outdent_rows, reflow_keep_cursor,
-        reflow_rows, toggle_case_str,
+        WrapOpts, apply_case_op_to_selection, greedy_wrap, indent_rows, outdent_rows,
+        reflow_keep_cursor, reflow_rows, toggle_case_str,
     };
     use hjkl_buffer::{View, rope_line_str};
     use hjkl_engine::{DefaultHost, Editor, Options};
@@ -1189,12 +1202,21 @@ mod tests {
         xs.iter().map(|s| s.to_string()).collect()
     }
 
+    /// `textwidth` / `tabstop` with vim's default `'autoindent'` on.
+    fn ai(width: usize, tabstop: usize) -> WrapOpts {
+        WrapOpts {
+            width,
+            tabstop,
+            autoindent: true,
+        }
+    }
+
     /// nvim: `gqq` with `textwidth=79` on `"aaa  bbb   ccc"` leaves it alone —
     /// the interior runs are not squeezed.
     #[test]
     fn greedy_wrap_preserves_interior_runs_when_within_width() {
         assert_eq!(
-            greedy_wrap(&mk(&["aaa  bbb   ccc"]), 79, 8),
+            greedy_wrap(&mk(&["aaa  bbb   ccc"]), ai(79, 8)),
             mk(&["aaa  bbb   ccc"])
         );
     }
@@ -1204,7 +1226,7 @@ mod tests {
     #[test]
     fn greedy_wrap_keeps_interior_gap_drops_gap_before_break() {
         assert_eq!(
-            greedy_wrap(&mk(&["aaa  bbb   ccc  ddd  eee"]), 10, 8),
+            greedy_wrap(&mk(&["aaa  bbb   ccc  ddd  eee"]), ai(10, 8)),
             mk(&["aaa  bbb", "ccc  ddd", "eee"])
         );
     }
@@ -1215,15 +1237,15 @@ mod tests {
     #[test]
     fn greedy_wrap_joins_multiline_paragraph() {
         assert_eq!(
-            greedy_wrap(&mk(&["aaa  bbb", "ccc  ddd"]), 10, 8),
+            greedy_wrap(&mk(&["aaa  bbb", "ccc  ddd"]), ai(10, 8)),
             mk(&["aaa  bbb", "ccc  ddd"])
         );
         assert_eq!(
-            greedy_wrap(&mk(&["aaa  ", "bbb  ccc"]), 40, 8),
+            greedy_wrap(&mk(&["aaa  ", "bbb  ccc"]), ai(40, 8)),
             mk(&["aaa  bbb  ccc"])
         );
         assert_eq!(
-            greedy_wrap(&mk(&["aaa", "   bbb ccc"]), 40, 8),
+            greedy_wrap(&mk(&["aaa", "   bbb ccc"]), ai(40, 8)),
             mk(&["aaa bbb ccc"])
         );
     }
@@ -1233,7 +1255,7 @@ mod tests {
     #[test]
     fn greedy_wrap_reemits_leader_on_continuation_lines() {
         assert_eq!(
-            greedy_wrap(&mk(&["   aaa  bbb", "ccc"]), 10, 8),
+            greedy_wrap(&mk(&["   aaa  bbb", "ccc"]), ai(10, 8)),
             mk(&["   aaa", "   bbb ccc"])
         );
     }
@@ -1242,7 +1264,7 @@ mod tests {
     #[test]
     fn greedy_wrap_preserves_trailing_whitespace() {
         assert_eq!(
-            greedy_wrap(&mk(&["aaa  bbb  ccc   "]), 10, 8),
+            greedy_wrap(&mk(&["aaa  bbb  ccc   "]), ai(10, 8)),
             mk(&["aaa  bbb", "ccc   "])
         );
     }
@@ -1251,11 +1273,11 @@ mod tests {
     #[test]
     fn greedy_wrap_single_long_word_overflows_unchanged() {
         assert_eq!(
-            greedy_wrap(&mk(&["supercalifragilistic"]), 10, 8),
+            greedy_wrap(&mk(&["supercalifragilistic"]), ai(10, 8)),
             mk(&["supercalifragilistic"])
         );
         assert_eq!(
-            greedy_wrap(&mk(&["aaa supercalifragilistic bbb"]), 10, 8),
+            greedy_wrap(&mk(&["aaa supercalifragilistic bbb"]), ai(10, 8)),
             mk(&["aaa", "supercalifragilistic", "bbb"])
         );
     }
@@ -1264,17 +1286,20 @@ mod tests {
     #[test]
     fn greedy_wrap_tab_counts_tabstop_and_is_preserved() {
         assert_eq!(
-            greedy_wrap(&mk(&["aaa\tbbb ccc ddd"]), 10, 8),
+            greedy_wrap(&mk(&["aaa\tbbb ccc ddd"]), ai(10, 8)),
             mk(&["aaa", "bbb ccc", "ddd"])
         );
-        assert_eq!(greedy_wrap(&mk(&["aa\tbb cc"]), 40, 8), mk(&["aa\tbb cc"]));
+        assert_eq!(
+            greedy_wrap(&mk(&["aa\tbb cc"]), ai(40, 8)),
+            mk(&["aa\tbb cc"])
+        );
     }
 
     /// Blank lines are paragraph separators and survive verbatim.
     #[test]
     fn greedy_wrap_preserves_blank_line_separators() {
         assert_eq!(
-            greedy_wrap(&mk(&["aaa  bbb", "", "ccc  ddd"]), 10, 8),
+            greedy_wrap(&mk(&["aaa  bbb", "", "ccc  ddd"]), ai(10, 8)),
             mk(&["aaa  bbb", "", "ccc  ddd"])
         );
     }
@@ -1287,7 +1312,10 @@ mod tests {
         // 0-based col 8 = 't' of "three"; "three" starts the second wrapped line.
         let before = mk(&["one two three four five"]);
         let after = mk(&["one two", "three four", "five"]);
-        assert_eq!(reflow_keep_cursor(0, 0, 8, &before, &after, 10, 8), (1, 0));
+        assert_eq!(
+            reflow_keep_cursor(0, 0, 8, &before, &after, ai(10, 8)),
+            (1, 0)
+        );
     }
 
     /// Cursor on a gap that was dropped at a break clamps to the last surviving
@@ -1297,7 +1325,10 @@ mod tests {
         // 0-based col 9 is a space in the dropped "   " gap before "ccc".
         let before = mk(&["aaa  bbb   ccc  ddd  eee"]);
         let after = mk(&["aaa  bbb", "ccc  ddd", "eee"]);
-        assert_eq!(reflow_keep_cursor(0, 0, 9, &before, &after, 10, 8), (0, 7));
+        assert_eq!(
+            reflow_keep_cursor(0, 0, 9, &before, &after, ai(10, 8)),
+            (0, 7)
+        );
     }
 
     // ── case operators must not touch registers / clipboard ──────────────────

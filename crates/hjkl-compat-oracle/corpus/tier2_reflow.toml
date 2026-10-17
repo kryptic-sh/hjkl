@@ -150,3 +150,50 @@ expected_buffer = "aaa  bbb\n\nccc  ddd\n"
 expected_cursor = [2, 0]
 expected_mode = "normal"
 textwidth = 10
+
+# ── Continuation indent follows 'autoindent' ──────────────────────────────────
+#
+# The lines `gq` / `gw` open take the paragraph's indent only under
+# `'autoindent'`, as vim's auto-wrap copies the indent onto each line it opens.
+# Without it they start at column 0.
+
+[[cases]]
+name = "reflow_gqq_noautoindent_continuation_starts_at_col0"
+initial_buffer = "    one two three four five six\n"
+initial_cursor = [0, 0]
+keys = "gqq"
+expected_buffer = "    one two three\nfour five six\n"
+expected_mode = "normal"
+textwidth = 20
+autoindent = false
+
+[[cases]]
+name = "reflow_gqq_autoindent_continuation_keeps_the_indent"
+initial_buffer = "    one two three four five six\n"
+initial_cursor = [0, 0]
+keys = "gqq"
+expected_buffer = "    one two three\n    four five six\n"
+expected_mode = "normal"
+textwidth = 20
+autoindent = true
+
+[[cases]]
+name = "reflow_gww_noautoindent_keeps_the_cursor_char"
+initial_buffer = "    one two three four five six\n"
+initial_cursor = [0, 18]
+keys = "gww"
+expected_buffer = "    one two three\nfour five six\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+textwidth = 20
+autoindent = false
+
+[[cases]]
+name = "reflow_visual_gq_noautoindent"
+initial_buffer = "    one two three four five six\nseven\n"
+initial_cursor = [0, 0]
+keys = "Vjgq"
+expected_buffer = "    one two three\nfour five six seven\n"
+expected_mode = "normal"
+textwidth = 20
+autoindent = false

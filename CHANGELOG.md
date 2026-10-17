@@ -34,6 +34,8 @@ patch bumps.
   `\r`, which the rope counts as a line break but the highlighter's row table
   did not, so rendering the viewport sliced past the end of its span cache and
   panicked. Any lone `\r`, VT, FF, NEL, LS or PS line separator did the same.
+- `gq` / `gw` with `:set noautoindent` no longer indent the lines they open;
+  only `'autoindent'` (on by default) copies the paragraph's indent onto them.
 - **Windows: a failed clipboard write no longer wipes the clipboard.** The
   clipboard was emptied before the new data's memory was allocated, so an
   allocation failure left it empty; allocation now comes first.

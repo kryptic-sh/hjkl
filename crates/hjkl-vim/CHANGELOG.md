@@ -17,6 +17,10 @@ and this project adheres to
 
 ### Fixed
 
+- `gq` / `gw` under `noautoindent` start the lines they open at column 0, as vim
+  does; they copied the paragraph's indent onto every line regardless.
+  `'autoindent'` (hjkl's default) keeps the indent. The wrap now takes a
+  `WrapOpts` (`textwidth`, `tabstop`, `autoindent`) instead of loose arguments.
 - A forward charwise operator started inside a closed fold takes the fold whole
   from any column, and a backward charwise one (`db`, `d0`) is left as the
   motion made it. The column-0 proxy for "the fold is still closed"
