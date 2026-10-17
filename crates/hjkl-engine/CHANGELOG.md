@@ -17,6 +17,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Undo / redo (`settle_after_history_jump`) clamp the cursor to the last line,
+  on its first non-blank, when the restored position is below it. A redo of a
+  delete that reached the end of the buffer left the cursor on the row past the
+  trailing newline, where `j` / `k` could not move it.
 - A linewise delete whose motion went upward (`dk`, `d'a`) drops the marks,
   jumplist entries and folds on the rows it removes. `mutate_edit` rebased them
   from the cursor row, which is the range's bottom row in that case, so the

@@ -4658,6 +4658,15 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // text that moved — the same "drop, never guess" rule `selection_shift`
         // applies to a single untrackable edit.
         self.extra_selections.clear();
+        // A redo of a delete that reached the end of the buffer restores a
+        // cursor below the rows that are left. vim moves it to the last line's
+        // first non-blank; without this it sits on the phantom row after the
+        // trailing newline, where even `j`/`k` cannot recover it.
+        let last_row = self.buffer.last_content_row();
+        if self.cursor().0 > last_row {
+            buf_set_cursor_rc(&mut self.buffer, last_row, 0);
+            crate::motions::move_first_non_blank(&mut self.buffer);
+        }
         // Unconditional clamp: the restored cursor came from a snapshot that may
         // have been taken mid-insert and can sit one past the last valid column.
         let (row, col) = self.cursor();

@@ -1030,6 +1030,17 @@ fail on the parent commit, the other 6 are negative guards).
     commit: `jjd2ku<C-r>` (redo) nvim (0,3), hjkl (0,0); `jjc2kx<Esc>u`
     (linewise change, `change_linewise_rows` pushes its own undo) nvim (1,3),
     hjkl (2,3); `jjdw.u` (undo of a dot-repeat) nvim (2,2), hjkl (2,3).
+  - **Line-operator undo column, and curswant after undo — needs vim's rule
+    first.** On `"aa bb\n  cc dd ee\nee ff\ngg hh\n"`, undo after `dd`, `>>`,
+    `<<`, `cc`, `gUU` or `==` typed at (1,5) lands at (1,2) in nvim, hjkl keeps
+    (1,5); but `jddu` from (1,0) stays at (1,0) in nvim, so it is not simply
+    "first non-blank". Separately, nvim re-takes curswant from the undo/redo
+    landing (`jjAzz<Esc>uk` @ (0,3) on `"aa bb\n  cc dd\nee ff\n…"`: nvim (1,4),
+    hjkl (1,6), hjkl's sticky column left over from the insert). Tried
+    2026-10-18: syncing the sticky column in `settle_after_history_jump` fixes
+    that case but regresses `jjddukj`, because the wrong `dd` undo column then
+    becomes the sticky one. The two have to land together; read `u_undoredo`'s
+    cursor rule in nvim's source before guessing again.
   - **Mark rebasing after a CHARWISE multi-row delete still keys off the cursor
     row.** `mutate_edit`'s `rebase_row` uses the edit's own top row only for a
     linewise `DeleteRange`; a backward charwise delete across rows (``d`a``
