@@ -1025,9 +1025,11 @@ fail on the parent commit, the other 6 are negative guards).
   interactive nvim may differ there. hjkl has no "pending curswant" state to
   hang this on; the closed-fold half (`jzfjk`) is the stable case to match.
 - **Left by the operator + mark work (2026-10-18):**
-  - **The cursor after undoing a linewise delete.** `jjd2ku` on
-    `"aa bb\ncc dd\nee ff\ngg hh\n"` @ (0,3): nvim (0,3), hjkl (2,3). Same for
-    `d'a` then `u`, and on the parent commit.
+  - **Undo/redo cursor gaps left after the operator-delete fix.** On
+    `"aa bb\n  cc dd\nee ff\ngg hh\n"` @ (0,3), all the same on the parent
+    commit: `jjd2ku<C-r>` (redo) nvim (0,3), hjkl (0,0); `jjc2kx<Esc>u`
+    (linewise change, `change_linewise_rows` pushes its own undo) nvim (1,3),
+    hjkl (2,3); `jjdw.u` (undo of a dot-repeat) nvim (2,2), hjkl (2,3).
   - **Mark rebasing after a CHARWISE multi-row delete still keys off the cursor
     row.** `mutate_edit`'s `rebase_row` uses the edit's own top row only for a
     linewise `DeleteRange`; a backward charwise delete across rows (``d`a``

@@ -39,6 +39,8 @@ patch bumps.
 
 ### Fixed
 
+- `u` after an upward delete (`d2k`, `dgg`, `d{`) puts the cursor on the top
+  row, as in vim, not on the row the delete was typed on.
 - **Deleting lines upward (`dk`, `d'a`) clears the marks on them.** A mark on
   the top deleted row survived and pointed at whatever moved up into its place.
 - `'A` to a mark in the same buffer opens the closed fold it lands in.

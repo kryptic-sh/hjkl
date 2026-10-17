@@ -99,3 +99,57 @@ initial_cursor = [0, 0]
 keys = "ciwbar<Esc>u<C-r>"
 expected_buffer = "bar\n"
 expected_mode = "normal"
+
+# ── Where `u` leaves the cursor after an operator delete ─────────────────────
+#
+# vim saves the undo state with the cursor already at the range start, which is
+# where `u` puts it back — so an upward delete undoes onto its top row.
+
+[[cases]]
+name = "undo_of_an_upward_linewise_delete_lands_on_the_top_row"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "jjd2ku"
+expected_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_of_dgg_lands_where_the_motion_did"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "jjdggu"
+expected_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_of_d_brace_back"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "jjd{u"
+expected_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_of_d_quote_mark_lands_on_the_top_row"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "majjd'au"
+expected_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

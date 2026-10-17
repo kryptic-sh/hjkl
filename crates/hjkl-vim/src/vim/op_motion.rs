@@ -522,6 +522,10 @@ pub fn run_operator_over_range<H: hjkl_engine::types::Host>(
             buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
         }
         Operator::Delete => {
+            // vim saves the undo state with the cursor already at the range's
+            // start, which is where `u` puts it back: `d2k` then `u` lands on
+            // the top row, not the row the delete was typed on.
+            buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
             ed.push_undo();
             // Linewise deletes must not land the cursor on `top.0` when that
             // row no longer exists after the cut (or is now the trailing

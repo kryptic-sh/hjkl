@@ -29,6 +29,9 @@ and this project adheres to
 
 ### Fixed
 
+- `u` after an operator delete leaves the cursor at the start of the deleted
+  range, as vim does: an upward `d2k` / `dgg` / `d{` / `d'a` undoes onto its top
+  row, where hjkl returned to the row the delete was typed on.
 - A same-buffer uppercase mark jump (`'A`) opens a closed fold it lands in, like
   the lowercase ones; it had its own copy of the jump that missed `'foldopen'`.
 - On a line that is all whitespace, `^`, `_`, `+`, `-`, `<CR>`, `G`, `dd` and
