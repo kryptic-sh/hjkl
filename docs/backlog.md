@@ -985,26 +985,6 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
 - `:make` runs `makeprg` as an argv with no shell by design, so it is not a
   shell-out and was deliberately left out of `policy::shell_command`.
 
-### 1.16 `gq` divergences left after the `'autoindent'` fix (2026-10-18)
-
-`difffuzz 2000 424242` reported 39 divergences involving `gq`. Replayed with
-`dfcase … 20` (the fuzzer's `textwidth`): 5 agreed before the fix, 16 after,
-none regressed. Patterns among the 23 left, each seen in at least one case, none
-investigated:
-
-- **Cursor after a range ending on a blank line.** `gq}` on
-  `"'A-B'.[foo]  (bar).\"a\"\n\n{it's}"` @ (0,5): nvim leaves the cursor on the
-  blank row 2, hjkl on row 1. `reflow_rows` deliberately skips a trailing blank
-  ("a trailing blank from `ap` etc. is not counted"), so `gq}` and `gqap` may
-  want different rules — measure both before changing it.
-- **A tab indent is retabbed.** `(gq}` on `"\ta"` @ (0,1): nvim rewrites the
-  indent as four spaces (`expandtab`, `shiftwidth=4`), hjkl keeps the tab.
-- **A whitespace-only line survives.** `O <Esc>gqq` on `"'foo'  bar.(A-B)"`:
-  nvim keeps the `" "` line, hjkl empties it (it treats the line as a blank
-  paragraph separator).
-- **Insert-mode auto-wrap at `textwidth`** (`gq}Aab cd`) — hjkl does not wrap
-  while typing; the fuzzer pins `textwidth` only for `gq` cases for that reason.
-
 ### 1.15 Left open by the `'foldopen'` work (2026-10-18)
 
 `'foldopen'`'s `hor`, `block`, `percent`, `search` and `mark` classes shipped as
@@ -1055,6 +1035,26 @@ fail on the parent commit, the other 6 are negative guards).
   2026-10-18 (`row_starts` in `hjkl-syntax`). Why `Auto` picks CRLF there was
   not investigated; installing CRLF formatter output raw matches how hjkl keeps
   a CRLF file, so it is not itself a defect.
+
+### 1.16 `gq` divergences left after the `'autoindent'` fix (2026-10-18)
+
+`difffuzz 2000 424242` reported 39 divergences involving `gq`. Replayed with
+`dfcase … 20` (the fuzzer's `textwidth`): 5 agreed before the fix, 16 after,
+none regressed. Patterns among the 23 left, each seen in at least one case, none
+investigated:
+
+- **Cursor after a range ending on a blank line.** `gq}` on
+  `"'A-B'.[foo]  (bar).\"a\"\n\n{it's}"` @ (0,5): nvim leaves the cursor on the
+  blank row 2, hjkl on row 1. `reflow_rows` deliberately skips a trailing blank
+  ("a trailing blank from `ap` etc. is not counted"), so `gq}` and `gqap` may
+  want different rules — measure both before changing it.
+- **A tab indent is retabbed.** `(gq}` on `"\ta"` @ (0,1): nvim rewrites the
+  indent as four spaces (`expandtab`, `shiftwidth=4`), hjkl keeps the tab.
+- **A whitespace-only line survives.** `O <Esc>gqq` on `"'foo'  bar.(A-B)"`:
+  nvim keeps the `" "` line, hjkl empties it (it treats the line as a blank
+  paragraph separator).
+- **Insert-mode auto-wrap at `textwidth`** (`gq}Aab cd`) — hjkl does not wrap
+  while typing; the fuzzer pins `textwidth` only for `gq` cases for that reason.
 
 ## 2. Blocked on platform access
 
