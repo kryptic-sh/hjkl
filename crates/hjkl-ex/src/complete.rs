@@ -1320,6 +1320,43 @@ mod tests {
         assert!(result.candidates.iter().all(|c| c.ends_with('/')));
     }
 
+    /// Points `HOME` at `path` until dropped, then restores it. `HOME` is
+    /// process-wide and the tests run in parallel, so every test that sets it
+    /// holds one lock for its whole body; two of them overlapping saw each
+    /// other's `HOME` and failed at random.
+    struct HomeGuard {
+        prev: Option<String>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl HomeGuard {
+        fn set(path: &std::path::Path) -> Self {
+            static HOME_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+            let lock = HOME_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let prev = std::env::var("HOME").ok();
+            // SAFETY: every writer of `HOME` in this binary holds `HOME_LOCK`,
+            // so writers never overlap. Readers are not covered: the other path
+            // tests read `HOME` unlocked through `home_dir()`, the same exposure
+            // this test binary had before the lock existed.
+            unsafe { std::env::set_var("HOME", path) };
+            Self { prev, _lock: lock }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            // SAFETY: still under `HOME_LOCK` (`_lock` drops after this body).
+            unsafe {
+                match &self.prev {
+                    Some(v) => std::env::set_var("HOME", v),
+                    None => std::env::remove_var("HOME"),
+                }
+            }
+        }
+    }
+
     #[test]
     fn complete_cd_expands_tilde() {
         // `:cd ~/…` still expands `~` and keeps the typed `~/` prefix, listing
@@ -1333,9 +1370,7 @@ mod tests {
             ..Default::default()
         };
 
-        let prev = std::env::var("HOME").ok();
-        // SAFETY: single-threaded test logic; restored below.
-        unsafe { std::env::set_var("HOME", home.path()) };
+        let _home = HomeGuard::set(home.path());
 
         let line = "cd ~/";
         let result = complete_arg(line, line.len(), ArgKind::Directory, &sources);
@@ -1345,14 +1380,6 @@ mod tests {
             result.candidates
         );
         assert!(!result.candidates.iter().any(|c| c.contains("notes.txt")));
-
-        // SAFETY: restore prior HOME.
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
     }
 
     #[test]
@@ -1798,17 +1825,11 @@ mod tests {
     fn complete_path_entries_expands_tilde_and_preserves_prefix() {
         // Point HOME at a temp dir with a known layout, then assert the returned
         // candidates keep the typed `~/` prefix (not the expanded absolute path).
-        // Env is process-global; only this test touches HOME, and every other
-        // path test uses a non-`~` prefix (HOME is read but unused for those),
-        // so a transient HOME here can't perturb them.
         let home = tempfile::tempdir().unwrap();
         std::fs::create_dir(home.path().join("Documents")).unwrap();
         std::fs::write(home.path().join("notes.txt"), b"x").unwrap();
         let cwd = tempfile::tempdir().unwrap();
-
-        let prev = std::env::var("HOME").ok();
-        // SAFETY: single-threaded within this test's logic; see comment above.
-        unsafe { std::env::set_var("HOME", home.path()) };
+        let _home = HomeGuard::set(home.path());
 
         let all = complete_path_entries("~/", cwd.path(), false);
         assert!(
@@ -1839,14 +1860,6 @@ mod tests {
             nope.is_empty(),
             "expected empty for unknown var, got {nope:?}"
         );
-
-        // SAFETY: restore prior HOME.
-        unsafe {
-            match prev {
-                Some(v) => std::env::set_var("HOME", v),
-                None => std::env::remove_var("HOME"),
-            }
-        }
     }
 
     // ── leading range/count before command name (issue #305) ──────────────────
