@@ -72,6 +72,10 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     // non-clean default). Pin it so H/M/L and scroll-follow agree between
     // drivers on seeded cursors near a viewport edge.
     editor.settings_mut().scrolloff = 0;
+    // Likewise `nvim --clean` searches case-sensitively, where hjkl defaults
+    // `ignorecase` + `smartcase` on: `/a` would match an `A` on one side only.
+    editor.settings_mut().ignore_case = false;
+    editor.settings_mut().smartcase = false;
 
     // 2b. Apply per-case indent settings so `>>` / `<<` match nvim's output.
     if let Some(sw) = case.shiftwidth {
