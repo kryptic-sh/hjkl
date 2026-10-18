@@ -1005,7 +1005,11 @@ fail on the parent commit, the other 6 are negative guards).
   to `Motion::LineStart`, the `0` motion. vim's `<Home>` is `nv_home` →
   `nv_pipe`, which has no `'foldopen'` check (`zfj<Home>dd` deletes the whole
   fold in nvim). Fixing it needs `<Home>` to be its own motion, or `GotoColumn`
-  with a forced count of 1.
+  with a forced count of 1 — on BOTH paths: the app's keymap binds `<Home>` to
+  `MotionKind::LineStart` directly (`keymap_build.rs`, the same kind as `0`), so
+  a `parse_motion` change alone would leave the app unchanged. Either way it
+  adds a variant to a public enum (`Motion` or `MotionKind`); deferred
+  2026-10-18 as not worth a breaking change on its own.
 - **"Moved" stands in for each handler's success test.** Divergent edges, none
   measured against nvim: a `b` / `B` whose only movement is the snap to a closed
   fold's first row at buffer start (vim's `bck_word` then fails and opens
