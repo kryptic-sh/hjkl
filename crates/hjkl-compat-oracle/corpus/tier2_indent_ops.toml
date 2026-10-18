@@ -70,3 +70,58 @@ shiftwidth = 4
 expandtab = true
 expected_buffer = "        a\n        b\nc\nd\n"
 expected_mode = "normal"
+
+# ── `<BS>` in the indent ─────────────────────────────────────────────────────
+#
+# With whitespace before the cursor, `<BS>` deletes back to the previous stop
+# (hjkl's `softtabstop`; nvim's `smarttab` uses `shiftwidth` in the indent,
+# 4 in both here), counting a tab by its width.
+
+[[cases]]
+name = "backspace_in_indent_goes_to_the_previous_stop"
+initial_buffer = "  q r"
+initial_cursor = [0, 2]
+keys = "I<BS>x<Esc>"
+expected_buffer = "xq r"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "backspace_in_indent_from_past_a_stop"
+initial_buffer = "      q"
+initial_cursor = [0, 0]
+keys = "I<BS>x<Esc>"
+expected_buffer = "    xq"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "backspace_over_a_tab_and_spaces"
+initial_buffer = "  \tq"
+initial_cursor = [0, 0]
+keys = "I<BS>x<Esc>"
+expected_buffer = "xq"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "backspace_twice_in_a_deep_indent"
+initial_buffer = "        q"
+initial_cursor = [0, 0]
+keys = "I<BS><BS>x<Esc>"
+expected_buffer = "xq"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

@@ -30,6 +30,11 @@ and this project adheres to
 
 ### Fixed
 
+- Insert-mode `<BS>` under `softtabstop` deletes back to the previous stop, as
+  vim's `ins_bs` does: from column 2 of `"  q"` both spaces go, and a tab counts
+  its display width (a tab that overshoots the stop is made up with spaces). It
+  only fired when the cursor sat exactly on a stop after a full run of spaces,
+  so it deleted one space at a time otherwise.
 - `[count]o` / `[count]O` repeat the whole typed text on every line: `2oab<CR>c`
   gave `ab`, `c`, `c` instead of `ab`, `c`, `ab`, `c`. And `.` keeps the count
   (`2oab<Esc>` then `.` adds two lines) unless given a new one.

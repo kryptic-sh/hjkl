@@ -43,6 +43,9 @@ patch bumps.
 
 ### Fixed
 
+- **`<BS>` in an indent goes back to the previous `softtabstop` stop** from
+  anywhere, counting tabs by their width, as in vim; it deleted one space unless
+  the cursor sat exactly on a stop.
 - **Windows: the explorer shows git status when the working directory is spelled
   with an 8.3 short name or in different letter case.** The status lookup used
   git's own spelling of the repository path, which never matched the explorer's,

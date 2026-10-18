@@ -1099,7 +1099,17 @@ Seen while measuring, not `gq`:
   / `O` replaying an empty line). On `"abc def\n  q r\nxyz w\nlast\n"` @ (0,2),
   each also wrong before those fixes:
   - `jA<BS><BS>x<Esc>j.` and `jI<BS>x<Esc>j.` replay the typed `x` but not the
-    backspaces — vim replays the keys, hjkl the net text.
+    backspaces — vim replays the keys, hjkl the net text. The live `<BS>` in an
+    indent was a separate bug, fixed 2026-10-18 (`generic_backspace` now goes to
+    the previous `softtabstop` stop); what is left is the replay: record the
+    deletions past the insert start (e.g. a `deleted_before` count on
+    `LastChange::InsertAt`) and redo them before retyping.
+  - **hjkl's `softtabstop` defaults to 4; nvim's is 0, with `smarttab` on.** The
+    two agree on `<BS>` inside an indent (`shiftwidth=4` there), but after text
+    nvim deletes one space where hjkl deletes back to a stop of 4 (`A<BS>x<Esc>`
+    on `"ab  "`: nvim `"ab x"`, hjkl `"abx"`, as vim itself gives under
+    `:set sts=4`). A deliberate default, noted so a differential case after text
+    is not read as a regression; the oracle does not pin `softtabstop`.
   - `Ra<CR>b<Esc>jj.` overstrikes the wrong span.
 - **The read-only registers `".` and `"/` cannot be named in Normal mode.**
   `set_pending_register` (`hjkl-vim` `editor_ext.rs`) accepts only

@@ -438,17 +438,37 @@ fn generic_backspace<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
         }
     }
 
+    // vim's `ins_bs` under `'softtabstop'`: with whitespace before the cursor,
+    // delete back to the previous `softtabstop` stop — counted in display
+    // columns, so a tab counts its width — and no further than the
+    // whitespace reaches. A tab that overshoots the stop is made up with
+    // spaces. From column 2 of `"  q"` that is column 0, two spaces in one
+    // stroke; a lone space after text is just that space.
     let sts = ed.settings().softtabstop;
-    if sts > 0 && cursor.col >= sts && cursor.col.is_multiple_of(sts) {
-        let line = buf_line(ed.buffer(), cursor.row).unwrap_or_default();
-        let chars: Vec<char> = line.chars().collect();
-        let run_start = cursor.col - sts;
-        if (run_start..cursor.col).all(|i| chars.get(i).copied() == Some(' ')) {
+    let line = buf_line(ed.buffer(), cursor.row).unwrap_or_default();
+    let chars: Vec<char> = line.chars().collect();
+    let is_blank = |c: Option<&char>| matches!(c, Some(' ' | '\t'));
+    if sts > 0 && cursor.col > 0 && is_blank(chars.get(cursor.col - 1)) {
+        let tabstop = ed.settings().tabstop;
+        let vcol = |col: usize| hjkl_buffer::char_col_to_visual_col(&line, col, tabstop);
+        let want = (vcol(cursor.col) - 1) / sts * sts;
+        let mut start = cursor.col;
+        while start > 0 && is_blank(chars.get(start - 1)) && vcol(start - 1) >= want {
+            start -= 1;
+        }
+        if start < cursor.col {
+            let pad = want.saturating_sub(vcol(start));
             ed.mutate_edit(Edit::DeleteRange {
-                start: Position::new(cursor.row, run_start),
+                start: Position::new(cursor.row, start),
                 end: cursor,
                 kind: MotionKind::Char,
             });
+            if pad > 0 {
+                ed.mutate_edit(Edit::InsertStr {
+                    at: Position::new(cursor.row, start),
+                    text: " ".repeat(pad),
+                });
+            }
             return true;
         }
     }
