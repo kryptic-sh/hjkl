@@ -169,3 +169,58 @@ initial_cursor = [0, 0]
 keys = "/target<CR>j"
 expected_buffer = "ab\n0123456789target0123\nzzzzzzzzzzzzzzzzzzzzzz\n"
 expected_cursor = [2, 10]
+
+# ── Wrapping back onto the cursor's own line ─────────────────────────────────
+#
+# With wrapscan, a search that finds nothing ahead comes back round to the
+# cursor line itself: a match behind the cursor for `/`, ahead of it for `?` —
+# in a one-line buffer, the only place left to look.
+
+[[cases]]
+name = "search_wraps_to_a_match_earlier_on_a_one_line_buffer"
+initial_buffer = "{hello} baz [a]"
+initial_cursor = [0, 14]
+keys = "/baz<CR>"
+expected_buffer = "{hello} baz [a]"
+expected_cursor = [0, 8]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "search_wraps_to_a_match_earlier_on_the_cursor_line"
+initial_buffer = "a baz\nx"
+initial_cursor = [0, 4]
+keys = "/baz<CR>"
+expected_buffer = "a baz\nx"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "backward_search_wraps_to_a_match_later_on_a_one_line_buffer"
+initial_buffer = "(foo)  a, (hello), [a]"
+initial_cursor = [0, 3]
+keys = "?hello<CR>"
+expected_buffer = "(foo)  a, (hello), [a]"
+expected_cursor = [0, 11]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "backward_search_wraps_to_a_match_later_on_the_cursor_line"
+initial_buffer = "q baz\nx"
+initial_cursor = [0, 0]
+keys = "?baz<CR>"
+expected_buffer = "q baz\nx"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

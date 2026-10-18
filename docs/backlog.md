@@ -1095,6 +1095,11 @@ pattern identified so far:
 
 Seen while measuring, not `gq`:
 
+- **`/a` matched an uppercase `A` in hjkl, not in nvim.** `/a<CR>` @ (1,0) on
+  `"A-B _id\nfoo"`: nvim finds nothing and stays, hjkl jumps to (0,0). Looks
+  like hjkl's `ignorecase` / `smartcase` defaults differ from `nvim --clean`'s;
+  not checked which, and the oracle does not pin either.
+
 - **Left in difffuzz's `J`-ending bucket (2026-10-18, after the join-cursor
   fix), not investigated:** `3J` on a one-line buffer leaves the cursor at (0,3)
   where nvim moves it to (0,0); after `<C-v>asJ` / `vasJ` hjkl has joined lines

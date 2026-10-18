@@ -43,6 +43,9 @@ patch bumps.
 
 ### Fixed
 
+- **A search wraps round to a match earlier on the cursor's own line** (`/`,
+  `n`, `*`), or later on it for `?` / `#` — in a one-line buffer, past its only
+  match, it found nothing.
 - `J` / `gJ` onto an empty line no longer leave the cursor past the end of the
   line (where `x` then did nothing).
 - After `dap`, `dj` or `Vd` the cursor lands on the first non-blank of its line,

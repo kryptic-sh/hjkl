@@ -313,7 +313,10 @@ impl Search for RopeBuffer {
                 &from_line,
             ));
         }
-        for offset in 1..total {
+        // `..=total`: the last step wraps back onto the starting row, whose
+        // part BEFORE `from` the scan above never looked at — a match behind
+        // the cursor on its own line (in a one-line buffer, the only line).
+        for offset in 1..=total {
             let row = start.row + offset;
             if row >= total && !wrap {
                 break;
@@ -361,7 +364,9 @@ impl Search for RopeBuffer {
                 start.row, s, start.row, e, &from_line,
             ));
         }
-        for offset in 1..total {
+        // `..=total`: as in `find_next`, the last step wraps back onto the
+        // starting row and takes its last match AFTER `from`.
+        for offset in 1..=total {
             // Walk backwards.
             let row = if offset > start.row {
                 if !wrap {

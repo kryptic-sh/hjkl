@@ -17,6 +17,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `Search::find_next` / `find_prev` on `View` wrap all the way round: a match
+  earlier on the cursor's own line (later, for `find_prev`) is found once
+  nothing turns up elsewhere. The scan stopped one row short of coming back, so
+  in a one-line buffer a search wrapping past its only match never found it.
 - Undo / redo open a closed fold whose first row they land the cursor on, as
   vim's `'foldopen'` `undo` does; only folds that hid the row were opened.
 - Undo / redo (`settle_after_history_jump`) clamp the cursor to the last line,
