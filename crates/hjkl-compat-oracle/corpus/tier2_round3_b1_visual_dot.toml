@@ -102,3 +102,45 @@ initial_buffer = "foo\nbar\nbaz\n"
 initial_cursor = [0, 0]
 keys = "Vyj."
 expected_buffer = "foo\nbar\nbaz\n"
+
+# ── Repeating a Visual-line operator near the end of the buffer ──────────────
+#
+# `.` clamps the saved line count to the lines left, where `[count]dd` would
+# abort.
+
+[[cases]]
+name = "visual_line_delete_repeat_deletes_the_lines_left"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "Vjd."
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_change_repeat_changes_the_lines_left"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "Vjcx<Esc>j."
+expected_buffer = "x\nx"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_X_repeat_deletes_the_lines_left"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "vjXj."
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

@@ -30,6 +30,10 @@ and this project adheres to
 
 ### Fixed
 
+- `.` after a Visual-line operator applies to the lines left when fewer remain
+  than it covered (`Vjd` then `.` on the last line deletes it): vim's Visual
+  redo clamps the saved line count to the buffer, where the replay had taken the
+  `[count]dd` path, which aborts.
 - Visual `X` / `D` (delete), `C` / `S` / `R` (change) and `Y` (yank) in charwise
   and linewise Visual act on the selected lines whole, as in vim (`:h v_X`). `X`
   / `D` / `C` / `Y` did nothing and left Visual mode on; `S` / `R` changed only

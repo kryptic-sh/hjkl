@@ -43,6 +43,8 @@ patch bumps.
 
 ### Fixed
 
+- `.` after `Vjd` / `Vjc` near the end of the buffer acts on the lines left, as
+  in vim, where it did nothing.
 - **Visual `X`, `D`, `C`, `S`, `R` and `Y` work on whole lines**, as in vim;
   most of them did nothing, and `S` / `R` changed only the selection.
 - After a Visual `d` / `x` to the end of the line the cursor is on the last

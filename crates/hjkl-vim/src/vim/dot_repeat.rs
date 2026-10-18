@@ -180,7 +180,11 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             // charwise visual selection.
             match extent {
                 VisualExtent::Line { lines } => {
-                    execute_line_op(ed, op, lines);
+                    // vim's Visual redo moves the end down by the saved line
+                    // count and clamps it to the buffer's last line; unlike
+                    // `[count]dd` it never aborts for lack of lines.
+                    let fit = last_content_row(ed).saturating_sub(ed.cursor().0) + 1;
+                    execute_line_op(ed, op, lines.min(fit));
                     if let Some(text) = inserted {
                         replay_insert_and_finish(ed, &text);
                     }
