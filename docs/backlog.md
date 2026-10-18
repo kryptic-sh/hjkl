@@ -1099,9 +1099,21 @@ Seen while measuring, not `gq`:
   - `Ra<CR>b<Esc>jj.` overstrikes the wrong span.
   - `2oab<Esc>j.` opens one line, nvim two: `LastChange::OpenLine` keeps no
     count.
-  - `".p` pastes nothing, after `oab<Esc>` and after a plain `iab<Esc>` alike:
-    the `".` register does not reach `p` in the oracle driver. Not checked in
-    the app.
+- **The read-only registers `".` and `"/` cannot be named in Normal mode.**
+  `set_pending_register` (`hjkl-vim` `editor_ext.rs`) accepts only
+  `[a-zA-Z0-9"+*_-]`, so `".` is swallowed and `".p` becomes a plain `p`;
+  `do_paste` also reads only the register store, where those two have no slot
+  (`<C-r>.` / `<C-r>/` in Insert mode do work, via `insert_register_text`).
+  Measured against nvim 0.12.5 on `"abc def\nxyz\n"` @ (0,0): `iab<Esc>".p` →
+  `"abababc def"`, `".P` → `"aabbabc def"`, `2".p` → `"ababababc def"`; but a
+  WRITING command naming one aborts with E354 and changes nothing —
+  `yyiab<Esc>".dd` leaves the buffer as it was, and a following `p` still pastes
+  the `yy`. hjkl today deletes. So accepting `.` / `/` needs, besides a read in
+  `do_paste`, one gate that aborts every non-paste command naming a read-only
+  register; the pending register is consumed at ~25 sites (`bridges`, `command`,
+  `operator`, `op_motion`, `visual_ops`, `sneak`, `linewise`), on both the FSM
+  and the keymap path, so the gate belongs where the command is dispatched, not
+  at each site.
 - **`gI` is not implemented** (insert at column 0, `:h gI`); hjkl ignores it.
 - **"Blank" is any Unicode whitespace to hjkl, only space and tab to vim.**
   `move_first_non_blank` and `greedy_wrap` test `char::is_whitespace`, while
