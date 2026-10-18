@@ -30,6 +30,9 @@ and this project adheres to
 
 ### Fixed
 
+- `J` / `gJ` with an empty (or, for `J`, blank) line below leave the cursor on
+  the line's last character. Nothing is appended, so the join point is past the
+  end; the cursor stayed there, and a following `x` deleted nothing.
 - A linewise delete through an operator motion, a text object or Visual-line
   (`dj`, `dap`, `Vd`) leaves the cursor on the first non-blank of the line it
   lands on, as `dd` already did; it landed on column 0. The three copies of that

@@ -51,3 +51,69 @@ initial_cursor = [0, 0]
 keys = "gJ"
 expected_buffer = "foobar\n"
 expected_cursor = [0, 3]
+
+# ── Joining an empty line ────────────────────────────────────────────────────
+#
+# Nothing is appended, so the join point is past the end of the line; vim
+# clamps the cursor onto the last character.
+
+[[cases]]
+name = "join_with_an_empty_line_keeps_the_cursor_on_the_line"
+initial_buffer = "abc\n\nx"
+initial_cursor = [0, 0]
+keys = "J"
+expected_buffer = "abc\nx"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "raw_join_with_an_empty_line_keeps_the_cursor_on_the_line"
+initial_buffer = "abc\n\nx"
+initial_cursor = [0, 0]
+keys = "gJ"
+expected_buffer = "abc\nx"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "join_with_a_blank_line"
+initial_buffer = "abc\n  \nx"
+initial_cursor = [0, 0]
+keys = "J"
+expected_buffer = "abc\nx"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_raw_join_over_empty_lines"
+initial_buffer = "abc\n\n\nx"
+initial_cursor = [0, 0]
+keys = "3gJ"
+expected_buffer = "abc\nx"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "x_after_joining_an_empty_line"
+initial_buffer = "abc\n\nx"
+initial_cursor = [0, 0]
+keys = "gJx"
+expected_buffer = "ab\nx"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

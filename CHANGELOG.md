@@ -43,6 +43,8 @@ patch bumps.
 
 ### Fixed
 
+- `J` / `gJ` onto an empty line no longer leave the cursor past the end of the
+  line (where `x` then did nothing).
 - After `dap`, `dj` or `Vd` the cursor lands on the first non-blank of its line,
   as after `dd`, instead of column 0.
 - **Pasting lines keeps their blank first or last line**: `yap` over a paragraph

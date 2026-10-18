@@ -525,6 +525,7 @@ pub fn join_line<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View,
         ""
     };
     let joined = format!("{cur_line}{separator}{next_trimmed}");
+    let joined_chars = joined.chars().count();
     ed.mutate_edit(Edit::Replace {
         start: Position::new(row, 0),
         end: Position::new(row + 1, next_chars),
@@ -532,8 +533,14 @@ pub fn join_line<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View,
     });
     // Vim parks the cursor on the inserted space — or at the join
     // point when no space went in (which is the same column either
-    // way, since the space sits exactly at `cur_chars`).
-    buf_set_cursor_rc(ed.buffer_mut(), row, cur_chars);
+    // way, since the space sits exactly at `cur_chars`). Joining an
+    // empty or blank line appends nothing, and the join point is then
+    // past the end: vim clamps it onto the last character.
+    buf_set_cursor_rc(
+        ed.buffer_mut(),
+        row,
+        cur_chars.min(joined_chars.saturating_sub(1)),
+    );
     true
 }
 /// `gJ` — join the next line onto the current one without inserting a
@@ -557,8 +564,10 @@ pub fn join_line_raw<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
         count: 1,
         with_space: false,
     });
-    // Vim leaves the cursor at the join point (end of original line).
-    buf_set_cursor_rc(ed.buffer_mut(), row, join_col);
+    // Vim leaves the cursor at the join point (end of original line),
+    // clamped onto the last character when the joined line added nothing.
+    let last_col = buf_line_chars(ed.buffer(), row).saturating_sub(1);
+    buf_set_cursor_rc(ed.buffer_mut(), row, join_col.min(last_col));
     true
 }
 /// Visual-mode `J` (`with_space = true`) / `gJ` (`with_space = false`) — join
