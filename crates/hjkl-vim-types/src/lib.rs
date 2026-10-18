@@ -382,7 +382,12 @@ pub enum LastChange {
         register: Option<char>,
     },
     /// `o` / `O` + the inserted text.
-    OpenLine { above: bool, inserted: String },
+    OpenLine {
+        above: bool,
+        inserted: String,
+        /// `[count]o` opens `count` lines, each with `inserted`.
+        count: usize,
+    },
     /// `i`/`I`/`a`/`A` + inserted text.
     InsertAt {
         entry: InsertEntry,

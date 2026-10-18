@@ -4,7 +4,7 @@
 
 use hjkl_vim_types::{InsertReason, InsertSession, LastChange, Mode};
 
-use hjkl_engine::rope_util::rope_row_range_str;
+use hjkl_engine::rope_util::{rope_line_to_str, rope_row_range_str};
 
 use super::*;
 use crate::vim_state::{vim, vim_mut};
@@ -150,6 +150,13 @@ pub fn try_dedent_close_bracket<H: hjkl_engine::types::Host>(
     });
     true
 }
+/// What `[count]o` / `[count]O` add after the first opened line's text: for
+/// each further line, a line break, that line's `leader` (the autoindent or
+/// comment leader the open put in) and `inserted` again — a typed line break
+/// included, which copying only the opened row's last line lost.
+pub fn open_line_repeats(leader: &str, inserted: &str, count: usize) -> String {
+    format!("\n{leader}{inserted}").repeat(count.saturating_sub(1))
+}
 pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     let Some(session) = vim_mut(ed).insert_session.take() else {
         return;
@@ -198,18 +205,14 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
         use hjkl_buffer::{Edit, Position};
         if open_line {
             // `[count]o` / `[count]O` open `count` SEPARATE lines, each with the
-            // typed text. Read the just-opened line's content directly (the
-            // row-range extract above is unreliable across the open boundary)
-            // and stack `count - 1` further lines below it.
-            let (start_row, _) = ed.cursor();
-            let typed = buf_line(ed.buffer(), start_row).unwrap_or_default();
-            for at_row in start_row..start_row + (session.count - 1) {
-                let end = buf_line_chars(ed.buffer(), at_row);
-                ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(at_row, end),
-                    text: format!("\n{typed}"),
-                });
-            }
+            // typed text. The snapshot restarted once the line was open, so
+            // its row there is the leader the open put in.
+            let leader = rope_line_to_str(&session.before_rope, session.row_min);
+            let (row, col) = ed.cursor();
+            ed.mutate_edit(Edit::InsertStr {
+                at: Position::new(row, col),
+                text: open_line_repeats(&leader, &inserted, session.count),
+            });
         } else if !inserted.is_empty() {
             // `[count]i` / `[count]A` repeat the typed text inline.
             for _ in 0..session.count - 1 {
@@ -345,7 +348,11 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
             });
         }
         InsertReason::Open { above } => {
-            vim_mut(ed).last_change = Some(LastChange::OpenLine { above, inserted });
+            vim_mut(ed).last_change = Some(LastChange::OpenLine {
+                above,
+                inserted,
+                count: session.count,
+            });
         }
         InsertReason::AfterChange => {
             if let Some(

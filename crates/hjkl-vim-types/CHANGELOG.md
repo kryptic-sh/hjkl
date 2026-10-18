@@ -10,6 +10,8 @@ and this project adheres to
 
 ### Added
 
+- `LastChange::OpenLine` carries the `count` of a `[count]o` / `[count]O`, so
+  `.` repeats it; constructing or destructuring the variant must add the field.
 - `InsertEntry::GShiftI`, for `gI` (insert at column 0) and its dot-repeat.
   Another variant on an exhaustive enum: an external `match` breaks.
 - `Pending::OpMark { op, linewise }` and

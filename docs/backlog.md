@@ -1101,8 +1101,6 @@ Seen while measuring, not `gq`:
   - `jA<BS><BS>x<Esc>j.` and `jI<BS>x<Esc>j.` replay the typed `x` but not the
     backspaces — vim replays the keys, hjkl the net text.
   - `Ra<CR>b<Esc>jj.` overstrikes the wrong span.
-  - `2oab<Esc>j.` opens one line, nvim two: `LastChange::OpenLine` keeps no
-    count.
 - **The read-only registers `".` and `"/` cannot be named in Normal mode.**
   `set_pending_register` (`hjkl-vim` `editor_ext.rs`) accepts only
   `[a-zA-Z0-9"+*_-]`, so `".` is swallowed and `".p` becomes a plain `p`;

@@ -318,3 +318,68 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+
+# ── `[count]o` and its repeat ────────────────────────────────────────────────
+#
+# Each counted line repeats the whole typed text, line breaks included, and
+# `.` keeps the count unless given a new one.
+
+[[cases]]
+name = "counted_o_repeats_a_typed_line_break"
+initial_buffer = "abc def\n  q r\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "2oab<CR>c<Esc>"
+expected_buffer = "abc def\nab\nc\nab\nc\n  q r\nxyz w\n"
+expected_cursor = [4, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_counted_o"
+initial_buffer = "abc def\n  q r\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "2oab<Esc>j."
+expected_buffer = "abc def\nab\nab\n  q r\nab\nab\nxyz w\n"
+expected_cursor = [5, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_o_with_a_count"
+initial_buffer = "abc def\n  q r\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "oab<Esc>j3."
+expected_buffer = "abc def\nab\n  q r\nab\nab\nab\nxyz w\n"
+expected_cursor = [5, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_counted_O"
+initial_buffer = "abc def\n  q r\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "2Oab<Esc>G."
+expected_buffer = "ab\nab\nabc def\n  q r\nab\nab\nxyz w\n"
+expected_cursor = [5, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+
+[[cases]]
+name = "counted_o_indents_every_line_under_autoindent"
+initial_buffer = "  q r\nxyz w\n"
+initial_cursor = [0, 0]
+keys = "2oab<Esc>"
+expected_buffer = "  q r\n  ab\n  ab\nxyz w\n"
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true

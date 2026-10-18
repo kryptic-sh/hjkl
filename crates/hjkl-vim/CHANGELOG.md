@@ -30,6 +30,9 @@ and this project adheres to
 
 ### Fixed
 
+- `[count]o` / `[count]O` repeat the whole typed text on every line: `2oab<CR>c`
+  gave `ab`, `c`, `c` instead of `ab`, `c`, `ab`, `c`. And `.` keeps the count
+  (`2oab<Esc>` then `.` adds two lines) unless given a new one.
 - `gq` / `gw` rebuild the indent they format with, as vim's `set_indent` does:
   the same width, as spaces under `expandtab` and as tabs + spaces otherwise. A
   tab indent stayed a tab under `expandtab`, and a space indent stayed spaces

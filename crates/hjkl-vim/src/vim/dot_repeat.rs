@@ -7,7 +7,7 @@ use hjkl_vim_types::{InsertEntry, LastChange, Mode, VisualExtent};
 use super::*;
 use crate::vim_state::{vim, vim_mut};
 use hjkl_engine::Editor;
-use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line_chars, buf_set_cursor_rc};
+use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line, buf_line_chars, buf_set_cursor_rc};
 
 /// Replay-side helper: insert `text` at the cursor through the
 /// edit funnel, then leave insert mode (the original change ended
@@ -273,15 +273,27 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                 });
             }
         }
-        LastChange::OpenLine { above, inserted } => {
+        LastChange::OpenLine {
+            above,
+            inserted,
+            count,
+        } => {
             // Open the line the way the typed `o` / `O` did — its indent and
-            // comment leader included — then retype what was typed into it.
+            // comment leader included — then retype what was typed into it,
+            // once per counted line.
             if above {
                 open_line_above_bridge(ed, 1);
             } else {
                 open_line_below_bridge(ed, 1);
             }
-            replay_insert_and_finish(ed, &inserted);
+            let (row, col) = ed.cursor();
+            let leader: String = buf_line(ed.buffer(), row)
+                .unwrap_or_default()
+                .chars()
+                .take(col)
+                .collect();
+            let text = inserted.clone() + &open_line_repeats(&leader, &inserted, scaled(count));
+            replay_insert_and_finish(ed, &text);
         }
         LastChange::InsertAt {
             entry,

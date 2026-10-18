@@ -13,8 +13,8 @@ patch bumps.
 - For crates consuming `hjkl-vim` / `hjkl-vim-types`: `Pending`, `LastChange`,
   `PendingState` and `EngineCmd` each gained an `OpMark` variant and
   `VimEditorExt` a required `apply_op_mark`, for operator + mark motions;
-  `InsertEntry` gained `GShiftI`, for `gI`. An exhaustive `match` over any of
-  them must add the arm.
+  `InsertEntry` gained `GShiftI`, for `gI`; `LastChange::OpenLine` gained a
+  `count` field. An exhaustive `match` over any of them must add the arm.
 - `hjkl_app::git::explorer_key_for` takes the explorer root as a second
   argument, so its key is spelled the way the explorer looks it up.
 
@@ -50,7 +50,9 @@ patch bumps.
 - **Redoing a delete that reached the end of the buffer** (`dj`, `dG` near the
   bottom, then `u` `<C-r>`) puts the cursor on the last line, as in vim; it was
   left on a row past the end, stuck there.
-- **`.` after `o` / `O` retypes the text**; it opened an empty line.
+- **`.` after `o` / `O` retypes the text**; it opened an empty line. A counted
+  `2o` repeats the whole typed text on each line, line breaks included, and `.`
+  keeps that count.
 - **`.` repeats an insert that contained a line break**; it did nothing. And `.`
   of any insert now leaves the cursor on the last inserted character, not one
   past it.
