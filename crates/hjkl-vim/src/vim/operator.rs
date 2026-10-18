@@ -438,6 +438,12 @@ pub fn apply_after_g<H: hjkl_engine::types::Host>(
             }
             begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::I));
         }
+        // `gI` — insert at column 0, before any indent (`:h gI`).
+        'I' => {
+            let row = ed.cursor().0;
+            ed.jump_cursor(row, 0);
+            begin_insert(ed, count.max(1), InsertReason::Enter(InsertEntry::GShiftI));
+        }
         // `gc` — enter operator-pending for the comment-toggle operator.
         // `gcc` (doubled 'c') is the line-wise form; `gc{motion}` is the
         // motion form. The operator is Comment — the app layer (or the

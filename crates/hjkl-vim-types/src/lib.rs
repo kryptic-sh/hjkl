@@ -485,6 +485,8 @@ pub enum InsertEntry {
     A,
     ShiftI,
     ShiftA,
+    /// `gI` — insert at column 0, before any indent.
+    GShiftI,
 }
 
 /// Tracks which kind of horizontal jump was last performed so `;` / `,`

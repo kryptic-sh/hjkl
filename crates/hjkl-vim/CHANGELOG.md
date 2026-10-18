@@ -17,6 +17,7 @@ and this project adheres to
 
 ### Added
 
+- `gI` inserts at column 0, before any indent; `.` and a count repeat it there.
 - Operator + mark motion: `d'a` / `y'a` / `c'a` / `>'a` … run linewise to mark
   `a`'s row, ``d`a`` … charwise exclusive to its position, on both the engine
   FSM and the keymap path, and `.` repeats them. An unset mark aborts, as in

@@ -10,6 +10,8 @@ and this project adheres to
 
 ### Added
 
+- `InsertEntry::GShiftI`, for `gI` (insert at column 0) and its dot-repeat.
+  Another variant on an exhaustive enum: an external `match` breaks.
 - `Pending::OpMark { op, linewise }` and
   `LastChange::OpMark { op, ch, linewise, inserted, register }`, for an operator
   over a mark motion (`d'a`, ``d`a``) and its dot-repeat. Both enums are

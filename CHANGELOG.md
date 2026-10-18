@@ -11,9 +11,10 @@ patch bumps.
 ### Changed (BREAKING)
 
 - For crates consuming `hjkl-vim` / `hjkl-vim-types`: `Pending`, `LastChange`,
-  `PendingState` and `EngineCmd` each gained an `OpMark` variant, and
-  `VimEditorExt` a required `apply_op_mark`, for operator + mark motions. An
-  exhaustive `match` over any of them must add the arm.
+  `PendingState` and `EngineCmd` each gained an `OpMark` variant and
+  `VimEditorExt` a required `apply_op_mark`, for operator + mark motions;
+  `InsertEntry` gained `GShiftI`, for `gI`. An exhaustive `match` over any of
+  them must add the arm.
 - `hjkl_app::git::explorer_key_for` takes the explorer root as a second
   argument, so its key is spelled the way the explorer looks it up.
 
@@ -27,6 +28,7 @@ patch bumps.
   / `` `a ``. Not in Visual mode, not under an operator, and not while `@q`
   replays keys. So `zfjldd` deletes one line rather than the whole fold, and
   `zfjlj` moves into the opened fold.
+- `gI`: insert at column 0, before the line's indent.
 - **Operator + mark motion**: `d'a`, `y'a`, `c'a`, `>'a` and the rest run
   linewise to mark `a`'s row, ``d`a`` charwise to its position, and `.` repeats
   them. hjkl ignored the `'` / `` ` `` after an operator.

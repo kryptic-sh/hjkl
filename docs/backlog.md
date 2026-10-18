@@ -1114,7 +1114,6 @@ Seen while measuring, not `gq`:
   `operator`, `op_motion`, `visual_ops`, `sneak`, `linewise`), on both the FSM
   and the keymap path, so the gate belongs where the command is dispatched, not
   at each site.
-- **`gI` is not implemented** (insert at column 0, `:h gI`); hjkl ignores it.
 - **"Blank" is any Unicode whitespace to hjkl, only space and tab to vim.**
   `move_first_non_blank` and `greedy_wrap` test `char::is_whitespace`, while
   vim's `skipwhite` skips only `' '` and `'\t'`, so a line led by U+3000 or

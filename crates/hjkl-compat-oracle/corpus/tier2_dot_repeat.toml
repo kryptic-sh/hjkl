@@ -277,3 +277,44 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = true
+
+# ── `gI` ─────────────────────────────────────────────────────────────────────
+#
+# Insert at column 0, before any indent; `.` and a count repeat it there.
+
+[[cases]]
+name = "g_shift_i_inserts_at_column_zero"
+initial_buffer = "  ab cd\n    ef\n"
+initial_cursor = [0, 4]
+keys = "gIx<Esc>"
+expected_buffer = "x  ab cd\n    ef\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "g_shift_i_dot_repeat"
+initial_buffer = "  ab cd\n    ef\n"
+initial_cursor = [0, 4]
+keys = "gIx<Esc>j."
+expected_buffer = "x  ab cd\nx    ef\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "g_shift_i_counted"
+initial_buffer = "  ab cd\n    ef\n"
+initial_cursor = [0, 4]
+keys = "3gIx<Esc>"
+expected_buffer = "xxx  ab cd\n    ef\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

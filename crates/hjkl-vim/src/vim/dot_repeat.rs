@@ -293,6 +293,10 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             match entry {
                 InsertEntry::I => {}
                 InsertEntry::ShiftI => move_to_insert_start(ed),
+                InsertEntry::GShiftI => {
+                    let row = ed.cursor().0;
+                    ed.jump_cursor(row, 0);
+                }
                 InsertEntry::A => {
                     hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
                 }

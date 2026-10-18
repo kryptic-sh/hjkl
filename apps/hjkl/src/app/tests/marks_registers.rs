@@ -1594,3 +1594,16 @@ fn operator_then_mark_runs_through_the_app_chord_path() {
         assert_eq!(lines, want, "d{mark_key}a");
     }
 }
+
+/// `gI` through the app's chord routing: the `g` chord reaches the shared
+/// `apply_after_g`, which inserts at column 0 before any indent.
+#[test]
+fn g_shift_i_through_the_app_chord_path_inserts_at_column_zero() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "  ab cd");
+    app.active_editor_mut().jump_cursor(0, 4);
+    app.route_chord_key(key(KeyCode::Char('g')));
+    app.route_chord_key(key(KeyCode::Char('I')));
+    assert_eq!(app.active_editor().cursor(), (0, 0));
+    assert_eq!(app.active_editor().vim_mode(), hjkl_engine::VimMode::Insert);
+}
