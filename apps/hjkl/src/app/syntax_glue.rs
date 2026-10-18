@@ -154,6 +154,7 @@ impl App {
             return false;
         }
         let mut map = pane.tree.git_base.clone();
+        let root = pane.tree.root.clone();
         for slot in &self.slots {
             let Some(fname) = slot.filename.as_ref() else {
                 continue;
@@ -171,7 +172,7 @@ impl App {
             } else {
                 continue;
             };
-            if let Some(key) = hjkl_app::git::explorer_key_for(fname) {
+            if let Some(key) = hjkl_app::git::explorer_key_for(fname, &root) {
                 // Merge with precedence: keep the higher-priority status.
                 let entry = map.entry(key).or_insert(cand);
                 if crate::app::explorer::git_status_priority(cand)

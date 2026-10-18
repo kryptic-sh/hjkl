@@ -8,6 +8,20 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+
+- `git::explorer_key_for(path)` is now `explorer_key_for(path, root)`: the key
+  is spelled like the explorer root it will be looked up under, the same way
+  `explorer_status_map(root)` now spells its keys.
+
+### Fixed
+
+- `git::explorer_status_map` keys are spelled like `root` instead of like git2's
+  workdir. On Windows a cwd with an 8.3 short-name component
+  (`C:\Users\RUNNER~1`, common under `%TEMP%`) or in different letter case never
+  matched the explorer's node paths, so every file showed no git status and a
+  deleted tracked file vanished instead of staying listed as deleted.
+
 ### Changed
 
 - The explorer, the fuzzy file picker, the fuzzy grep picker and `:grep` all

@@ -4142,10 +4142,9 @@ mod tests {
     /// `dd` on a git-tracked file: the file is gone from disk but stays in the
     /// explorer list as a red (Deleted) node because it was tracked by git.
     ///
-    /// Windows-gated: git2's `workdir` canonicalizes the temp path (UNC `\\?\`)
-    /// while the explorer keys off `current_dir()`, so the status-map join never
-    /// matches on Windows — a CI-only path-form mismatch, not a logic bug.
-    #[cfg(not(target_os = "windows"))]
+    /// On a Windows runner the temp dir sits under an 8.3 short name
+    /// (`RUNNER~1`), spelled differently from git2's workdir — the case
+    /// `workdir_spelled_like` exists for, so this runs there too.
     #[test]
     fn git_repo_dd_tracked_stays_red() {
         use crate::keymap_actions::AppAction;

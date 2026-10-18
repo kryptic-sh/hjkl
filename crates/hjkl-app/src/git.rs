@@ -54,7 +54,7 @@ fn try_explorer_status_map(
 ) -> Result<std::collections::HashMap<std::path::PathBuf, ExplorerGit>, git2::Error> {
     let repo = Repository::discover(root)?;
     let workdir = match repo.workdir() {
-        Some(w) => w.to_path_buf(),
+        Some(w) => workdir_spelled_like(w, root),
         None => return Ok(std::collections::HashMap::new()), // bare repo
     };
 
@@ -111,17 +111,40 @@ fn try_explorer_status_map(
     Ok(map)
 }
 
-/// Return the key form that [`explorer_status_map`] uses for `path`
-/// (`workdir.join(rel)`), or `None` when `path` is not inside a git repo or
-/// resolving fails.
+/// Return the key [`explorer_status_map`]`(root)` uses for `path`, or `None`
+/// when `path` is not inside a git repo or resolving fails.
 ///
-/// Reuses [`open_repo_for`] so the key form is guaranteed to match the keys
-/// produced by [`explorer_status_map`], letting callers merge overlay entries
-/// into the base map without key-mismatch bugs.
-pub fn explorer_key_for(path: &Path) -> Option<std::path::PathBuf> {
+/// Reuses [`open_repo_for`] and spells the workdir the same way, so overlay
+/// entries merge into the base map without key mismatches.
+pub fn explorer_key_for(path: &Path, root: &Path) -> Option<std::path::PathBuf> {
     let (repo, rel) = open_repo_for(path).ok()?;
     let workdir = repo.workdir()?;
-    Some(workdir.join(rel))
+    Some(workdir_spelled_like(workdir, root).join(rel))
+}
+
+/// git2's workdir, spelled as the matching ancestor of `root` when `root` is
+/// inside it.
+///
+/// git2 reports the workdir in its own form, while the explorer builds its
+/// node paths from `root` as the cwd spelled it. On Windows the two differ
+/// whenever a component of the cwd is an 8.3 short name (`C:\Users\RUNNER~1`,
+/// common under `%TEMP%`), so keys built from git2's form never matched a
+/// node and every file lost its git status. The answer is checked by
+/// canonicalizing it, so a `root` that does not line up (relative, `..`)
+/// falls back to git2's form rather than producing a wrong key.
+fn workdir_spelled_like(workdir: &Path, root: &Path) -> std::path::PathBuf {
+    let spelled = (|| {
+        let canon_workdir = workdir.canonicalize().ok()?;
+        let canon_root = root.canonicalize().ok()?;
+        let depth = canon_root
+            .strip_prefix(&canon_workdir)
+            .ok()?
+            .components()
+            .count();
+        let candidate = root.ancestors().nth(depth)?;
+        (candidate.canonicalize().ok()? == canon_workdir).then(|| candidate.to_path_buf())
+    })();
+    spelled.unwrap_or_else(|| workdir.to_path_buf())
 }
 
 /// Returns `true` when `path` (or its parent directory) is inside a git
@@ -1025,9 +1048,9 @@ mod tests {
         let f = tmp.path().join("loose.txt");
         std::fs::write(&f, "hello\n").unwrap();
         assert!(
-            explorer_key_for(&f).is_none(),
+            explorer_key_for(&f, tmp.path()).is_none(),
             "expected None for file outside any repo; got {:?}",
-            explorer_key_for(&f)
+            explorer_key_for(&f, tmp.path())
         );
     }
 
@@ -1053,7 +1076,7 @@ mod tests {
             "status map must be non-empty after edit"
         );
 
-        let key = explorer_key_for(&f);
+        let key = explorer_key_for(&f, tmp.path());
         assert!(
             key.is_some(),
             "explorer_key_for must return Some inside a repo"
@@ -1064,6 +1087,29 @@ mod tests {
             "explorer_key_for key {key:?} must appear in explorer_status_map; map keys: {:?}",
             status_map.keys().collect::<Vec<_>>()
         );
+    }
+
+    /// A root spelled differently from git2's workdir — here through a
+    /// symlink; on Windows, an 8.3 short name — still gets keys in its own
+    /// spelling, the one the explorer builds node paths from.
+    #[cfg(unix)]
+    #[test]
+    fn status_map_keys_follow_the_roots_spelling() {
+        let tmp = TempDir::new_in(std::env::temp_dir()).unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir(&repo).unwrap();
+        init_repo(&repo);
+        std::fs::write(repo.join("tracked.txt"), "original\n").unwrap();
+        git(&repo, &["add", "tracked.txt"]);
+        git(&repo, &["commit", "-q", "-m", "init"]);
+        std::fs::write(repo.join("tracked.txt"), "modified\n").unwrap();
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&repo, &link).unwrap();
+
+        let key = link.join("tracked.txt");
+        let map = explorer_status_map(&link);
+        assert_eq!(map.get(&key), Some(&ExplorerGit::Modified), "{map:?}");
+        assert_eq!(explorer_key_for(&key, &link), Some(key));
     }
 
     #[test]

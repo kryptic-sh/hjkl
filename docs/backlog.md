@@ -944,10 +944,6 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
 6. **Replacing a loaded grammar DLL — suspected.** `publish_path` renames over
    `<name>.dll`; Windows refuses while another hjkl process has it loaded. Only
    on a grammar revision bump with two instances running.
-7. **Explorer git status under case or 8.3-name differences — suspected.** The
-   status map is keyed by git2's workdir joined with the relative path
-   (`explorer_key_for`); a cwd spelled with different case never matches.
-   `git_repo_dd_tracked_stays_red` is `#[cfg(not(target_os = "windows"))]`.
 
 **Coverage gaps.**
 

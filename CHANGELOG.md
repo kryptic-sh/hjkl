@@ -14,6 +14,8 @@ patch bumps.
   `PendingState` and `EngineCmd` each gained an `OpMark` variant, and
   `VimEditorExt` a required `apply_op_mark`, for operator + mark motions. An
   exhaustive `match` over any of them must add the arm.
+- `hjkl_app::git::explorer_key_for` takes the explorer root as a second
+  argument, so its key is spelled the way the explorer looks it up.
 
 ### Added
 
@@ -39,6 +41,10 @@ patch bumps.
 
 ### Fixed
 
+- **Windows: the explorer shows git status when the working directory is spelled
+  with an 8.3 short name or in different letter case.** The status lookup used
+  git's own spelling of the repository path, which never matched the explorer's,
+  so no file was marked and deleted tracked files vanished.
 - **Redoing a delete that reached the end of the buffer** (`dj`, `dG` near the
   bottom, then `u` `<C-r>`) puts the cursor on the last line, as in vim; it was
   left on a row past the end, stuck there.
