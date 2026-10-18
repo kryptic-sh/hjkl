@@ -46,6 +46,8 @@ patch bumps.
 - **A search wraps round to a match earlier on the cursor's own line** (`/`,
   `n`, `*`), or later on it for `?` / `#` — in a one-line buffer, past its only
   match, it found nothing.
+- `3J` (or a larger count) on the last line moves the cursor to column 0, as in
+  vim.
 - `J` / `gJ` onto an empty line no longer leave the cursor past the end of the
   line (where `x` then did nothing).
 - After `dap`, `dj` or `Vd` the cursor lands on the first non-blank of its line,

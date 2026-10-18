@@ -30,6 +30,9 @@ and this project adheres to
 
 ### Fixed
 
+- `[count]J` / `[count]gJ` on the last line with a count of 3 or more move the
+  cursor to column 0, as vim does (a bare or `2` count still keeps the column);
+  the cursor stayed where it was.
 - `J` / `gJ` with an empty (or, for `J`, blank) line below leave the cursor on
   the line's last character. Nothing is appended, so the join point is past the
   end; the cursor stayed there, and a following `x` deleted nothing.

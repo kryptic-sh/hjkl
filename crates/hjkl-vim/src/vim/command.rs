@@ -492,20 +492,37 @@ pub fn toggle_case_at_cursor<H: hjkl_engine::types::Host>(
     });
     true
 }
+/// Whether `row` has a line below it for `J` / `gJ` to pull up. Vim does
+/// not join with ropey's phantom trailing empty row (the ropey
+/// representation of a trailing newline), so a phantom is no line below.
+fn has_line_to_join<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    row: usize,
+) -> bool {
+    let n_rows = buf_row_count(ed.buffer());
+    row + 1 < n_rows
+        && !(row + 2 >= n_rows && buf_line(ed.buffer(), row + 1).is_some_and(|s| s.is_empty()))
+}
+/// `[count]J` / `[count]gJ` from the last line join nothing, but with a
+/// count of 3 or more vim still moves the cursor to column 0 — column 0
+/// itself, not the first non-blank; a bare or `2` count keeps the column.
+/// Call before the joins.
+pub fn reset_column_for_counted_join_on_last_line<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    count: usize,
+) {
+    let row = buf_cursor_pos(ed.buffer()).row;
+    if count >= 3 && !has_line_to_join(ed, row) {
+        buf_set_cursor_rc(ed.buffer_mut(), row, 0);
+    }
+}
 /// Returns `false` when the cursor is on the last line (nothing to
 /// join) so counted loops can stop instead of spinning.
 pub fn join_line<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) -> bool {
     use hjkl_buffer::{Edit, Position};
     ed.sync_buffer_content_from_textarea();
     let row = buf_cursor_pos(ed.buffer()).row;
-    let n_rows = buf_row_count(ed.buffer());
-    if row + 1 >= n_rows {
-        return false;
-    }
-    // Vim does not join with ropey's phantom trailing empty row (the
-    // ropey representation of a trailing newline).  If the only row
-    // below is the phantom, treat it as "no line below" and abort.
-    if row + 2 >= n_rows && buf_line(ed.buffer(), row + 1).is_some_and(|s| s.is_empty()) {
+    if !has_line_to_join(ed, row) {
         return false;
     }
     let cur_line = buf_line(ed.buffer(), row).unwrap_or_default();
@@ -550,12 +567,7 @@ pub fn join_line_raw<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
     let row = buf_cursor_pos(ed.buffer()).row;
-    let n_rows = buf_row_count(ed.buffer());
-    if row + 1 >= n_rows {
-        return false;
-    }
-    // Same phantom-row guard as `join_line` — see there for rationale.
-    if row + 2 >= n_rows && buf_line(ed.buffer(), row + 1).is_some_and(|s| s.is_empty()) {
+    if !has_line_to_join(ed, row) {
         return false;
     }
     let join_col = buf_line_chars(ed.buffer(), row);

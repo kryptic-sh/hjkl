@@ -411,6 +411,7 @@ pub fn apply_after_g<H: hjkl_engine::types::Host>(
             // `gJ` — join line below without inserting a space. `[count]gJ`
             // joins `count` lines (`count - 1` joins), like `J`.
             let joins = count.max(2) - 1;
+            reset_column_for_counted_join_on_last_line(ed, count);
             for _ in 0..joins {
                 ed.push_undo();
                 if !join_line_raw(ed) {

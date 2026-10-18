@@ -1095,13 +1095,11 @@ pattern identified so far:
 
 Seen while measuring, not `gq`:
 
-
 - **Left in difffuzz's `J`-ending bucket (2026-10-18, after the join-cursor
-  fix), not investigated:** `3J` on a one-line buffer leaves the cursor at (0,3)
-  where nvim moves it to (0,0); after `<C-v>asJ` / `vasJ` hjkl has joined lines
-  that nvim leaves apart, and after `<C-v>a{J` the cursor differs — each a
-  Visual text object followed by `J`; which side of that pair is wrong was not
-  looked at.
+  fix), not investigated:** after `<C-v>asJ` / `vasJ` hjkl has joined lines that
+  nvim leaves apart, and after `<C-v>a{J` the cursor differs — each a Visual
+  text object followed by `J`; which side of that pair is wrong was not looked
+  at.
 
 - **`Vp` with an EMPTY register over the whole buffer leaves `"\n"`.** nvim
   leaves `""` (difffuzz `V)p` on `"[xy].[foo]"`, `Vapp` on `""`): with nothing

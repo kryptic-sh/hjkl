@@ -117,3 +117,57 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+
+# ── A counted join on the last line ──────────────────────────────────────────
+#
+# Nothing is left to join. With a count of 3 or more vim still moves the cursor
+# to column 0 (not the first non-blank); a bare or `2` count keeps the column.
+
+[[cases]]
+name = "counted_join_on_the_last_line_moves_to_column_zero"
+initial_buffer = "hello, baz"
+initial_cursor = [0, 3]
+keys = "3J"
+expected_buffer = "hello, baz"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_join_on_an_indented_last_line_moves_to_column_zero"
+initial_buffer = "  abc"
+initial_cursor = [0, 3]
+keys = "3J"
+expected_buffer = "  abc"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_raw_join_on_the_last_line_moves_to_column_zero"
+initial_buffer = "ab\ncd"
+initial_cursor = [1, 1]
+keys = "9gJ"
+expected_buffer = "ab\ncd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "join_with_a_count_of_two_on_the_last_line_keeps_the_column"
+initial_buffer = "hello, baz"
+initial_cursor = [0, 3]
+keys = "2J"
+expected_buffer = "hello, baz"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

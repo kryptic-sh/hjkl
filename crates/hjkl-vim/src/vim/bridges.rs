@@ -327,6 +327,7 @@ pub fn join_line_bridge<H: hjkl_engine::types::Host>(
     // single `u`, not one per join. A group that ends up mutating nothing
     // (no line below) leaves zero undo entries, also matching nvim.
     let joins = count.max(2) - 1;
+    reset_column_for_counted_join_on_last_line(ed, count);
     let _group = ed.undo_group();
     for _ in 0..joins {
         ed.push_undo();
