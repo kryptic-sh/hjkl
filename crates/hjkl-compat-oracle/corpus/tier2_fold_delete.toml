@@ -432,6 +432,32 @@ expected_mode = "normal"
 expected_register = ['"', "bb\n"]
 
 [[cases]]
+name = "foldopen_undo_onto_a_closed_folds_first_row"
+initial_buffer = "aa\nbb\ncc\ndd\nee\n"
+initial_cursor = [1, 0]
+keys = "xzfjudd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "aa\ncc\ndd\nee\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', "bb\n"]
+
+[[cases]]
+name = "foldopen_redo_onto_a_closed_folds_first_row"
+initial_buffer = "aa\nbb\ncc\ndd\nee\n"
+initial_cursor = [1, 0]
+keys = "xzfju<C-r>dd"
+foldmethod = "manual"
+shiftwidth = 4
+expandtab = true
+expected_buffer = "aa\ncc\ndd\nee\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', "b\n"]
+
+[[cases]]
 name = "foldopen_not_in_visual"
 initial_buffer = "a(c def\nghi)\njkl\nmno\n"
 initial_cursor = [0, 2]

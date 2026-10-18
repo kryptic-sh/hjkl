@@ -58,7 +58,8 @@ patch bumps.
   row, as in vim, not on the row the delete was typed on.
 - **Deleting lines upward (`dk`, `d'a`) clears the marks on them.** A mark on
   the top deleted row survived and pointed at whatever moved up into its place.
-- `'A` to a mark in the same buffer opens the closed fold it lands in.
+- `'A` to a mark in the same buffer opens the closed fold it lands in, and `u` /
+  `<C-r>` open the closed fold they land on.
 - **Opening a CRLF file with syntax highlighting no longer crashes once its last
   line is on screen.** hjkl keeps a CRLF file's final line ending as a lone
   `\r`, which the rope counts as a line break but the highlighter's row table

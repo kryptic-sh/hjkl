@@ -4674,25 +4674,12 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         if col > max_col {
             buf_set_cursor_rc(&mut self.buffer, row, max_col);
         }
-        // audit-r2 fix 3(a): vim's 'foldopen' option includes "undo" — an
-        // undo/redo that lands the cursor inside a closed fold's body must
-        // reveal it, not strand the cursor on a hidden row with no way to
-        // see what it's sitting on. `reveal_row` already opens every fold
-        // (at any nesting depth) that hides a row in one pass; loop it
-        // defensively — bounded by the fold count — so a row that's
-        // somehow still hidden after one reveal (e.g. a future change to
-        // `reveal_row`'s semantics) keeps getting opened rather than
-        // silently left stranded.
+        // vim's 'foldopen' includes "undo": an undo/redo opens every closed
+        // fold holding the cursor row (`foldOpenCursor`), at any nesting
+        // depth — the fold whose first row it lands on as well as the ones
+        // that would hide it.
         let row = buf_cursor_row(&self.buffer);
-        let max_iters = self.buffer.with_folds(<[hjkl_buffer::Fold]>::len) + 1;
-        for _ in 0..max_iters {
-            if !self.buffer.is_row_hidden(row) {
-                break;
-            }
-            if !self.buffer.reveal_row(row) {
-                break;
-            }
-        }
+        self.buffer.open_folds_containing(row);
     }
 
     /// Walk one step back through the undo history. Equivalent to the

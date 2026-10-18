@@ -1016,9 +1016,11 @@ fail on the parent commit, the other 6 are negative guards).
   nothing; measured — `zfjbdd` at (0,2) leaves the fold closed in nvim, hjkl
   opens it); a `t` that succeeds without moving, and an `n` whose only match is
   under the cursor (vim succeeds and opens; hjkl does not move, so does not).
-- **Not implemented:** the `quickfix` and `tag` classes. `undo` predates this
-  and uses `reveal_row`, which does not open a fold whose FIRST row the cursor
-  is on — vim's `foldOpenCursor` would. Not measured.
+- **Not implemented:** the `quickfix` and `tag` classes. (`undo` now opens the
+  fold whose first row it lands on too, 2026-10-18.) Unlike vim, the `undo`
+  class is not gated on typed keys: a `u` replayed by `@q` opens folds as well,
+  because `settle_after_history_jump` lives in the engine, which does not know a
+  macro is replaying (by code read; not measured).
 - **Visual mode is gated out entirely.** Measured: `zfjvl<Esc>dd` keeps the fold
   closed in nvim. But nvim's `v/cc<CR>` DOES open a fold (`normal_search` has no
   Visual check). Not comparable today: the hjkl oracle driver mishandles `/` in
