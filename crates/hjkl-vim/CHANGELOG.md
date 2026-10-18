@@ -30,6 +30,10 @@ and this project adheres to
 
 ### Fixed
 
+- `dw` / `yw` on a line's last character (or on trailing whitespace) act on it.
+  The `:h word` clamp makes that a one-character INCLUSIVE range, and
+  `run_operator_over_range` returned early for every charwise range with
+  `top == bot`; only an exclusive one is empty.
 - `.` of a Replace-mode change that contained `<CR>` splits the line there, as
   the typed `<CR>` did, instead of overtyping a character with the break.
 - Insert-mode `<BS>` under `softtabstop` deletes back to the previous stop, as

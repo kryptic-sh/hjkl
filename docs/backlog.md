@@ -1041,7 +1041,8 @@ fail on the parent commit, the other 6 are negative guards).
     `"aa bb\n  cc dd\nee ff\ngg hh\n"` @ (0,3), all the same on the parent
     commit: `jjd2ku<C-r>` (redo) nvim (0,3), hjkl (0,0); `jjc2kx<Esc>u`
     (linewise change, `change_linewise_rows` pushes its own undo) nvim (1,3),
-    hjkl (2,3); `jjdw.u` (undo of a dot-repeat) nvim (2,2), hjkl (2,3).
+    hjkl (2,3). (`jjdw.u` agrees since the `dw`-at-end-of-line fix: the `.`
+    there was a no-op `dw`, not an undo problem.)
   - **Line-operator undo column, and curswant after undo — needs vim's rule
     first.** On `"aa bb\n  cc dd ee\nee ff\ngg hh\n"`, undo after `dd`, `>>`,
     `<<`, `cc`, `gUU` or `==` typed at (1,5) lands at (1,2) in nvim, hjkl keeps

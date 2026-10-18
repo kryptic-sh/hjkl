@@ -43,6 +43,8 @@ patch bumps.
 
 ### Fixed
 
+- **`dw` on the last character of a line deletes it**, and `dw` on trailing
+  whitespace deletes that; both did nothing. `yw` there yanks the character.
 - **`<BS>` in an indent goes back to the previous `softtabstop` stop** from
   anywhere, counting tabs by their width, as in vim; it deleted one space unless
   the cursor sat exactly on a stop.

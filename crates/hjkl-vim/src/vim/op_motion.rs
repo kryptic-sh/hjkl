@@ -488,8 +488,10 @@ pub fn run_operator_over_range<H: hjkl_engine::types::Host>(
     // Charwise empty range (same position). For Delete/Yank there is nothing to
     // act on. For Change, vim still enters insert at that point — `ci(` on `()`
     // and `ci{` on a whitespace-only block both place the cursor inside and
-    // start inserting without deleting anything.
-    if top == bot && !matches!(kind, RangeKind::Linewise) {
+    // start inserting without deleting anything. Only an EXCLUSIVE range is
+    // empty at one position: an inclusive one covers that character, which is
+    // what `dw` on a line's last character clamps to (`:h word`).
+    if top == bot && kind == RangeKind::Exclusive {
         if op == Operator::Change {
             vim_mut(ed).change_mark_start = Some(top);
             ed.push_undo();

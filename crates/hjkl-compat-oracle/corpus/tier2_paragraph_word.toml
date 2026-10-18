@@ -684,3 +684,57 @@ expected_cursor = [0, 2]
 expected_mode = "normal"
 expected_register = ['"', "  "]
 
+
+# ── An operator word motion from a line's last character ─────────────────────
+#
+# `:h word` clamps the range to that character, inclusive, so `dw` / `yw` /
+# `cw` there act on it — as on trailing whitespace — instead of on nothing.
+
+[[cases]]
+name = "dw_on_the_last_char_of_a_line_deletes_it"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "jjlldw"
+expected_buffer = "aa bb\n  cc dd\nee f\ngg hh\n"
+expected_cursor = [2, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dw_on_trailing_whitespace_deletes_it"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "jjdwdw"
+expected_buffer = "aa bb\n  cc dd\nee\ngg hh\n"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "cw_on_the_last_char_of_a_line_changes_it"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "jjllcwx<Esc>"
+expected_buffer = "aa bb\n  cc dd\nee fx\ngg hh\n"
+expected_cursor = [2, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+
+[[cases]]
+name = "yw_on_the_last_char_of_a_line_yanks_it"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "jjllyw"
+expected_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+expected_mode = "normal"
+expected_register = ['"', "f"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
