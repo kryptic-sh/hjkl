@@ -928,10 +928,14 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
 4. **Windows clipboard read keeps CRLF — confirmed by code read.**
    `read_clipboard` (`apps/hjkl/src/host.rs`) passes `CF_UNICODETEXT` through,
    so `"+p` of text copied from a Windows app inserts rows ending in `\r`;
-   `set_text` writes LF-only. `ClipboardOpen::new` makes a single
-   `OpenClipboard` attempt with no retry while another app holds it, and
-   `write_clipboard` ignores the error. Decision needed: normalize on read (as
-   `handle_paste` does) or keep bytes. Related: §8 #19.
+   `set_text` writes LF-only. `write_clipboard` ignores the error. Decision
+   needed: normalize on read (as `handle_paste` does) or keep bytes. Related: §8
+   #19. **The suspected "no retry while another app holds it" did not reproduce
+   (2026-10-18, Windows 11):** with another thread, and with a separate
+   PowerShell process, holding `OpenClipboard(NULL)`, hjkl's own
+   `OpenClipboard(NULL)` still succeeded and a full write/read round trip
+   passed. A holder that opens it with a real window handle was not tried; a
+   retry is only worth adding once something is shown to fail.
 5. **Atomic save fails while another process holds the file — suspected.**
    `write_atomic_with` (`hjkl-fs` `atomic.rs`) falls back to a non-atomic write
    only on `CrossesDevices`; renaming over a file opened without
