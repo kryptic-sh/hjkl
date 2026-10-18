@@ -936,11 +936,17 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    `OpenClipboard(NULL)` still succeeded and a full write/read round trip
    passed. A holder that opens it with a real window handle was not tried; a
    retry is only worth adding once something is shown to fail.
-5. **Atomic save fails while another process holds the file — suspected.**
-   `write_atomic_with` (`hjkl-fs` `atomic.rs`) falls back to a non-atomic write
-   only on `CrossesDevices`; renaming over a file opened without
-   `FILE_SHARE_DELETE` (indexer, antivirus, another editor) errors and `:w`
-   fails. Needs a retry/fallback policy.
+5. **Atomic save fails while another process holds the file — confirmed
+   2026-10-18, NEEDS A DECISION.** `write_atomic_with` (`hjkl-fs` `atomic.rs`)
+   falls back to a non-atomic write only on `CrossesDevices`. Measured on
+   Windows 11 with a throwaway test: while the target is open with share mode
+   `READ|WRITE` (no `FILE_SHARE_DELETE`, as indexers, antivirus and some editors
+   open it), `write_atomic` returns `PermissionDenied` ("Access is denied") and
+   the file keeps its old bytes; with `READ|WRITE|DELETE` it succeeds. Options:
+   retry the rename for a bounded time (fixes transient scanners, not a
+   long-lived holder); fall back to an in-place write on `PermissionDenied`
+   (always saves, but loses atomicity — a crash mid-write truncates the file);
+   or keep failing and say why in the error message.
 6. **Replacing a loaded grammar DLL — suspected.** `publish_path` renames over
    `<name>.dll`; Windows refuses while another hjkl process has it loaded. Only
    on a grammar revision bump with two instances running.
