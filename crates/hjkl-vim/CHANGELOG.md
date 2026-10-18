@@ -30,6 +30,14 @@ and this project adheres to
 
 ### Fixed
 
+- Linewise pastes (`p`, `P`, `Vp`, and a linewise register over a charwise or
+  blockwise selection) keep a register's blank first and last lines. Each
+  trimmed every leading and trailing `\n` off the register; now only the last
+  line terminator goes (`linewise_payload`). A linewise delete of a whole buffer
+  whose first line is blank no longer drops that line from the register either.
+- A linewise register pasted over a charwise selection (`vp`) splits the line
+  there and puts its lines between the two halves, as vim does; it was put below
+  the line.
 - `dw` / `yw` on a line's last character (or on trailing whitespace) act on it.
   The `:h word` clamp makes that a one-character INCLUSIVE range, and
   `run_operator_over_range` returned early for every charwise range with

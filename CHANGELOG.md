@@ -43,6 +43,10 @@ patch bumps.
 
 ### Fixed
 
+- **Pasting lines keeps their blank first or last line**: `yap` over a paragraph
+  with a blank line before or after it, then `p`, lost that blank line. And a
+  linewise register pasted over a charwise selection (`vp`) splits the line at
+  the selection, as in vim.
 - **`dw` on the last character of a line deletes it**, and `dw` on trailing
   whitespace deletes that; both did nothing. `yw` there yanks the character.
 - **`<BS>` in an indent goes back to the previous `softtabstop` stop** from

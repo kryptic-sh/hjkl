@@ -139,10 +139,14 @@ pub(super) fn cut_vim_range_inner<H: hjkl_engine::types::Host>(
         if raw_text.ends_with('\n') {
             // Normal mid-buffer delete: trailing '\n' already correct.
             raw_text
-        } else if raw_text.starts_with('\n') {
-            // Last-line delete with rows above: leading '\n' belongs
-            // at the end (vim register convention).
-            format!("{}\n", raw_text.strip_prefix('\n').unwrap())
+        } else if top.0 > 0
+            && let Some(rows) = raw_text.strip_prefix('\n')
+        {
+            // Last-line delete with rows above: the leading '\n' is the
+            // separator taken from the row above, and belongs at the end
+            // (vim register convention). From row 0 there is no row above,
+            // so a leading '\n' is the deleted text's own blank first line.
+            format!("{rows}\n")
         } else if raw_text.is_empty() {
             // The buffer reports an empty inverse only when this linewise
             // operation removed nothing. Keep registers untouched.
@@ -164,6 +168,13 @@ pub(super) fn cut_vim_range_inner<H: hjkl_engine::types::Host>(
         ed.record_delete(text.clone(), matches!(kind, RangeKind::Linewise), target);
     }
     text
+}
+/// The rows of a linewise register's text, for pasting: whole lines, each
+/// ending in `\n`, so only the last terminator goes. A blank first or last
+/// line is content — `yap` over a blank-led paragraph pastes the blank line
+/// too, which trimming every leading and trailing `\n` lost.
+fn linewise_payload(text: &str) -> &str {
+    text.strip_suffix('\n').unwrap_or(text)
 }
 /// `D` / `C` — delete from cursor to end of line through the edit
 /// funnel. Pushes the deleted text to the clipboard via `record_yank_to_host`
@@ -811,7 +822,7 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
     let paste_mark = if linewise {
         ed.sync_buffer_content_from_textarea();
         let row = buf_cursor_pos(ed.buffer()).row;
-        let mut text = yank.trim_matches('\n').to_string();
+        let mut text = linewise_payload(&yank).to_string();
         if reindent {
             let cur_line = buf_line(ed.buffer(), row).unwrap_or_default();
             let target_w = indent_width(&cur_line, ed.settings().tabstop.max(1));
@@ -837,7 +848,9 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
         };
         buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
         hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
-        let payload_lines = payload.lines().count().max(1);
+        // `split`, not `lines`: a payload ending in a blank line still has
+        // that row.
+        let payload_lines = payload.split('\n').count().max(1);
         let bot_row = target_row + payload_lines - 1;
         let bot_last_col = buf_line_chars(ed.buffer(), bot_row).saturating_sub(1);
         ((target_row, 0), (bot_row, bot_last_col))
@@ -1035,7 +1048,7 @@ pub fn visual_paste<H: hjkl_engine::types::Host>(
             // Delete the selected lines into the unnamed register.
             cut_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
             // Insert the register as fresh line(s) where the selection was.
-            let text = reg_text.trim_matches('\n').to_string();
+            let text = linewise_payload(&reg_text).to_string();
             let line_count = buf_row_count(ed.buffer());
             if top >= line_count {
                 // Selection reached the end of the buffer: append below the
@@ -1064,12 +1077,13 @@ pub fn visual_paste<H: hjkl_engine::types::Host>(
             cut_vim_range(ed, top, bot, RangeKind::Inclusive);
             // Insert the register text where the selection started.
             if reg_linewise {
-                // Linewise register into a charwise hole: open a line below.
-                let text = reg_text.trim_matches('\n').to_string();
-                let lc = buf_line_chars(ed.buffer(), top.0);
+                // Linewise register into a charwise hole: vim splits the line
+                // where the selection was and puts the register's lines
+                // between the two halves.
+                let text = linewise_payload(&reg_text).to_string();
                 ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(top.0, lc),
-                    text: format!("\n{text}"),
+                    at: Position::new(top.0, top.1),
+                    text: format!("\n{text}\n"),
                 });
                 buf_set_cursor_rc(ed.buffer_mut(), top.0 + 1, 0);
                 hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
@@ -1123,7 +1137,7 @@ pub fn visual_paste<H: hjkl_engine::types::Host>(
                 // (the block's now-vacated left column) rather than after it.
                 do_block_paste(ed, true, 1, reg_block_width, &reg_text);
             } else if reg_linewise {
-                let text = reg_text.trim_matches('\n').to_string();
+                let text = linewise_payload(&reg_text).to_string();
                 let lc = buf_line_chars(ed.buffer(), bot);
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(bot, lc),

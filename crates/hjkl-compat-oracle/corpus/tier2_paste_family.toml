@@ -102,3 +102,82 @@ initial_cursor = [0, 0]
 keys = "yiwwviwp$p"
 expected_buffer = "foo foo bazbar\n"
 expected_mode = "normal"
+
+# ── Blank lines in a linewise register ───────────────────────────────────────
+#
+# A linewise register is whole lines, each ending in a line break: a blank first or
+# last line is content, kept by the delete that fills the register and by every
+# paste. A linewise register over a charwise selection splits the line there.
+
+[[cases]]
+name = "linewise_delete_of_a_blank_led_whole_buffer_keeps_the_blank"
+initial_buffer = "\nbb"
+initial_cursor = [1, 0]
+keys = "dapp"
+expected_buffer = "\n\nbb"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_paste_keeps_a_leading_blank_line"
+initial_buffer = "aa\n\nbb"
+initial_cursor = [2, 0]
+keys = "yapGp"
+expected_buffer = "aa\n\nbb\n\nbb"
+expected_cursor = [3, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_paste_above_keeps_a_leading_blank_line"
+initial_buffer = "aa\n\nbb"
+initial_cursor = [2, 0]
+keys = "yapggP"
+expected_buffer = "\nbb\naa\n\nbb"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_paste_keeps_a_trailing_blank_line"
+initial_buffer = "aa\n\nbb\n\ncc"
+initial_cursor = [2, 0]
+keys = "yapGp"
+expected_buffer = "aa\n\nbb\n\ncc\nbb\n"
+expected_cursor = [5, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "charwise_visual_paste_of_lines_splits_the_line"
+initial_buffer = "aa\nbbbb\ncc"
+initial_cursor = [0, 0]
+keys = "yyjlvp"
+expected_buffer = "aa\nb\naa\nbb\ncc"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "charwise_visual_paste_of_lines_over_two_rows"
+initial_buffer = "aa\nbbbb\ncc"
+initial_cursor = [0, 0]
+keys = "yyjlvjp"
+expected_buffer = "aa\nb\naa\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
