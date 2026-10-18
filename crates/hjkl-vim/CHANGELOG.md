@@ -30,6 +30,10 @@ and this project adheres to
 
 ### Fixed
 
+- Visual `X` / `D` (delete), `C` / `S` / `R` (change) and `Y` (yank) in charwise
+  and linewise Visual act on the selected lines whole, as in vim (`:h v_X`). `X`
+  / `D` / `C` / `Y` did nothing and left Visual mode on; `S` / `R` changed only
+  the selected characters.
 - A charwise Visual delete (`d`, `x`) or put (`p` with an empty register) that
   reaches the end of the line leaves the cursor on the new last character, not
   one past it.

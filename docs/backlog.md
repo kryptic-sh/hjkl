@@ -1109,9 +1109,14 @@ Seen while measuring, not `gq`:
   Visual-line only while the selection is one row; a taller `V` selection, and
   Visual-block, still take hjkl's own paths. Unmeasured how far those differ
   from vim.
-- **Visual `X` and `D` do nothing.** `$vhhX` / `$vhhD` on `"abcdef"`: nvim
-  deletes the whole line linewise (register `"abcdef\n"`), hjkl stays in Visual
-  mode with the buffer untouched. Not looked into.
+- **Visual-line operators: three gaps against nvim**, each on plain `V` as well
+  as the uppercase charwise forms that now reuse the path (measured 2026-10-18
+  on `"ab\ncd\nef"`, cursor (0,1) unless noted):
+  - `.` after a multi-line `Vjd` / `Vjc` replays a two-line extent that no
+    longer fits: nvim deletes what is left (`Vjd.` → `""`), hjkl leaves `"ef"`.
+  - `Vjdu`: the cursor after the undo is (1,1) in hjkl, (0,0) in nvim.
+  - `Vky` @ (1,1): nvim leaves the cursor at (0,1), hjkl at (0,0); `vjY` and
+    `Vjy` (cursor already on the top row) agree.
 - **A charwise cut ending on the buffer's last line, when it is empty, takes the
   break before it.** `vd` / `vx` / `vU` @ (1,0) on `"ab\n\n"`: nvim leaves the
   buffer alone, hjkl leaves `"ab\n"` (and `vd` yanks `"\n"` where nvim yanks

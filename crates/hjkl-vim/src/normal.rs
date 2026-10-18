@@ -265,6 +265,28 @@ pub fn step_normal<H: Host>(
         return true;
     }
 
+    // Charwise / linewise Visual `X` `D` (delete), `C` `S` `R` (change) and
+    // `Y` (yank) act on the selected lines WHOLE, like `Vd` / `Vc` / `Vy`
+    // (`:h v_X`, `v_D`, `v_C`, `v_S`, `v_R`, `v_Y`) — verified against nvim
+    // 0.12.5. A charwise selection becomes the linewise one over its rows.
+    if matches!(ed.fsm_mode(), FsmMode::Visual | FsmMode::VisualLine) && !input.ctrl {
+        let op = match input.key {
+            Key::Char('X' | 'D') => Some(Operator::Delete),
+            Key::Char('C' | 'S' | 'R') => Some(Operator::Change),
+            Key::Char('Y') => Some(Operator::Yank),
+            _ => None,
+        };
+        if let Some(op) = op {
+            if ed.fsm_mode() == FsmMode::Visual {
+                let anchor_row = ed.visual_anchor().0;
+                ed.set_visual_line_anchor(anchor_row);
+                ed.set_mode(VimMode::VisualLine);
+            }
+            ed.apply_visual_operator(op, 1);
+            return true;
+        }
+    }
+
     // VisualBlock: extra commands beyond the standard y/d/c/x — `r`
     // replaces the block with a single char, `I` / `A` enter insert
     // mode at the block's left / right edge and repeat on every row.

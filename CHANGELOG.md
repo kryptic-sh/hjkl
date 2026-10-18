@@ -43,6 +43,8 @@ patch bumps.
 
 ### Fixed
 
+- **Visual `X`, `D`, `C`, `S`, `R` and `Y` work on whole lines**, as in vim;
+  most of them did nothing, and `S` / `R` changed only the selection.
 - After a Visual `d` / `x` to the end of the line the cursor is on the last
   character, not past it.
 - **`das` / `dis` no longer delete past a blank line.** A sentence ends at a

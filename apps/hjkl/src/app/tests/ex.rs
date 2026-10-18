@@ -3588,6 +3588,15 @@ fn visual_motion_count_extends_selection() {
 }
 
 #[test]
+fn visual_uppercase_operators_act_linewise() {
+    // Through the App keymap, charwise `vjX` / `vjD` delete the selected
+    // lines whole (`:h v_X`, `v_D`), not just the selected characters.
+    let keys = |op: char| [ck('l'), ck('v'), ck('j'), ck(op)];
+    assert_eq!(indent_app("ab\ncd\nef\n", &keys('X')), "ef\n");
+    assert_eq!(indent_app("ab\ncd\nef\n", &keys('D')), "ef\n");
+}
+
+#[test]
 fn insert_ctrl_t_and_ctrl_d() {
     // `i` then Ctrl-T indents the current line by one shiftwidth.
     assert_eq!(indent_app("abc\n", &[ck('i'), ctrl_key('t')]), "    abc\n");

@@ -275,3 +275,106 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+
+# ── Uppercase Visual operators act linewise ──────────────────────────────────
+#
+# In charwise and linewise Visual, X / D delete, C / S / R change and Y yanks
+# the selected lines whole, like Vd / Vc / Vy.
+
+[[cases]]
+name = "visual_X_deletes_the_selected_lines"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "vjX"
+expected_buffer = "ef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_D_deletes_the_selected_lines"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "vjD"
+expected_buffer = "ef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_D_deletes_the_line"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [1, 1]
+keys = "VD"
+expected_buffer = "ab\nef"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_C_changes_the_selected_lines"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "vjCx<Esc>"
+expected_buffer = "x\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_S_changes_the_selected_lines"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "vjSx<Esc>"
+expected_buffer = "x\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_R_changes_the_selected_lines"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "vjRx<Esc>"
+expected_buffer = "x\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_Y_yanks_the_selected_lines"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "vjY"
+expected_buffer = "ab\ncd\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "ab\ncd\n"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_upward_X_deletes_the_selected_lines"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [2, 1]
+keys = "vkX"
+expected_buffer = "ab"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
