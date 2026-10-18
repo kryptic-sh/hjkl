@@ -77,6 +77,20 @@ pub fn open_line_below_bridge<H: hjkl_engine::types::Host>(
         at: Position::new(row, line_chars),
         text: suffix,
     });
+    restart_insert_snapshot(ed);
+}
+/// Restart the insert session's "before" snapshot at the freshly opened line.
+/// The session began before `o` / `O` opened it, so without this the text it
+/// records for `.` would include the opened line break and the indent or
+/// comment leader that came with it, which the repeat adds again itself.
+fn restart_insert_snapshot<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
+    let row = ed.cursor().0;
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    if let Some(session) = vim_mut(ed).insert_session.as_mut() {
+        session.before_rope = rope;
+        session.row_min = row;
+        session.row_max = row;
+    }
 }
 /// `O` — open a new line above the cursor and begin Insert.
 /// When `formatoptions` has `o` and the current line is a comment, the
@@ -125,6 +139,7 @@ pub fn open_line_above_bridge<H: hjkl_engine::types::Host>(
     ed.set_sticky_col(sticky);
     let new_row = buf_cursor_pos(ed.buffer()).row;
     buf_set_cursor_rc(ed.buffer_mut(), new_row, new_line_content.chars().count());
+    restart_insert_snapshot(ed);
 }
 /// `R` — enter Replace mode (overstrike). `count` stored for replay.
 pub fn enter_replace_mode_bridge<H: hjkl_engine::types::Host>(

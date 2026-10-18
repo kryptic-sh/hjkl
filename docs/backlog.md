@@ -1090,13 +1090,18 @@ case, none investigated:
 
 Seen while measuring, not `gq`:
 
-- **`.` of an insert still diverges in three shapes** (fixed 2026-10-18: the
-  cursor one column right, and inserts containing `<CR>` replaying nothing). On
-  `"abc def\n  q r\nxyz w\nlast\n"` @ (0,2), each also wrong on the parent
-  commit: `ox<CR>y<Esc>j.` adds an extra blank row (the `o` / `O` path captures
-  across the opened boundary itself); `jA<BS><BS>x<Esc>j.` and `jI<BS>x<Esc>j.`
-  replay the typed `x` but not the backspaces (vim replays the keys, hjkl the
-  net text); `Ra<CR>b<Esc>jj.` overstrikes the wrong span.
+- **`.` of an insert still diverges in these shapes** (fixed 2026-10-18: the
+  cursor one column right, inserts containing `<CR>` replaying nothing, and `o`
+  / `O` replaying an empty line). On `"abc def\n  q r\nxyz w\nlast\n"` @ (0,2),
+  each also wrong before those fixes:
+  - `jA<BS><BS>x<Esc>j.` and `jI<BS>x<Esc>j.` replay the typed `x` but not the
+    backspaces — vim replays the keys, hjkl the net text.
+  - `Ra<CR>b<Esc>jj.` overstrikes the wrong span.
+  - `2oab<Esc>j.` opens one line, nvim two: `LastChange::OpenLine` keeps no
+    count.
+  - `".p` pastes nothing, after `oab<Esc>` and after a plain `iab<Esc>` alike:
+    the `".` register does not reach `p` in the oracle driver. Not checked in
+    the app.
 - **`gI` is not implemented** (insert at column 0, `:h gI`); hjkl ignores it.
 - **"Blank" is any Unicode whitespace to hjkl, only space and tab to vim.**
   `move_first_non_blank` and `greedy_wrap` test `char::is_whitespace`, while

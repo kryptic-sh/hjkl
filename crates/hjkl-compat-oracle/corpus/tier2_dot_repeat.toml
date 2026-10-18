@@ -211,3 +211,69 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+
+# ── `.` of `o` / `O` ─────────────────────────────────────────────────────────
+#
+# The repeat opens a line the same way and retypes what was typed into it.
+
+[[cases]]
+name = "dot_repeat_of_o_retypes_the_text"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "oab<Esc>j."
+expected_buffer = "abc def\nab\n  q r\nab\nxyz w\nlast\n"
+expected_cursor = [3, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_O_retypes_the_text"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "Oab<Esc>jj."
+expected_buffer = "ab\nabc def\nab\n  q r\nxyz w\nlast\n"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_o_with_a_line_break"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "ox<CR>y<Esc>j."
+expected_buffer = "abc def\nx\ny\n  q r\nx\ny\nxyz w\nlast\n"
+expected_cursor = [5, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_O_with_a_line_break"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "Ox<CR>y<Esc>jjj."
+expected_buffer = "x\ny\nabc def\n  q r\nx\ny\nxyz w\nlast\n"
+expected_cursor = [5, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+
+# With 'autoindent' the repeat indents the line it opens from ITS context —
+# here the unindented `xyz w` — instead of copying the first `o`'s indent.
+[[cases]]
+name = "dot_repeat_of_o_reindents_from_the_new_context"
+initial_buffer = "  q r\nxyz w\n"
+initial_cursor = [0, 0]
+keys = "oab<Esc>j."
+expected_buffer = "  q r\n  ab\nxyz w\nab\n"
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true

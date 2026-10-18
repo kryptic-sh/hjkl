@@ -274,32 +274,14 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             }
         }
         LastChange::OpenLine { above, inserted } => {
-            use hjkl_buffer::{Edit, Position};
-            ed.push_undo();
-            ed.sync_buffer_content_from_textarea();
-            let row = buf_cursor_pos(ed.buffer()).row;
+            // Open the line the way the typed `o` / `O` did — its indent and
+            // comment leader included — then retype what was typed into it.
             if above {
-                ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(row, 0),
-                    text: "\n".to_string(),
-                });
-                let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
-                let mut sticky = ed.sticky_col();
-                let tabstop = ed.settings().tabstop;
-                hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky, tabstop);
-                ed.set_sticky_col(sticky);
+                open_line_above_bridge(ed, 1);
             } else {
-                let line_chars = buf_line_chars(ed.buffer(), row);
-                ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(row, line_chars),
-                    text: "\n".to_string(),
-                });
+                open_line_below_bridge(ed, 1);
             }
-            let cursor = ed.cursor();
-            ed.mutate_edit(Edit::InsertStr {
-                at: Position::new(cursor.0, cursor.1),
-                text: inserted,
-            });
+            replay_insert_and_finish(ed, &inserted);
         }
         LastChange::InsertAt {
             entry,

@@ -48,6 +48,7 @@ patch bumps.
 - **Redoing a delete that reached the end of the buffer** (`dj`, `dG` near the
   bottom, then `u` `<C-r>`) puts the cursor on the last line, as in vim; it was
   left on a row past the end, stuck there.
+- **`.` after `o` / `O` retypes the text**; it opened an empty line.
 - **`.` repeats an insert that contained a line break**; it did nothing. And `.`
   of any insert now leaves the cursor on the last inserted character, not one
   past it.

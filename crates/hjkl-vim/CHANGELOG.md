@@ -29,6 +29,11 @@ and this project adheres to
 
 ### Fixed
 
+- `.` of `o` / `O` retypes what was typed into the opened line; it opened an
+  empty line and dropped the text. The open bridges restart the insert session's
+  snapshot after opening, so the recorded text is just what was typed, and the
+  replay opens through the same bridge, so autoindent and the comment leader
+  come from the line it opens at.
 - `.` of an insert that broke a line (`ia<CR>b<Esc>`, `A<CR>…`, `cw…<CR>…`)
   repeats it. `finish_insert_session` compared the same row range of the buffer
   before and after, so a session that added rows saw no growth and recorded
