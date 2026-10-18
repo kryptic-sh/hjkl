@@ -1113,10 +1113,13 @@ pub fn visual_paste<H: hjkl_engine::types::Host>(
                     at: Position::new(top.0, top.1),
                     text: reg_text.clone(),
                 });
-                // Park the cursor on the last char of the inserted text.
+                // Park the cursor on the last char of the inserted text. An
+                // empty register inserts nothing, and a selection cut through
+                // the end of the line leaves that column past the new end.
                 let inserted_len = reg_text.chars().count();
                 let last_col = top.1 + inserted_len.saturating_sub(1);
                 buf_set_cursor_rc(ed.buffer_mut(), top.0, last_col);
+                clamp_cursor_to_normal_mode(ed);
             }
         }
         Mode::VisualBlock => {

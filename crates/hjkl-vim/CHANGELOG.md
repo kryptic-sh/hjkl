@@ -30,6 +30,9 @@ and this project adheres to
 
 ### Fixed
 
+- A charwise Visual delete (`d`, `x`) or put (`p` with an empty register) that
+  reaches the end of the line leaves the cursor on the new last character, not
+  one past it.
 - **`is` / `as` stop at an empty line.** The sentence text object ran on through
   a paragraph break into the next paragraph — `das` in a paragraph whose last
   sentence has no terminator deleted every paragraph after it. It is now a port

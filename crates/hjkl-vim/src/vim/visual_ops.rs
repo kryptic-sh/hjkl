@@ -168,6 +168,9 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                 Operator::Delete => {
                     ed.push_undo();
                     cut_vim_range(ed, top, bot, RangeKind::Inclusive);
+                    // A cut through the end of the line leaves the cursor past
+                    // the new end; Normal mode puts it on the last character.
+                    clamp_cursor_to_normal_mode(ed);
                     record_visual_last_change(ed, op, charwise_extent(top, bot), register);
                     vim_mut(ed).mode = Mode::Normal;
                 }

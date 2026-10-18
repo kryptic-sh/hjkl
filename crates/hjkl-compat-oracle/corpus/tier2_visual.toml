@@ -222,3 +222,56 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+
+# ── Cursor after a Visual delete through the end of the line ─────────────────
+#
+# Back in Normal mode the cursor sits on the last character, not past it.
+
+[[cases]]
+name = "visual_delete_to_line_end_lands_on_the_last_character"
+initial_buffer = "abcdef"
+initial_cursor = [0, 0]
+keys = "$vhhd"
+expected_buffer = "abc"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_x_to_line_end_lands_on_the_last_character"
+initial_buffer = "abcdef\ngh"
+initial_cursor = [0, 0]
+keys = "$vhhx"
+expected_buffer = "abc\ngh"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_delete_across_lines_to_the_end_lands_on_the_last_character"
+initial_buffer = "ab\ncdef"
+initial_cursor = [0, 1]
+keys = "vj$d"
+expected_buffer = "a"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_put_of_an_empty_register_at_line_end_lands_on_the_last_character"
+initial_buffer = "abcdef"
+initial_cursor = [0, 4]
+keys = "vlp"
+expected_buffer = "abcd"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

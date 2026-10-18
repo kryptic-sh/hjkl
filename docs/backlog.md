@@ -1109,10 +1109,9 @@ Seen while measuring, not `gq`:
   Visual-line only while the selection is one row; a taller `V` selection, and
   Visual-block, still take hjkl's own paths. Unmeasured how far those differ
   from vim.
-- **A charwise Visual delete reaching the end of the line leaves the cursor one
-  past it.** `$vhhd` on `"One. Two. Three. Four."`: nvim (0,18), hjkl (0,19),
-  same buffer; also `$vbd`, `$vhasd`. Present before the sentence port too
-  (measured on its parent build). Next up.
+- **Visual `X` and `D` do nothing.** `$vhhX` / `$vhhD` on `"abcdef"`: nvim
+  deletes the whole line linewise (register `"abcdef\n"`), hjkl stays in Visual
+  mode with the buffer untouched. Not looked into.
 - **A charwise cut ending on the buffer's last line, when it is empty, takes the
   break before it.** `vd` / `vx` / `vU` @ (1,0) on `"ab\n\n"`: nvim leaves the
   buffer alone, hjkl leaves `"ab\n"` (and `vd` yanks `"\n"` where nvim yanks
@@ -1127,8 +1126,11 @@ Seen while measuring, not `gq`:
 - **`.` after a multi-line charwise `vd` replays the wrong range.** `vjd.` @
   (0,1) on `"abc\nd\n\ncd"`: nvim `""`, hjkl `"acd"` (register `"\n\n"` against
   nvim's `"a\ncd"`). Present on the parent build too; not looked at.
-- **`v$y` yanks without the line break.** `v$y` @ (0,0) on `"ab\ncd"`: nvim
-  yanks `"ab\n"`, hjkl `"ab"`. Present on the parent build too; not looked at.
+- **`v$` does not cover the line break.** `v$y` @ (0,0) on `"ab\ncd"`: nvim
+  yanks `"ab\n"`, hjkl `"ab"`; `v$d` likewise leaves the line unjoined. In vim
+  `$` in Visual puts the selection end on the line's NUL, which
+  `charwise_visual_range` (`visual_ops.rs`) would already cover if the cursor
+  stood there; hjkl stops it on the last character. Not looked into further.
 - **`vlaw` extends to the wrong end.** `vlaw<Esc>` then `` `> `` @ (0,0) on
   `"ab cd"`: nvim (0,4), hjkl (0,2) — the word object's Visual-extend path, the
   same gap the sentence object had; not looked at.

@@ -43,6 +43,8 @@ patch bumps.
 
 ### Fixed
 
+- After a Visual `d` / `x` to the end of the line the cursor is on the last
+  character, not past it.
 - **`das` / `dis` no longer delete past a blank line.** A sentence ends at a
   paragraph break, as in vim; `das` on a paragraph's unterminated last sentence
   used to take the following paragraphs with it. `as` on a sentence with no
