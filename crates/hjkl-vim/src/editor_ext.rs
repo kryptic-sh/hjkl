@@ -1828,6 +1828,36 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         let Some(obj) = crate::vim::text_object_from_char(ch) else {
             return;
         };
+        // Sentences follow vim's `current_sent` with Visual active: select
+        // the object charwise, or extend the selection keeping anchor and
+        // mode. Visual-line keeps only its anchor's row, so it takes this path
+        // only while the selection is one row (anchor and cursor coincide).
+        let sentence_anchor = match crate::vim_state::vim(self).mode {
+            FsmMode::Visual => Some(crate::vim_state::vim(self).visual_anchor),
+            FsmMode::VisualLine
+                if crate::vim_state::vim(self).visual_line_anchor == self.cursor().0 =>
+            {
+                Some(self.cursor())
+            }
+            _ => None,
+        };
+        if obj == TextObject::Sentence
+            && let Some(anchor) = sentence_anchor
+        {
+            match crate::vim::sentence_visual(self, anchor, inner, count) {
+                Some(crate::vim::VisualSentence::Extend((row, col))) => {
+                    self.jump_cursor(row, col);
+                }
+                Some(crate::vim::VisualSentence::Select(start, (row, col))) => {
+                    crate::vim_state::vim_mut(self).mode = FsmMode::Visual;
+                    crate::vim_state::vim_mut(self).current_mode = VimMode::Visual;
+                    crate::vim_state::vim_mut(self).visual_anchor = start;
+                    self.jump_cursor(row, col);
+                }
+                None => {}
+            }
+            return;
+        }
         let reverse_block_sentence = obj == TextObject::Sentence
             && crate::vim_state::vim(self).mode == FsmMode::VisualBlock
             && self.cursor().0 < crate::vim_state::vim(self).block_anchor.0;
@@ -1885,8 +1915,13 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             RangeKind::Linewise => {
                 crate::vim_state::vim(self).mode == FsmMode::VisualLine && self.cursor().0 == end.0
             }
+            // vim extends a charwise selection only once it is bigger than
+            // one character: a one-character object on a fresh `v`
+            // (`viw` on a one-letter word, `vis` on an empty line) is
+            // selected again, not grown.
             _ => {
                 crate::vim_state::vim(self).mode == FsmMode::Visual
+                    && crate::vim_state::vim(self).visual_anchor != self.cursor()
                     && self.cursor() == crate::vim::retreat_one(self, end)
             }
         };

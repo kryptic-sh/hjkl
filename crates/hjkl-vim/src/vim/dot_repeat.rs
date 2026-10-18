@@ -192,13 +192,8 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                     } else {
                         (r + lines - 1, width.saturating_sub(1))
                     };
-                    run_operator_over_range(
-                        ed,
-                        op,
-                        (r, c),
-                        end,
-                        hjkl_vim_types::RangeKind::Inclusive,
-                    );
+                    let (from, to, kind) = charwise_visual_range(ed, (r, c), end);
+                    run_operator_over_range(ed, op, from, to, kind);
                     if let Some(text) = inserted {
                         replay_insert_and_finish(ed, &text);
                     }

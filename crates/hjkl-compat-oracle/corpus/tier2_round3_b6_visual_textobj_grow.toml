@@ -27,3 +27,45 @@ keys = "viwiwd"
 expected_buffer = "bar baz\n"
 expected_register = ['"', "foo "]
 expected_mode = "normal"
+
+# ── A one-character object on a fresh selection ──────────────────────────────
+#
+# vim grows a selection only once it is bigger than one character: an object
+# that is itself one character is selected again, not grown.
+
+[[cases]]
+name = "visual_inner_word_on_a_one_letter_word_does_not_grow"
+initial_buffer = "a b"
+initial_cursor = [0, 0]
+keys = "viwd"
+expected_buffer = " b"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_inner_word_twice_on_a_one_letter_word_does_not_grow"
+initial_buffer = "a b"
+initial_cursor = [0, 0]
+keys = "viwiwd"
+expected_buffer = " b"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_inner_sentence_on_an_empty_line_selects_it_alone"
+initial_buffer = "a.\n\nb."
+initial_cursor = [1, 0]
+keys = "visd"
+expected_buffer = "a.\nb."
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

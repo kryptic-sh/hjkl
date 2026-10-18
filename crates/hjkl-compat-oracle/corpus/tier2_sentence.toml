@@ -361,3 +361,199 @@ expected_cursor = [0, 0]
 expected_mode = "normal"
 expected_register = ['"', "a\n \nb\nc\nx"]
 
+
+# ── Sentences and paragraph breaks ───────────────────────────────────────────
+#
+# An empty line ends a sentence (vim's startPS), so `is` / `as` stop at it
+# instead of running on into the next paragraph; and `as` with no white space
+# after the sentence takes the white space before it.
+
+[[cases]]
+name = "around_sentence_stops_at_the_blank_line_below"
+initial_buffer = "ab cd\n\nef"
+initial_cursor = [0, 0]
+keys = "das"
+expected_buffer = "\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "around_sentence_stops_at_the_blank_line_above"
+initial_buffer = "ab cd\n\nef"
+initial_cursor = [2, 0]
+keys = "das"
+expected_buffer = "ab cd\n\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "around_sentence_on_a_blank_line_takes_it_alone"
+initial_buffer = "ab cd\n\nef"
+initial_cursor = [1, 0]
+keys = "das"
+expected_buffer = "ab cd\nef"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inner_sentence_stops_at_the_blank_line_below"
+initial_buffer = "ab cd\n\nef"
+initial_cursor = [0, 0]
+keys = "dis"
+expected_buffer = "\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "around_sentence_without_trailing_white_takes_the_leading"
+initial_buffer = "ab. cd\nef"
+initial_cursor = [0, 4]
+keys = "das"
+expected_buffer = "ab."
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "around_sentence_before_a_paragraph_break_takes_the_leading"
+initial_buffer = "x. ab\ncd.\n\nef"
+initial_cursor = [0, 3]
+keys = "yas"
+expected_buffer = "x. ab\ncd.\n\nef"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "around_sentence_in_the_second_paragraph"
+initial_buffer = "ab. cd\n\nef. gh"
+initial_cursor = [2, 0]
+keys = "das"
+expected_buffer = "ab. cd\n\ngh"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_around_sentence_then_join_stays_in_the_paragraph"
+initial_buffer = "ab cd\n\nef"
+initial_cursor = [0, 0]
+keys = "vasJ"
+expected_buffer = "ab cd\nef"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+
+# ── Extending a Visual selection by sentences ────────────────────────────────
+#
+# Once the selection is bigger than one character, `is` / `as` extend it by
+# sentences on the cursor's side, keeping the anchor (vim's current_sent
+# extend path).
+
+[[cases]]
+name = "visual_around_sentence_twice_extends_by_a_sentence"
+initial_buffer = "One. Two. Three. Four."
+initial_cursor = [0, 0]
+keys = "vasasd"
+expected_buffer = "Three. Four."
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_inner_sentence_three_times_alternates_units"
+initial_buffer = "One. Two. Three. Four."
+initial_cursor = [0, 0]
+keys = "visisisd"
+expected_buffer = " Three. Four."
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_around_sentence_extends_backward_from_the_start"
+initial_buffer = "One. Two. Three. Four."
+initial_cursor = [0, 0]
+keys = "$vhasasy"
+expected_buffer = "One. Two. Three. Four."
+expected_cursor = [0, 9]
+expected_mode = "normal"
+expected_register = ['"', " Three. Four."]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_inner_sentence_extends_backward"
+initial_buffer = "One. Two. Three. Four."
+initial_cursor = [0, 9]
+keys = "wwvhisd"
+expected_buffer = "One. Two.  Four."
+expected_cursor = [0, 10]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_sentence_extend_crosses_a_paragraph_break"
+initial_buffer = "ab. cd\n\nef. gh"
+initial_cursor = [0, 0]
+keys = "visisisd"
+expected_buffer = "\n\nef. gh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+
+[[cases]]
+name = "visual_around_sentence_on_an_empty_line_takes_the_next_sentence"
+initial_buffer = "ab cd\n\nef gh\nij"
+initial_cursor = [1, 0]
+keys = "vasd"
+expected_buffer = "ab cd\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_inner_sentence_on_an_empty_line_stays_linewise"
+initial_buffer = "a.\n\nb."
+initial_cursor = [1, 0]
+keys = "Vis"
+expected_buffer = "a.\n\nb."
+expected_cursor = [1, 0]
+expected_mode = "visual_line"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

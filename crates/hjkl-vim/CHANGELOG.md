@@ -30,6 +30,30 @@ and this project adheres to
 
 ### Fixed
 
+- **`is` / `as` stop at an empty line.** The sentence text object ran on through
+  a paragraph break into the next paragraph — `das` in a paragraph whose last
+  sentence has no terminator deleted every paragraph after it. It is now a port
+  of vim's `current_sent` / `findsent`, which also gives `as` the white space
+  BEFORE the sentence when there is none after it (`das` on the last sentence of
+  a line or paragraph). Lines are read as the walk reaches them instead of
+  flattening a window of the buffer.
+- Visual `is` / `as` follow vim's `current_sent` with Visual active (new
+  `sentence_visual` / `VisualSentence`): a selection already bigger than one
+  character extends by sentences on the cursor's side, keeping the anchor, and
+  so does one whose object comes out a single cell (`vas` on an empty line
+  selects through the next sentence; `Vis` there stays Visual-line). `vasas` had
+  relied on the generic text-object grow, which took the wrong unit from the
+  white space between sentences.
+- A Visual text object that is one character on a fresh selection (`viw` on a
+  one-letter word, `vis` on an empty line) is selected, not grown into the next
+  unit: vim grows a charwise selection only once it is bigger than one
+  character.
+- A charwise Visual selection ending on an empty line takes that line's break:
+  `vy` there yanks `"\n"` (it yanked nothing), and `vu` / `vU` / `v~` (and their
+  `.` repeat) no longer delete the line. The inclusive read left out the break
+  the cut removed, so the case change put one character fewer back; the Visual
+  yank, case ops and their replay now cover the selection as an exclusive range
+  to the next line's start (`charwise_visual_range`).
 - `[count]J` / `[count]gJ` on the last line with a count of 3 or more move the
   cursor to column 0, as vim does (a bare or `2` count still keeps the column);
   the cursor stayed where it was.

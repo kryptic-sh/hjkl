@@ -141,3 +141,84 @@ expected_buffer = "two\nfour\n"
 expected_cursor = [1, 0]
 expected_mode = "normal"
 expected_register = ['a', "three\n"]
+
+# ── A charwise selection ending on an empty line ─────────────────────────────
+#
+# The empty line's one cell is its line break: a yank takes it, and a case
+# change leaves it in place.
+
+[[cases]]
+name = "visual_yank_on_an_empty_line_takes_its_line_break"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [1, 0]
+keys = "vy"
+expected_buffer = "ab\n\ncd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+expected_register = ['"', "\n"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_lowercase_on_an_empty_line_keeps_the_line"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [1, 0]
+keys = "vu"
+expected_buffer = "ab\n\ncd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_uppercase_ending_on_an_empty_line_keeps_it"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [0, 1]
+keys = "vjU"
+expected_buffer = "aB\n\ncd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_sentence_lowercase_on_an_empty_line"
+initial_buffer = "a.\n\nb."
+initial_cursor = [1, 0]
+keys = "Visu"
+expected_buffer = "a.\n\nb."
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+
+[[cases]]
+name = "visual_lowercase_on_an_empty_line_repeats_with_dot"
+initial_buffer = "ab\n\n\ncd"
+initial_cursor = [1, 0]
+keys = "vu."
+expected_buffer = "ab\n\n\ncd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_yank_to_line_end_stops_before_an_empty_line_break"
+initial_buffer = "ab\nc\n\nd"
+initial_cursor = [0, 1]
+keys = "y3$"
+expected_buffer = "ab\nc\n\nd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+expected_register = ['"', "b\nc\n"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

@@ -666,378 +666,488 @@ pub fn sentence_step_forward<H: hjkl_engine::types::Host>(
         SentenceStep::EndOfBuffer(end)
     }
 }
-/// `is` / `as` — sentence: text up to and including the next sentence
-/// terminator (`.`, `?`, `!`). Vim treats `.`/`?`/`!` followed by
-/// whitespace (or end-of-line) as a boundary; runs of consecutive
-/// terminators stay attached to the same sentence. `as` extends to
-/// include trailing whitespace; `is` does not.
+/// `is` / `as` — sentence text object: a port of vim's `current_sent`
+/// (`textobject.c`), outside the Visual-extend path. `as` takes the white
+/// space after the sentence, or the white space before it when there is
+/// none after. Returns `(start, end)` with `end` exclusive, as every text
+/// object does. `None` only for a buffer without a single character.
 ///
-/// Runs the flat-Vec scan over a window of rows around the cursor
-/// instead of the whole buffer; when a walk would need to cross the
-/// window's edge the full-buffer scan takes over, so the result is
-/// byte-for-byte identical either way.
+/// The walk reads lines on demand (`SentBuf`), so it costs the distance it
+/// covers, not the buffer's size.
 pub fn sentence_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
     count: usize,
 ) -> Option<((usize, usize), (usize, usize))> {
-    let count = count.max(1);
+    with_sentence_buf(ed, |buf, cursor| {
+        buf.current_sent(cursor, inner, count.max(1))
+    })
+}
+
+/// What Visual-mode `is` / `as` does to the selection.
+#[derive(Debug, PartialEq, Eq)]
+pub enum VisualSentence {
+    /// Select the object afresh, charwise: anchor and cursor, inclusive.
+    Select(Pos, Pos),
+    /// Extend the selection: the cursor lands here, the anchor and the
+    /// Visual mode stay.
+    Extend(Pos),
+}
+
+/// Visual-mode `is` / `as` with the selection anchored at `anchor`: vim's
+/// `current_sent` with Visual active (see `SentBuf::current_sent_visual`).
+pub fn sentence_visual<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    anchor: Pos,
+    inner: bool,
+    count: usize,
+) -> Option<VisualSentence> {
+    with_sentence_buf(ed, |buf, cursor| {
+        buf.current_sent_visual(cursor, anchor, inner, count.max(1))
+    })
+}
+
+/// The object `current_sent` found before the Visual / operator split: its
+/// first and last cells, and where the blank skip from the cursor stopped.
+struct SentenceFound {
+    start: Pos,
+    last: Pos,
+    skipped: Pos,
+}
+
+/// Run `f` over the buffer as vim's sentence code sees it ([`SentBuf`]),
+/// from the cursor clamped onto a real cell. `None` for a buffer without a
+/// single character.
+fn with_sentence_buf<H: hjkl_engine::types::Host, T>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    f: impl FnOnce(&SentBuf<'_>, Pos) -> T,
+) -> Option<T> {
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
-    let raw_n_lines = rope.len_lines();
-    if raw_n_lines == 0 {
+    if rope.chars().all(|c| c == '\n') {
         return None;
     }
-    let cursor = ed.cursor();
-    let win_lo = cursor.0.saturating_sub(SENTENCE_WINDOW_ROWS);
-    let win_hi = (cursor.0 + SENTENCE_WINDOW_ROWS).min(raw_n_lines - 1);
-    let line_of = |r: usize| -> std::borrow::Cow<'_, str> {
+    let line_chars = |r: usize| -> Vec<char> {
         let start = rope.line_to_byte(r);
         rope.byte_slice(start..start + hjkl_buffer::rope_line_bytes(&rope, r))
-            .into()
+            .chars()
+            .collect()
     };
-    let line_chars = |r: usize| -> Vec<char> { line_of(r).chars().collect() };
-    let line_len = |r: usize| -> usize { line_of(r).chars().count() };
-    let win_off = rope.line_to_char(win_lo);
-    let (win_lens, chars, last_content) =
-        window_flat(raw_n_lines, win_lo, win_hi, &line_len, &line_chars);
-    let flat_len = chars.len();
-    let whole_buffer = win_lo == 0 && win_hi >= last_content;
-    if flat_len == 0 {
-        // The old scan returns None for a content-less buffer; a window
-        // that starts past the buffer's content (phantom-row cursor)
-        // needs the full scan to answer.
-        return if whole_buffer {
-            None
-        } else {
-            sentence_text_object_full(ed, inner, count)
-        };
-    }
-    // Flat index ↔ (row, col) over the window. One extra `win_lens`
-    // entry past the window's top row makes a flat index sitting on a
-    // `\n` map to the next row exactly like the old whole-buffer
-    // arithmetic.
-    let idx_to_pos = |mut idx: usize| -> (usize, usize) {
-        for (i, &len) in win_lens.iter().enumerate() {
-            if idx <= len {
-                return (win_lo + i, idx);
-            }
-            idx -= len + 1;
-        }
-        let last = win_lens.len() - 1;
-        (win_lo + last, win_lens[last])
-    };
-    // Cursor's flat index: the rope's char offset of the cursor minus the
-    // window's offset. ropey's char space matches the flat scan — every
-    // row contributes its chars plus one separator, and the popped final
-    // newline only sits past the last content row.
-    let cursor_idx = (rope.line_to_char(cursor.0) + cursor.1 - win_off).min(flat_len - 1);
-
-    let Some((start, end, clipped)) =
-        sentence_text_object_on_chars(&chars, cursor_idx, inner, count)
-    else {
-        return if whole_buffer {
-            None
-        } else {
-            sentence_text_object_full(ed, inner, count)
-        };
-    };
-    // A walk that ran off the window's edge is only trustworthy when the
-    // window covers the whole buffer; otherwise recompute on the full buffer.
-    if clipped && !whole_buffer {
-        return sentence_text_object_full(ed, inner, count);
-    }
-
-    Some((idx_to_pos(start), idx_to_pos(end)))
+    let buf = SentBuf::new(rope.len_lines(), &line_chars);
+    let row = ed.cursor().0.min(buf.n_lines - 1);
+    let cursor = (row, ed.cursor().1.min(buf.len(row)));
+    Some(f(&buf, cursor))
 }
 
-/// The whole-buffer `is`/`as` scan — the fallback for windowed
-/// [`sentence_text_object`] when a walk crosses the window's edge.
-fn sentence_text_object_full<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::View, H>,
-    inner: bool,
-    count: usize,
-) -> Option<((usize, usize), (usize, usize))> {
-    let count = count.max(1);
-    let rope = hjkl_engine::types::Query::rope(ed.buffer());
-    let n_lines = rope.len_lines();
-    if n_lines == 0 {
-        return None;
-    }
-    // Flatten the buffer so a sentence can span lines (vim's behaviour).
-    // Newlines count as whitespace for boundary detection.
-    let line_lens: Vec<usize> = (0..n_lines)
-        .map(|r| rope_line_to_str(&rope, r).chars().count())
-        .collect();
-    let pos_to_idx = |pos: (usize, usize)| -> usize {
-        let idx: usize = line_lens.iter().take(pos.0).map(|&len| len + 1).sum();
-        idx + pos.1
-    };
-    let idx_to_pos = |mut idx: usize| -> (usize, usize) {
-        for (r, &len) in line_lens.iter().enumerate() {
-            if idx <= len {
-                return (r, idx);
-            }
-            idx -= len + 1;
-        }
-        let last = n_lines.saturating_sub(1);
-        (last, line_lens[last])
-    };
-    let mut chars: Vec<char> = rope.chars().collect();
-    if chars.last() == Some(&'\n') {
-        chars.pop();
-    }
-    if chars.is_empty() {
-        return None;
-    }
-
-    let cursor_idx = pos_to_idx(ed.cursor()).min(chars.len() - 1);
-
-    let (start, end, _) = sentence_text_object_on_chars(&chars, cursor_idx, inner, count)?;
-
-    Some((idx_to_pos(start), idx_to_pos(end)))
+/// vim `ascii_iswhite`.
+fn is_vim_white(c: char) -> bool {
+    c == ' ' || c == '\t'
 }
 
-/// Flat-char `decl`: step back one character, skipping an internal `\n`
-/// (vim's NUL at end-of-line), so positions stay on real characters.
-fn sentence_decl(chars: &[char], i: usize) -> Option<usize> {
-    if i == 0 {
-        None
-    } else if chars[i - 1] == '\n' {
-        i.checked_sub(2)
-    } else {
-        Some(i - 1)
-    }
+/// vim's sentence punctuation: what `findsent` backs up over.
+fn is_sentence_punct(c: char) -> bool {
+    is_sentence_terminator(c) || is_sentence_closing(c)
 }
 
-/// Flat-char `incl`: step forward one character, skipping an internal `\n`.
-fn sentence_incl(chars: &[char], i: usize) -> Option<usize> {
-    let n = chars.len();
-    if i + 1 >= n {
-        None
-    } else if chars[i + 1] == '\n' {
-        if i + 2 >= n { None } else { Some(i + 2) }
-    } else {
-        Some(i + 1)
-    }
+/// The buffer the way vim's sentence code sees it: lines without their
+/// break, read from the rope on demand, and no phantom row after a trailing
+/// newline. A position is `(row, col)` in chars; `col == len` is the NUL at
+/// the end of the line.
+///
+/// The walk moves a character at a time, so the row it is on is cached:
+/// a character read is an index, and a line is fetched once per visit.
+struct SentBuf<'a> {
+    line_chars: &'a dyn Fn(usize) -> Vec<char>,
+    n_lines: usize,
+    line: std::cell::RefCell<Option<(usize, Vec<char>)>>,
 }
 
-/// vim `find_first_blank`: walk back over same-line blanks to the first blank
-/// of the run ending at `i`.
-fn sentence_first_blank(chars: &[char], i: usize) -> usize {
-    let mut p = i;
-    while let Some(q) = sentence_decl(chars, p) {
-        if chars[q] == ' ' || chars[q] == '\t' {
-            p = q;
-        } else {
-            break;
+impl<'a> SentBuf<'a> {
+    /// `raw_lines` counts the phantom row, as the rope does.
+    fn new(raw_lines: usize, line_chars: &'a dyn Fn(usize) -> Vec<char>) -> Self {
+        let phantom = raw_lines > 1 && line_chars(raw_lines - 1).is_empty();
+        Self {
+            line_chars,
+            n_lines: raw_lines - usize::from(phantom),
+            line: std::cell::RefCell::new(None),
         }
     }
-    p
-}
 
-/// Flat port of vim's `findsent(FORWARD, 1)`: the next sentence start (first
-/// non-blank cell) strictly after `pos`, or the blank-line / end-of-buffer
-/// landing when no next sentence exists.
-fn sentence_next_start(chars: &[char], pos: usize, clipped: &mut bool) -> usize {
-    let len = chars.len();
-    if pos >= len {
-        *clipped = true;
-        return len;
-    }
-    let is_ws = |c: char| c == ' ' || c == '\t';
-    let is_punct = |c: char| matches!(c, '.' | '!' | '?' | ')' | ']' | '"' | '\'');
-    let is_term = |c: char| matches!(c, '.' | '!' | '?');
-    let is_close = |c: char| matches!(c, ')' | ']' | '"' | '\'');
-
-    // (1) Back up over white space and punctuation to the previous
-    // non-white, non-punctuation character (vim's "go back" loop).
-    let mut p = pos;
-    let mut found_dot = false;
-    loop {
-        let c = chars[p];
-        if !is_ws(c) && !is_punct(c) {
-            break;
+    fn with_line<T>(&self, row: usize, f: impl FnOnce(&[char]) -> T) -> T {
+        let mut line = self.line.borrow_mut();
+        if line.as_ref().is_none_or(|(cached, _)| *cached != row) {
+            *line = Some((row, (self.line_chars)(row)));
         }
-        let Some(tp) = sentence_decl(chars, p) else {
-            break;
-        };
-        if found_dot {
-            break;
-        }
-        if is_term(c) {
-            found_dot = true;
-        }
-        if is_close(c) && !is_punct(chars[tp]) {
-            break;
-        }
-        p = tp;
+        f(line.as_ref().map_or(&[], |(_, chars)| chars))
     }
 
-    // (2) Scan forward for the sentence's terminator boundary, then skip
-    // same-line blanks (and the line break of a sentence ending at EOL) to
-    // the next sentence start.
-    let mut e = p;
-    while e < len {
-        let c = chars[e];
-        if is_term(c) {
-            let mut t = e;
-            while t + 1 < len && is_term(chars[t + 1]) {
-                t += 1;
+    fn len(&self, row: usize) -> usize {
+        self.with_line(row, <[char]>::len)
+    }
+
+    /// vim `gchar_pos`: the character at `p`, `None` for the NUL past the
+    /// end of the line.
+    fn gchar(&self, p: Pos) -> Option<char> {
+        self.with_line(p.0, |line| line.get(p.1).copied())
+    }
+
+    /// vim `inc`: 0 moved within the line, 2 moved onto the line's NUL,
+    /// 1 moved to the next line, -1 at the end of the buffer.
+    fn inc(&self, p: &mut Pos) -> i32 {
+        let len = self.len(p.0);
+        if p.1 < len {
+            p.1 += 1;
+            return if p.1 < len { 0 } else { 2 };
+        }
+        if p.0 + 1 < self.n_lines {
+            *p = (p.0 + 1, 0);
+            return 1;
+        }
+        -1
+    }
+
+    /// vim `incl`: `inc`, skipping the NUL at the end of a non-empty line.
+    fn incl(&self, p: &mut Pos) -> i32 {
+        let mut r = self.inc(p);
+        if r >= 1 && p.1 != 0 {
+            r = self.inc(p);
+        }
+        r
+    }
+
+    /// vim `dec`: 0 within the line, 1 onto the previous line's NUL, -1 at
+    /// the start of the buffer.
+    fn dec(&self, p: &mut Pos) -> i32 {
+        if p.1 > 0 {
+            p.1 -= 1;
+            return 0;
+        }
+        if p.0 > 0 {
+            p.0 -= 1;
+            p.1 = self.len(p.0);
+            return 1;
+        }
+        -1
+    }
+
+    /// vim `decl`: `dec`, skipping the NUL at the end of a non-empty line.
+    fn decl(&self, p: &mut Pos) -> i32 {
+        let mut r = self.dec(p);
+        if r == 1 && p.1 != 0 {
+            r = self.dec(p);
+        }
+        r
+    }
+
+    /// vim `startPS(lnum, NUL, false)`: an empty line or one starting with a
+    /// form feed. The nroff `'paragraphs'` / `'sections'` macros (`.PP`, …)
+    /// are not recognised.
+    fn start_ps(&self, row: usize) -> bool {
+        self.len(row) == 0 || self.gchar((row, 0)) == Some('\x0c')
+    }
+
+    /// vim `find_first_blank`: back over the blanks before `p`.
+    fn find_first_blank(&self, p: &mut Pos) {
+        while self.decl(p) != -1 {
+            if !self.gchar(*p).is_some_and(is_vim_white) {
+                self.incl(p);
+                break;
             }
-            while t + 1 < len && is_close(chars[t + 1]) {
-                t += 1;
-            }
-            if t + 1 >= len {
-                return len;
-            }
-            let n = chars[t + 1];
-            if is_ws(n) {
-                let mut k = t + 1;
-                while k < len && is_ws(chars[k]) {
-                    k += 1;
+        }
+    }
+
+    /// Whether `p` sits in its line's leading white space.
+    fn in_leading_white(&self, p: Pos) -> bool {
+        (0..p.1).all(|col| self.gchar((p.0, col)).is_some_and(is_vim_white))
+    }
+
+    /// vim `findsent` with the default `'cpoptions'` (no `J`): `count`
+    /// sentence starts forward or back from `pos`. `None` is vim's `FAIL`,
+    /// a count that runs off the buffer.
+    fn findsent(&self, mut pos: Pos, forward: bool, mut count: usize) -> Option<Pos> {
+        let step = |p: &mut Pos| if forward { self.incl(p) } else { self.decl(p) };
+        let mut noskip = false;
+        while count > 0 {
+            count -= 1;
+            let prev_pos = pos;
+            'found: {
+                if self.gchar(pos).is_none() {
+                    // On an empty line: skip up to a non-empty one.
+                    while step(&mut pos) != -1 && self.gchar(pos).is_none() {}
+                    if forward {
+                        break 'found;
+                    }
+                } else if forward && pos.1 == 0 && self.start_ps(pos.0) {
+                    if pos.0 + 1 == self.n_lines {
+                        return None;
+                    }
+                    pos.0 += 1;
+                    break 'found;
+                } else if !forward {
+                    self.decl(&mut pos);
                 }
-                return k;
-            } else if n == '\n' {
-                let mut k = t + 2;
-                while k < len && is_ws(chars[k]) {
-                    k += 1;
+
+                // Back to the previous non-white, non-punctuation character.
+                let mut found_dot = false;
+                while let Some(c) = self.gchar(pos)
+                    && (is_vim_white(c) || is_sentence_punct(c))
+                {
+                    let mut tpos = pos;
+                    if self.decl(&mut tpos) == -1 || (self.len(tpos.0) == 0 && forward) {
+                        break;
+                    }
+                    if found_dot {
+                        break;
+                    }
+                    if is_sentence_terminator(c) {
+                        found_dot = true;
+                    }
+                    if is_sentence_closing(c) && !self.gchar(tpos).is_some_and(is_sentence_punct) {
+                        break;
+                    }
+                    self.decl(&mut pos);
                 }
-                return k;
+
+                // Find the end of the sentence.
+                let start_row = pos.0;
+                loop {
+                    let c = self.gchar(pos);
+                    if c.is_none() || (pos.1 == 0 && self.start_ps(pos.0)) {
+                        if !forward && pos.0 != start_row {
+                            pos.0 += 1;
+                        }
+                        break;
+                    }
+                    if c.is_some_and(is_sentence_terminator) {
+                        let mut tpos = pos;
+                        // `None`: ran off the buffer; `Some(None)`: a NUL.
+                        let after = loop {
+                            if self.inc(&mut tpos) == -1 {
+                                break None;
+                            }
+                            let c = self.gchar(tpos);
+                            if !c.is_some_and(is_sentence_closing) {
+                                break Some(c);
+                            }
+                        };
+                        if matches!(after, None | Some(None) | Some(Some(' ' | '\t'))) {
+                            pos = tpos;
+                            if self.gchar(pos).is_none() {
+                                self.inc(&mut pos);
+                            }
+                            break;
+                        }
+                    }
+                    if step(&mut pos) == -1 {
+                        if count > 0 {
+                            return None;
+                        }
+                        noskip = true;
+                        break;
+                    }
+                }
             }
-            e = t + 1;
-        } else {
-            e += 1;
-        }
-    }
-    *clipped = true;
-    len
-}
-
-/// True when `i` sits within the leading white space of its line (vim's
-/// `inindent` at column 0 of the object start decides whether the operator's
-/// column-zero adjustment keeps or drops the trailing line break).
-fn sentence_at_line_leading_ws(chars: &[char], i: usize) -> bool {
-    let mut ls = i;
-    while ls > 0 && chars[ls - 1] != '\n' {
-        ls -= 1;
-    }
-    (ls..i).all(|k| chars[k] == ' ' || chars[k] == '\t')
-}
-
-/// The counted `is` / `as` scan over a flat char slice, shared by the windowed
-/// and whole-buffer paths. Mirrors vim's `current_sent`: it walks sentence
-/// bodies and same-line separators as alternating units (vim's `findsent_forward`),
-/// so an even count ends after a separator and an over-run caps at the buffer
-/// end. Returns `(start, end_exclusive)` flat indices plus whether the walk ran
-/// off the edge of `chars` (only meaningful for a window that is not the whole
-/// buffer).
-fn sentence_text_object_on_chars(
-    chars: &[char],
-    cursor_idx: usize,
-    inner: bool,
-    count: usize,
-) -> Option<(usize, usize, bool)> {
-    let len = chars.len();
-    if len == 0 {
-        return None;
-    }
-    let count = count.max(1);
-    let cursor_idx = cursor_idx.min(len - 1);
-    let is_ws = |c: char| c == ' ' || c == '\t' || c == '\n';
-    let is_term = |c: char| matches!(c, '.' | '?' | '!');
-    let mut clipped = false;
-
-    // Cursor on white space immediately after a terminator selects the blank
-    // run itself as the first unit (vim's `start_blank` path).
-    let mut blank = false;
-    if is_ws(chars[cursor_idx]) {
-        let mut k = cursor_idx;
-        while k > 0 && is_ws(chars[k - 1]) {
-            k -= 1;
-        }
-        if k > 0 && is_term(chars[k - 1]) {
-            blank = true;
-        }
-    }
-
-    let start = if blank {
-        sentence_first_blank(chars, cursor_idx)
-    } else {
-        let mut s = cursor_idx;
-        while s > 0 {
-            let prev = chars[s - 1];
-            if is_ws(prev) {
-                let mut k = s - 1;
-                while k > 0 && is_ws(chars[k - 1]) {
-                    k -= 1;
-                }
-                if k > 0 && is_term(chars[k - 1]) {
+            // Skip white space.
+            while !noskip && self.gchar(pos).is_some_and(is_vim_white) {
+                if self.incl(&mut pos) == -1 {
                     break;
                 }
             }
-            s -= 1;
-        }
-        if s == 0 {
-            clipped = true;
-        }
-        while s < len && is_ws(chars[s]) {
-            s += 1;
-        }
-        if s >= len {
-            return None;
-        }
-        s
-    };
-
-    // `as` walks twice as many units; a blank start already consumed its blank
-    // as the first unit.
-    let ncount = if !inner {
-        count * 2
-    } else if blank {
-        count - 1
-    } else {
-        count
-    };
-
-    let mut pos = if blank {
-        sentence_next_start(chars, cursor_idx, &mut clipped)
-    } else {
-        start
-    };
-    if ncount == 0 {
-        // Blank start with `count == 1` (`is` only): vim steps back from the
-        // next sentence start, so the object is exactly the blank run.
-        pos = sentence_decl(chars, pos).unwrap_or(pos);
-    }
-    let mut at_start_sent = true;
-    let mut remaining = ncount;
-    while remaining > 0 {
-        pos = sentence_next_start(chars, pos, &mut clipped);
-        if at_start_sent {
-            pos = sentence_first_blank(chars, pos);
-        }
-        if remaining == 1 || at_start_sent {
-            match sentence_decl(chars, pos) {
-                Some(d) => pos = d,
-                None => clipped = true,
+            if pos == prev_pos {
+                // Did not move: advance one character and try again.
+                if step(&mut pos) == -1 {
+                    if count > 0 {
+                        return None;
+                    }
+                    break;
+                }
+                count += 1;
             }
         }
-        at_start_sent = !at_start_sent;
-        remaining -= 1;
+        Some(pos)
     }
 
-    // Exclusive end: vim moves one character past (skipping a NUL) and then,
-    // when that lands at the start of a line and the object did not begin in
-    // indentation, backs the trailing line break out again.
-    let raw_end = sentence_incl(chars, pos).unwrap_or(len);
-    let at_line_start = raw_end > 0 && chars[raw_end - 1] == '\n';
-    let end = if at_line_start && !sentence_at_line_leading_ws(chars, start) {
-        raw_end - 1
-    } else {
-        raw_end
-    };
+    /// vim `current_sent` for an operator: the `is` / `as` range from
+    /// `cursor` as `(start, exclusive end)`.
+    fn current_sent(&self, cursor: Pos, inner: bool, count: usize) -> (Pos, Pos) {
+        let found = self.current_sent_found(cursor, inner, count);
+        let (start, mut cur) = (found.start, found.last);
+        // The exclusive end is one past `last`, onto the next line when it
+        // ends one (vim includes that line break). When that lands at the
+        // start of a line and the object did not begin in indentation, the
+        // operator's column-zero rule backs the break out.
+        self.incl(&mut cur);
+        let end = if cur.1 == 0 && cur.0 > 0 && !self.in_leading_white(start) {
+            (cur.0 - 1, self.len(cur.0 - 1))
+        } else {
+            cur
+        };
+        (start, end)
+    }
 
-    Some((start, end, clipped))
+    /// vim `current_sent` with Visual active, `anchor` being where the
+    /// selection started. A selection bigger than one character is extended
+    /// by sentences, and so is one whose object comes out a single cell
+    /// (vim's "avoid getting stuck" jump into the extend path); otherwise the
+    /// object is selected.
+    fn current_sent_visual(
+        &self,
+        cursor: Pos,
+        anchor: Pos,
+        inner: bool,
+        count: usize,
+    ) -> VisualSentence {
+        if anchor != cursor {
+            let next = self.findsent(cursor, true, 1).unwrap_or(cursor);
+            let landing = self.current_sent_extend(cursor, cursor, next, anchor, inner, count);
+            return VisualSentence::Extend(landing);
+        }
+        let found = self.current_sent_found(cursor, inner, count);
+        if found.start == found.last {
+            let landing =
+                self.current_sent_extend(cursor, found.skipped, found.last, anchor, inner, count);
+            return VisualSentence::Extend(landing);
+        }
+        VisualSentence::Select(found.start, found.last)
+    }
+
+    /// The body of vim `current_sent` outside the extend path: the object's
+    /// first and last cells, plus where the blank skip from `cursor` stopped
+    /// (the extend path picks up from there).
+    fn current_sent_found(&self, cursor: Pos, inner: bool, count: usize) -> SentenceFound {
+        let mut start = cursor;
+        let mut pos = cursor;
+        let mut cur = self.findsent(cursor, true, 1).unwrap_or(cursor);
+        // Cursor on white space just before the next sentence: the blank run
+        // itself is the first unit.
+        while self.gchar(pos).is_some_and(is_vim_white) {
+            if self.incl(&mut pos) == -1 {
+                break;
+            }
+        }
+        let start_blank = pos == cur;
+        if start_blank {
+            self.find_first_blank(&mut start);
+        } else {
+            cur = self.findsent(cur, false, 1).unwrap_or(cur);
+            start = cur;
+        }
+        let ncount = if !inner {
+            count * 2
+        } else {
+            count - usize::from(start_blank)
+        };
+        if ncount > 0 {
+            cur = self.findsent_forward(cur, ncount, true);
+        } else {
+            self.decl(&mut cur);
+        }
+        if !inner {
+            // The blank in front is included: exclude the blanks at the end.
+            // No trailing blanks: include the leading ones instead.
+            if start_blank {
+                self.find_first_blank(&mut cur);
+                if self.gchar(cur).is_some_and(is_vim_white) {
+                    self.decl(&mut cur);
+                }
+            } else if !self.gchar(cur).is_some_and(is_vim_white) {
+                self.find_first_blank(&mut start);
+            }
+        }
+        SentenceFound {
+            start,
+            last: cur,
+            skipped: pos,
+        }
+    }
+
+    /// vim `current_sent`'s Visual-extend path from `start_pos` (where the
+    /// cursor was), with `pos` and `cur` as vim's walk left them: on a real
+    /// extend, `start_pos` and the next sentence start; on the jump from a
+    /// single-cell object, the blank skip's stop and that cell. Returns the
+    /// new cursor; the anchor stays.
+    fn current_sent_extend(
+        &self,
+        start_pos: Pos,
+        mut pos: Pos,
+        mut cur: Pos,
+        anchor: Pos,
+        inner: bool,
+        count: usize,
+    ) -> Pos {
+        let count = if inner { count } else { count * 2 };
+        let not_white = |p: Pos| !self.gchar(p).is_some_and(is_vim_white);
+        if start_pos < anchor {
+            // Cursor at the start of the selection: in the white space before
+            // a sentence, in a sentence or just after one, or at its start.
+            let mut at_start_sent = true;
+            self.decl(&mut pos);
+            while pos < cur {
+                if not_white(pos) {
+                    at_start_sent = false;
+                    break;
+                }
+                self.incl(&mut pos);
+            }
+            if !at_start_sent {
+                cur = self.findsent(cur, false, 1).unwrap_or(cur);
+                if cur == start_pos {
+                    at_start_sent = true;
+                } else {
+                    // Inside a sentence: go to its end (the next start).
+                    cur = self.findsent(cur, true, 1).unwrap_or(cur);
+                }
+            }
+            for _ in 0..count {
+                if at_start_sent {
+                    self.find_first_blank(&mut cur);
+                }
+                if !at_start_sent || (inner && not_white(cur)) {
+                    cur = self.findsent(cur, false, 1).unwrap_or(cur);
+                }
+                at_start_sent = !at_start_sent;
+            }
+            cur
+        } else {
+            // Cursor at the end of the selection: just before a sentence,
+            // just before or in the white space before one, or in one.
+            self.incl(&mut pos);
+            let mut at_start_sent = true;
+            if pos != cur {
+                at_start_sent = false;
+                while pos < cur {
+                    if not_white(pos) {
+                        at_start_sent = true;
+                        break;
+                    }
+                    self.incl(&mut pos);
+                }
+                cur = if at_start_sent {
+                    self.findsent(cur, false, 1).unwrap_or(cur)
+                } else {
+                    start_pos
+                };
+            }
+            self.findsent_forward(cur, count, at_start_sent)
+        }
+    }
+
+    /// vim `findsent_forward`: `count / 2` sentences and `count / 2`
+    /// separating white space runs, alternating.
+    fn findsent_forward(&self, mut pos: Pos, count: usize, mut at_start_sent: bool) -> Pos {
+        for left in (0..count).rev() {
+            if let Some(p) = self.findsent(pos, true, 1) {
+                pos = p;
+            }
+            if at_start_sent {
+                self.find_first_blank(&mut pos);
+            }
+            if left == 0 || at_start_sent {
+                self.decl(&mut pos);
+            }
+            at_start_sent = !at_start_sent;
+        }
+        pos
+    }
 }
 /// `it` / `at` — XML tag pair text object. Builds a flat char index of
 /// the buffer, walks `<...>` tokens to pair tags via a stack, and
@@ -1294,9 +1404,8 @@ fn tag_text_object_full<H: hjkl_engine::types::Host>(
     }
 }
 
-/// Rows above and below the cursor that the windowed text-object scans
-/// cover before falling back to the whole buffer.
-const SENTENCE_WINDOW_ROWS: usize = 200;
+/// Rows above and below the cursor that the windowed tag scan covers
+/// before falling back to the whole buffer.
 const TAG_WINDOW_ROWS: usize = 50;
 
 /// Build the windowed flat char scan over rows `[win_lo, win_hi]` — a
@@ -2220,9 +2329,9 @@ mod tests {
         crate::vim::vim_editor(buf, host, Options::default())
     }
 
-    /// `is` on the second sentence of a two-sentence paragraph, with a
-    /// blank line (paragraph break) after it. Pins the exact charwise
-    /// range the windowed flat-Vec scan must reproduce byte-for-byte.
+    /// `is` / `as` on the second sentence of a two-sentence paragraph, with
+    /// a blank line (paragraph break) after it. Pins the exact charwise
+    /// ranges (nvim 0.12.5: `yas` yanks `" Second one."`).
     #[test]
     fn sentence_text_object_is_exact_range_mid_paragraph() {
         let mut ed = make_editor("First sentence. Second one.\n\nThird.");
@@ -2232,11 +2341,12 @@ mod tests {
             Some(((0, 16), (0, 27))),
             "is must span exactly \"Second one.\" (exclusive end after the '.')"
         );
-        // `as` adds trailing whitespace, but a paragraph break (the '\n')
-        // is never gobbled, so it lands on the same exclusive end.
+        // `as` adds trailing white space, but there is none before the
+        // paragraph break — so, as vim's `current_sent` does, it takes the
+        // white space BEFORE the sentence instead.
         assert_eq!(
             sentence_text_object(&ed, false, 1),
-            Some(((0, 16), (0, 27)))
+            Some(((0, 15), (0, 27)))
         );
     }
 
@@ -2541,26 +2651,6 @@ mod tests {
                         sentence_boundary(&ed, forward),
                         old_sentence_boundary(&ed, forward),
                         "buffer {:?} cursor ({row},{col}) forward={forward}",
-                        buf
-                    );
-                }
-            }
-        }
-    }
-
-    /// The same corpus: the windowed sentence scan must produce the same
-    /// ranges as the whole-buffer scan, for `is` and `as`.
-    #[test]
-    fn sentence_text_object_matches_full_scan_on_corpus() {
-        for buf in corpus_buffers() {
-            let mut ed = make_editor(&buf);
-            for (row, col) in cursor_samples(&buf) {
-                ed.set_cursor_quiet(row, col);
-                for inner in [true, false] {
-                    assert_eq!(
-                        sentence_text_object(&ed, inner, 1),
-                        sentence_text_object_full(&ed, inner, 1),
-                        "buffer {:?} cursor ({row},{col}) inner={inner}",
                         buf
                     );
                 }

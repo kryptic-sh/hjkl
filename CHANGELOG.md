@@ -43,6 +43,14 @@ patch bumps.
 
 ### Fixed
 
+- **`das` / `dis` no longer delete past a blank line.** A sentence ends at a
+  paragraph break, as in vim; `das` on a paragraph's unterminated last sentence
+  used to take the following paragraphs with it. `as` on a sentence with no
+  white space after it now takes the white space before it, as vim does.
+- **`vu` / `vU` / `v~` on an empty line no longer delete it**, and `vy` there
+  yanks its line break, as in vim.
+- `vasas` / `visis` extend the selection by sentences, as in vim; `viw` on a
+  one-letter word (and `vis` on an empty line) no longer selects past it.
 - **A search wraps round to a match earlier on the cursor's own line** (`/`,
   `n`, `*`), or later on it for `?` / `#` — in a one-line buffer, past its only
   match, it found nothing.

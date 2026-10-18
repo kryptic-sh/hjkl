@@ -1095,11 +1095,43 @@ pattern identified so far:
 
 Seen while measuring, not `gq`:
 
-- **Left in difffuzz's `J`-ending bucket (2026-10-18, after the join-cursor
-  fix), not investigated:** after `<C-v>asJ` / `vasJ` hjkl has joined lines that
-  nvim leaves apart, and after `<C-v>a{J` the cursor differs — each a Visual
-  text object followed by `J`; which side of that pair is wrong was not looked
-  at.
+- **Visual `J` with nothing to join moves the cursor to column 0.** `<C-v>a{J` @
+  (0,3) on `"  baz  xy"` (one line): nvim leaves the cursor at (0,3), hjkl at
+  (0,0). `visual_join` (`hjkl-vim` `command.rs`) parks the cursor at `(top, 0)`
+  before the joins and nothing moves it back when no join happens. Diagnosed
+  from the code, not fixed; the right landing for a Visual `J` that does join
+  was not re-measured.
+- **The sentence port (`SentBuf` in `hjkl-vim` `text_object.rs`) leaves two
+  pieces of vim out.** `startPS` recognises an empty line or a form feed, not
+  the nroff `'paragraphs'` / `'sections'` macros (`.PP`, `.SH`, …). And
+  Visual-line keeps only its anchor's row (`visual_line_anchor`), where vim
+  keeps a position, so `current_sent`'s Visual path (`sentence_visual`) runs for
+  Visual-line only while the selection is one row; a taller `V` selection, and
+  Visual-block, still take hjkl's own paths. Unmeasured how far those differ
+  from vim.
+- **A charwise Visual delete reaching the end of the line leaves the cursor one
+  past it.** `$vhhd` on `"One. Two. Three. Four."`: nvim (0,18), hjkl (0,19),
+  same buffer; also `$vbd`, `$vhasd`. Present before the sentence port too
+  (measured on its parent build). Next up.
+- **A charwise cut ending on the buffer's last line, when it is empty, takes the
+  break before it.** `vd` / `vx` / `vU` @ (1,0) on `"ab\n\n"`: nvim leaves the
+  buffer alone, hjkl leaves `"ab\n"` (and `vd` yanks `"\n"` where nvim yanks
+  nothing). In `cut_vim_range_inner` (`command.rs`); `read_vim_range` already
+  takes nothing there. Present on the parent build too.
+- **An operator over `[count]$` ending on an empty line takes its break.** `d3$`
+  @ (0,1) on `"ab\nc\n\nd"`: nvim `"a\nd"` and yanks `"b\nc\n"`, hjkl `"ad"` and
+  yanks `"b\nc\n\n"`; `gU3$` deletes the empty line outright (nvim
+  `"aB\nC\n\nd"`, hjkl `"aB\nC\nd"`). The inclusive cut in `cut_vim_range_inner`
+  takes the break of an empty end line, which a `$` motion never should (`y3$`
+  reads correctly, through `read_vim_range`). Present on the parent build too.
+- **`.` after a multi-line charwise `vd` replays the wrong range.** `vjd.` @
+  (0,1) on `"abc\nd\n\ncd"`: nvim `""`, hjkl `"acd"` (register `"\n\n"` against
+  nvim's `"a\ncd"`). Present on the parent build too; not looked at.
+- **`v$y` yanks without the line break.** `v$y` @ (0,0) on `"ab\ncd"`: nvim
+  yanks `"ab\n"`, hjkl `"ab"`. Present on the parent build too; not looked at.
+- **`vlaw` extends to the wrong end.** `vlaw<Esc>` then `` `> `` @ (0,0) on
+  `"ab cd"`: nvim (0,4), hjkl (0,2) — the word object's Visual-extend path, the
+  same gap the sentence object had; not looked at.
 
 - **`Vp` with an EMPTY register over the whole buffer leaves `"\n"`.** nvim
   leaves `""` (difffuzz `V)p` on `"[xy].[foo]"`, `Vapp` on `""`): with nothing

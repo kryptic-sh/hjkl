@@ -155,7 +155,8 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
             let (top, bot) = order(anchor, cursor);
             match op {
                 Operator::Yank => {
-                    let text = read_vim_range(ed, top, bot, RangeKind::Inclusive);
+                    let (from, to, kind) = charwise_visual_range(ed, top, bot);
+                    let text = read_vim_range(ed, from, to, kind);
                     if !text.is_empty() {
                         ed.record_yank_to_host(text.clone());
                         let target = vim_mut(ed).pending_register.take();
@@ -186,7 +187,8 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                     let anchor = vim(ed).visual_anchor;
                     let cursor = ed.cursor();
                     let (top, bot) = order(anchor, cursor);
-                    apply_case_op_to_selection(ed, op, top, bot, RangeKind::Inclusive);
+                    let (from, to, kind) = charwise_visual_range(ed, top, bot);
+                    apply_case_op_to_selection(ed, op, from, to, kind);
                     record_visual_last_change(ed, op, charwise_extent(top, bot), register);
                 }
                 Operator::Indent | Operator::Outdent => {
@@ -266,6 +268,26 @@ fn record_visual_last_change<H: hjkl_engine::types::Host>(
             inserted: None,
             register,
         });
+    }
+}
+/// The range a charwise Visual selection `top..=bot` covers. On an empty
+/// line the selection's one cell is the line break, which vim yanks and
+/// changes with it (`vy` there yanks "\n"); as an exclusive range ending at
+/// the next line's start, reading and cutting agree on that. The buffer's
+/// last line has no break: ropey's phantom row after a trailing newline is
+/// not a line.
+pub fn charwise_visual_range<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    top: (usize, usize),
+    bot: (usize, usize),
+) -> ((usize, usize), (usize, usize), RangeKind) {
+    let rows = buf_row_count(ed.buffer());
+    let next_is_line =
+        bot.0 + 1 < rows && !(bot.0 + 2 == rows && buf_line_chars(ed.buffer(), bot.0 + 1) == 0);
+    if bot.1 >= buf_line_chars(ed.buffer(), bot.0) && next_is_line {
+        (top, (bot.0 + 1, 0), RangeKind::Exclusive)
+    } else {
+        (top, bot, RangeKind::Inclusive)
     }
 }
 /// B1: derive the charwise dot-repeat extent from an ordered `(top, bot)`
