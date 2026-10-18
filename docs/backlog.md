@@ -1110,7 +1110,6 @@ Seen while measuring, not `gq`:
     on `"ab  "`: nvim `"ab x"`, hjkl `"abx"`, as vim itself gives under
     `:set sts=4`). A deliberate default, noted so a differential case after text
     is not read as a regression; the oracle does not pin `softtabstop`.
-  - `Ra<CR>b<Esc>jj.` overstrikes the wrong span.
 - **The read-only registers `".` and `"/` cannot be named in Normal mode.**
   `set_pending_register` (`hjkl-vim` `editor_ext.rs`) accepts only
   `[a-zA-Z0-9"+*_-]`, so `".` is swallowed and `".p` becomes a plain `p`;

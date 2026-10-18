@@ -53,6 +53,7 @@ patch bumps.
 - **Redoing a delete that reached the end of the buffer** (`dj`, `dG` near the
   bottom, then `u` `<C-r>`) puts the cursor on the last line, as in vim; it was
   left on a row past the end, stuck there.
+- `.` of an `R` change that broke a line breaks it the same way.
 - **`.` after `o` / `O` retypes the text**; it opened an empty line. A counted
   `2o` repeats the whole typed text on each line, line breaks included, and `.`
   keeps that count.

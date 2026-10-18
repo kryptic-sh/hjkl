@@ -383,3 +383,33 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = true
+
+# ── `.` of `R` with a line break ─────────────────────────────────────────────
+#
+# `<CR>` in Replace mode splits the line without overtyping a character, and the
+# repeat does the same.
+
+[[cases]]
+name = "dot_repeat_of_replace_with_a_line_break"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "Ra<CR>b<Esc>jj."
+expected_buffer = "aba\nbdef\n  q r\na\nbz w\nlast\n"
+expected_cursor = [4, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_replace_with_two_line_breaks"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "Rx<CR><CR>y<Esc>G."
+expected_buffer = "abx\n\nydef\n  q r\nxyz w\nx\n\nyst\n"
+expected_cursor = [7, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

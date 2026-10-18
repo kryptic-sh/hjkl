@@ -30,6 +30,8 @@ and this project adheres to
 
 ### Fixed
 
+- `.` of a Replace-mode change that contained `<CR>` splits the line there, as
+  the typed `<CR>` did, instead of overtyping a character with the break.
 - Insert-mode `<BS>` under `softtabstop` deletes back to the previous stop, as
   vim's `ins_bs` does: from column 2 of `"  q"` both spaces go, and a tab counts
   its display width (a tab that overshoots the stop is made up with spaces). It

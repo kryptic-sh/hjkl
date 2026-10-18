@@ -242,6 +242,16 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             ed.push_undo();
             for ch in text.chars() {
                 let cursor = buf_cursor_pos(ed.buffer());
+                if ch == '\n' {
+                    // `<CR>` in Replace mode splits the line; it overtypes
+                    // nothing.
+                    ed.mutate_edit(Edit::InsertStr {
+                        at: cursor,
+                        text: "\n".to_string(),
+                    });
+                    buf_set_cursor_rc(ed.buffer_mut(), cursor.row + 1, 0);
+                    continue;
+                }
                 let line_chars = buf_line_chars(ed.buffer(), cursor.row);
                 if cursor.col < line_chars {
                     // Overtype the char under the cursor.
