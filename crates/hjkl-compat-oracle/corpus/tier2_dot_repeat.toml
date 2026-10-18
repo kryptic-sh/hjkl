@@ -103,3 +103,111 @@ keys = "\"add.\"ap"
 expected_buffer = "three\ntwo\nfour\n"
 expected_cursor = [1, 0]
 expected_mode = "normal"
+
+# ── Where `.` of an insert leaves the cursor ─────────────────────────────────
+#
+# The replay ends the way the typed insert did: `<Esc>` steps back onto the
+# last inserted character.
+
+[[cases]]
+name = "dot_repeat_of_I_ends_on_the_last_inserted_char"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "jIxy<Esc>j."
+expected_buffer = "abc def\n  xyq r\nxyxyz w\nlast\n"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_i_ends_on_the_last_inserted_char"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "ixy<Esc>j."
+expected_buffer = "abxyc def\n  qxy r\nxyz w\nlast\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_A_ends_on_the_last_inserted_char"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "Axy<Esc>j."
+expected_buffer = "abc defxy\n  q rxy\nxyz w\nlast\n"
+expected_cursor = [1, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_a_counted_insert"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "ixy<Esc>j2."
+expected_buffer = "abxyc def\n  qxyxy r\nxyz w\nlast\n"
+expected_cursor = [1, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+
+# ── `.` of an insert that broke a line ───────────────────────────────────────
+#
+# The recorded text includes the line break, so the repeat splits the line the
+# same way.
+
+[[cases]]
+name = "dot_repeat_of_an_insert_with_a_line_break"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "ia<CR>b<Esc>jj."
+expected_buffer = "aba\nbc def\n  q r\na\nbxyz w\nlast\n"
+expected_cursor = [4, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_an_append_with_a_line_break"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "A<CR>zz<Esc>j."
+expected_buffer = "abc def\nzz\n  q r\nzz\nxyz w\nlast\n"
+expected_cursor = [3, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_a_change_with_a_line_break"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "cwab<CR>c<Esc>jj."
+expected_buffer = "abab\nc def\n  q r\nab\nc w\nlast\n"
+expected_cursor = [4, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeat_of_a_linewise_change_with_a_line_break"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "ccnew<CR>line<Esc>jj."
+expected_buffer = "new\nline\n  q r\nnew\nline\nlast\n"
+expected_cursor = [4, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

@@ -29,6 +29,13 @@ and this project adheres to
 
 ### Fixed
 
+- `.` of an insert that broke a line (`ia<CR>b<Esc>`, `A<CR>…`, `cw…<CR>…`)
+  repeats it. `finish_insert_session` compared the same row range of the buffer
+  before and after, so a session that added rows saw no growth and recorded
+  nothing to replay.
+- `.` of an insert (`i`, `a`, `I`, `A`, counted or not) leaves the cursor on the
+  last inserted character, as the typed insert's `<Esc>` did; it stayed one
+  column right.
 - `u` after an operator delete leaves the cursor at the start of the deleted
   range, as vim does: an upward `d2k` / `dgg` / `d{` / `d'a` undoes onto its top
   row, where hjkl returned to the row the delete was typed on.

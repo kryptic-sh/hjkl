@@ -1090,9 +1090,13 @@ case, none investigated:
 
 Seen while measuring, not `gq`:
 
-- **`.` after `I` leaves the cursor one column right.** `jIx<Esc>j.` on
-  `"abc\n  q\nxyz\n"`: the buffers agree, nvim's cursor is (2,0) and hjkl's
-  (2,1). Same on the parent commit, so not caused by `move_to_insert_start`.
+- **`.` of an insert still diverges in three shapes** (fixed 2026-10-18: the
+  cursor one column right, and inserts containing `<CR>` replaying nothing). On
+  `"abc def\n  q r\nxyz w\nlast\n"` @ (0,2), each also wrong on the parent
+  commit: `ox<CR>y<Esc>j.` adds an extra blank row (the `o` / `O` path captures
+  across the opened boundary itself); `jA<BS><BS>x<Esc>j.` and `jI<BS>x<Esc>j.`
+  replay the typed `x` but not the backspaces (vim replays the keys, hjkl the
+  net text); `Ra<CR>b<Esc>jj.` overstrikes the wrong span.
 - **`gI` is not implemented** (insert at column 0, `:h gI`); hjkl ignores it.
 - **"Blank" is any Unicode whitespace to hjkl, only space and tab to vim.**
   `move_first_non_blank` and `greedy_wrap` test `char::is_whitespace`, while

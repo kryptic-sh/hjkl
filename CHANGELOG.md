@@ -48,6 +48,9 @@ patch bumps.
 - **Redoing a delete that reached the end of the buffer** (`dj`, `dG` near the
   bottom, then `u` `<C-r>`) puts the cursor on the last line, as in vim; it was
   left on a row past the end, stuck there.
+- **`.` repeats an insert that contained a line break**; it did nothing. And `.`
+  of any insert now leaves the cursor on the last inserted character, not one
+  past it.
 - `u` after an upward delete (`d2k`, `dgg`, `d{`) puts the cursor on the top
   row, as in vim, not on the row the delete was typed on.
 - **Deleting lines upward (`dk`, `d'a`) clears the marks on them.** A mark on

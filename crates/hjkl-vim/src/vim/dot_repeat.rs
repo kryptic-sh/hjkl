@@ -326,6 +326,11 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                     text: inserted.clone(),
                 });
             }
+            // The replay ends the way the typed insert did, with `<Esc>`
+            // stepping back onto the last inserted character.
+            if ed.cursor().1 > 0 {
+                hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
+            }
         }
     }
     vim_mut(ed).replaying = false;

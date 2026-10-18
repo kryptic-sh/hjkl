@@ -161,7 +161,16 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
     let before_n = session.before_rope.len_lines();
     let after_n = after_rope.len_lines();
     let after_end = session.row_max.min(after_n.saturating_sub(1));
-    let before_end = session.row_max.min(before_n.saturating_sub(1));
+    // The two slices must cover the same text. Every row the session added
+    // (Enter) or removed (Backspace over a line break) shifts the old text
+    // down or up by one, so the "before" slice ends that many rows earlier or
+    // later — slicing both at `row_max` compared `"abc def"` with
+    // `"aba\nbc def"` after `ia<CR>b`, saw no growth, and `.` replayed nothing.
+    let row_delta = after_n as isize - before_n as isize;
+    let before_end = (after_end as isize - row_delta).clamp(
+        session.row_min as isize,
+        before_n.saturating_sub(1) as isize,
+    ) as usize;
     let before = if before_end >= session.row_min && session.row_min < before_n {
         rope_row_range_str(&session.before_rope, session.row_min, before_end)
     } else {
