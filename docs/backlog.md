@@ -1098,9 +1098,6 @@ Seen while measuring, not `gq`:
 - **`Vp` with an EMPTY register over the whole buffer leaves `"\n"`.** nvim
   leaves `""` (difffuzz `V)p` on `"[xy].[foo]"`, `Vapp` on `""`): with nothing
   to put back, the deleted lines leave no line at all. Not investigated.
-- **The cursor after a linewise delete lands on column 0 of a tab-indented
-  line.** `dap` @ (1,0) on `"\t[bar] (_id)\n\n\tbaz …"`: nvim (0,1), the first
-  non-blank, hjkl (0,0). Same on the parent commit; not investigated.
 
 - **`.` of an insert still diverges in these shapes** (fixed 2026-10-18: the
   cursor one column right, inserts containing `<CR>` replaying nothing, and `o`

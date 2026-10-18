@@ -125,3 +125,58 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+
+# ── Where a linewise delete leaves the cursor ────────────────────────────────
+#
+# On the first non-blank of the row that takes the deleted rows' place (or of
+# the row above, when the delete took the last line), for every linewise path:
+# an operator motion, a text object and Visual-line as well as `dd`.
+
+[[cases]]
+name = "dap_to_the_end_lands_on_the_first_non_blank_above"
+initial_buffer = "\taa\n\nbb"
+initial_cursor = [2, 0]
+keys = "dap"
+expected_buffer = "\taa"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dap_to_the_end_lands_on_a_space_indent"
+initial_buffer = "  aa\n\nbb"
+initial_cursor = [2, 0]
+keys = "dap"
+expected_buffer = "  aa"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_delete_to_the_end_lands_on_the_first_non_blank"
+initial_buffer = "\taa\nbb"
+initial_cursor = [1, 0]
+keys = "Vd"
+expected_buffer = "\taa"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_delete_lands_on_the_first_non_blank"
+initial_buffer = "  aa\n  bb\n  cc"
+initial_cursor = [0, 0]
+keys = "Vjd"
+expected_buffer = "  cc"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

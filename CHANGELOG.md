@@ -43,6 +43,8 @@ patch bumps.
 
 ### Fixed
 
+- After `dap`, `dj` or `Vd` the cursor lands on the first non-blank of its line,
+  as after `dd`, instead of column 0.
 - **Pasting lines keeps their blank first or last line**: `yap` over a paragraph
   with a blank line before or after it, then `p`, lost that blank line. And a
   linewise register pasted over a charwise selection (`vp`) splits the line at

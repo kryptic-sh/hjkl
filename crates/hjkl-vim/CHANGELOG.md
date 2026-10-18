@@ -30,6 +30,10 @@ and this project adheres to
 
 ### Fixed
 
+- A linewise delete through an operator motion, a text object or Visual-line
+  (`dj`, `dap`, `Vd`) leaves the cursor on the first non-blank of the line it
+  lands on, as `dd` already did; it landed on column 0. The three copies of that
+  landing rule are one `land_after_linewise_delete` now.
 - Linewise pastes (`p`, `P`, `Vp`, and a linewise register over a charwise or
   blockwise selection) keep a register's blank first and last lines. Each
   trimmed every leading and trailing `\n` off the register; now only the last

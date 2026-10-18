@@ -552,24 +552,7 @@ pub fn run_operator_over_range<H: hjkl_engine::types::Host>(
             if !matches!(kind, RangeKind::Linewise) {
                 clamp_cursor_to_normal_mode(ed);
             } else {
-                let total_after = buf_row_count(ed.buffer());
-                let raw_target = if deleted_through_last {
-                    top.0.saturating_sub(1).min(total_after.saturating_sub(1))
-                } else {
-                    top.0.min(total_after.saturating_sub(1))
-                };
-                // Clamp off the trailing phantom empty row that arises from
-                // a buffer with a trailing newline (stored as ["...", ""]) —
-                // same rule as linewise.rs's `dd` path.
-                let target_row = if raw_target > 0
-                    && raw_target + 1 == total_after
-                    && buf_line(ed.buffer(), raw_target).is_some_and(|s| s.is_empty())
-                {
-                    raw_target - 1
-                } else {
-                    raw_target
-                };
-                buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
+                land_after_linewise_delete(ed, top.0, deleted_through_last);
             }
             vim_mut(ed).mode = Mode::Normal;
             // Vim `:h '[` / `:h ']`: after a delete both marks park at

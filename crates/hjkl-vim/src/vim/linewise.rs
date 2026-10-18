@@ -45,6 +45,35 @@ pub fn expand_linewise_over_closed_folds(
     }
     (start, end)
 }
+/// Park the cursor where vim's linewise delete leaves it (`dd`, `dj`, `dap`,
+/// `Vd`, …): the first non-blank of the row that now holds `top`, or of the
+/// row above when the delete took the buffer's last line — never the phantom
+/// empty row after a trailing newline, which vim treats as a terminator.
+/// `deleted_through_last` has to be measured before the cut, while the row
+/// count still includes the deleted rows.
+pub fn land_after_linewise_delete<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    top: usize,
+    deleted_through_last: bool,
+) {
+    let total_after = buf_row_count(ed.buffer());
+    let raw_target = if deleted_through_last {
+        top.saturating_sub(1).min(total_after.saturating_sub(1))
+    } else {
+        top.min(total_after.saturating_sub(1))
+    };
+    let target_row = if raw_target > 0
+        && raw_target + 1 == total_after
+        && buf_line(ed.buffer(), raw_target).is_some_and(|s| s.is_empty())
+    {
+        raw_target - 1
+    } else {
+        raw_target
+    };
+    buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
+    move_first_non_whitespace(ed);
+}
+
 pub fn execute_line_op<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
@@ -95,30 +124,7 @@ pub fn execute_line_op<H: hjkl_engine::types::Host>(
             ed.push_undo();
             let deleted_through_last = end_row + 1 >= total;
             cut_vim_range(ed, (row, col), (end_row, 0), RangeKind::Linewise);
-            // Vim's `dd` / `Ndd` leaves the cursor on the *first
-            // non-blank* of the line that now occupies `row` — or, if
-            // the deletion consumed the last line, the line above it.
-            let total_after = buf_row_count(ed.buffer());
-            let raw_target = if deleted_through_last {
-                row.saturating_sub(1).min(total_after.saturating_sub(1))
-            } else {
-                row.min(total_after.saturating_sub(1))
-            };
-            // Clamp off the trailing phantom empty row that arises from a
-            // buffer with a trailing newline (stored as ["...", ""]). If
-            // the target row is the trailing empty row and there is a real
-            // content row above it, use that instead — matching vim's view
-            // that the trailing `\n` is a terminator, not a separator.
-            let target_row = if raw_target > 0
-                && raw_target + 1 == total_after
-                && buf_line(ed.buffer(), raw_target).is_some_and(|s| s.is_empty())
-            {
-                raw_target - 1
-            } else {
-                raw_target
-            };
-            buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
-            move_first_non_whitespace(ed);
+            land_after_linewise_delete(ed, row, deleted_through_last);
             ed.set_sticky_col(Some(ed.cursor().1));
             vim_mut(ed).mode = Mode::Normal;
             // Vim `:h '[` / `:h ']`: dd/Ndd — both marks park at the

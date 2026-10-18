@@ -9,9 +9,7 @@ use hjkl_engine::rope_util::rope_line_to_str;
 use super::*;
 use crate::vim_state::{vim, vim_mut};
 use hjkl_engine::Editor;
-use hjkl_engine::buf_helpers::{
-    buf_cursor_pos, buf_line, buf_line_chars, buf_row_count, buf_set_cursor_rc,
-};
+use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line_chars, buf_row_count, buf_set_cursor_rc};
 
 pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
@@ -53,26 +51,7 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
                     let total = buf_row_count(ed.buffer());
                     let deleted_through_last = bot + 1 >= total;
                     cut_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
-                    let total_after = buf_row_count(ed.buffer());
-                    let raw_target = if deleted_through_last {
-                        top.saturating_sub(1).min(total_after.saturating_sub(1))
-                    } else {
-                        top.min(total_after.saturating_sub(1))
-                    };
-                    // Pull back off the trailing phantom empty row (a buffer
-                    // ending in `\n` is stored as [..., ""]) — same clamp as the
-                    // `dd` path. Non-EOF deletes never satisfy this (the join
-                    // row still has content below it), so their cursor is
-                    // byte-for-byte unchanged.
-                    let target_row = if raw_target > 0
-                        && raw_target + 1 == total_after
-                        && buf_line(ed.buffer(), raw_target).is_some_and(|s| s.is_empty())
-                    {
-                        raw_target - 1
-                    } else {
-                        raw_target
-                    };
-                    buf_set_cursor_rc(ed.buffer_mut(), target_row, 0);
+                    land_after_linewise_delete(ed, top, deleted_through_last);
                     record_visual_last_change(
                         ed,
                         op,
