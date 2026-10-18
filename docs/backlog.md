@@ -1083,12 +1083,10 @@ fail on the parent commit, the other 6 are negative guards).
 
 `difffuzz 2000 424242` reported 39 divergences involving `gq`. Replayed with
 `dfcase … 20` (the fuzzer's `textwidth`): 5 agreed with nvim before the
-`'autoindent'` fix, 16 after it, 19 after the blank-line and cursor fixes; none
-regressed at either step. Patterns among the 20 left, each seen in at least one
-case, none investigated:
+`'autoindent'` fix, 16 after it, 19 after the blank-line and cursor fixes, 20
+after the indent rebuild; none regressed at any step. Of the 19 left, the one
+pattern identified so far:
 
-- **A tab indent is retabbed.** `(gq}` on `"\ta"` @ (0,1): nvim rewrites the
-  indent as four spaces (`expandtab`, `shiftwidth=4`), hjkl keeps the tab.
 - **Insert-mode auto-wrap at `textwidth`** (`gq}Aab cd`) — hjkl does not wrap
   while typing; the fuzzer pins `textwidth` only for `gq` cases for that reason.
 

@@ -70,6 +70,8 @@ patch bumps.
 - **`gq` keeps whitespace-only lines and puts the cursor where vim does**: on
   the last line of the range, a trailing blank line included, or the line after
   `gq}`'s range.
+- `gq` / `gw` turn the indent they format into spaces under `expandtab` and into
+  tabs under `noexpandtab`, as vim does.
 - `gq` / `gw` with `:set noautoindent` no longer indent the lines they open;
   only `'autoindent'` (on by default) copies the paragraph's indent onto them.
 - **Windows: a failed clipboard write no longer wipes the clipboard.** The

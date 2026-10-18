@@ -30,6 +30,10 @@ and this project adheres to
 
 ### Fixed
 
+- `gq` / `gw` rebuild the indent they format with, as vim's `set_indent` does:
+  the same width, as spaces under `expandtab` and as tabs + spaces otherwise. A
+  tab indent stayed a tab under `expandtab`, and a space indent stayed spaces
+  under `noexpandtab`.
 - `.` of `o` / `O` retypes what was typed into the opened line; it opened an
   empty line and dropped the text. The open bridges restart the insert session's
   snapshot after opening, so the recorded text is just what was typed, and the

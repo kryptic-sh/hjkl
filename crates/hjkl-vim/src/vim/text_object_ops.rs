@@ -4,7 +4,7 @@
 
 use hjkl_vim_types::{Mode, Operator, RangeKind};
 
-use super::command::{cut_vim_range_inner, indent_width, read_vim_range};
+use super::command::{build_indent, cut_vim_range_inner, indent_width, read_vim_range};
 use super::*;
 use crate::vim_state::vim_mut;
 use hjkl_engine::Editor;
@@ -138,6 +138,8 @@ pub struct WrapOpts {
     pub tabstop: usize,
     /// `'autoindent'`: continuation lines take the paragraph's indent.
     pub autoindent: bool,
+    /// `'expandtab'`: indents are rebuilt as spaces, else as tabs + spaces.
+    pub expandtab: bool,
 }
 
 impl WrapOpts {
@@ -146,6 +148,7 @@ impl WrapOpts {
             width: settings.textwidth.max(1),
             tabstop: settings.tabstop.max(1),
             autoindent: settings.autoindent,
+            expandtab: settings.expandtab,
         }
     }
 }
@@ -256,8 +259,16 @@ fn wrap_tokens_with_map(
     opts: WrapOpts,
 ) -> (Vec<String>, Vec<Option<(usize, usize)>>) {
     let WrapOpts { width, tabstop, .. } = opts;
-    let indent = if opts.autoindent { leader } else { "" };
     let leader_width = display_width(leader, tabstop);
+    // vim rebuilds the indent it formats with (`set_indent`): same width, but
+    // spaces under `expandtab`, tabs + spaces otherwise — `gqq` on `"\taa"`
+    // with `expandtab` gives `"    aa"`.
+    let shown_leader = build_indent(leader_width, opts.expandtab, tabstop);
+    let indent = if opts.autoindent {
+        shown_leader.as_str()
+    } else {
+        ""
+    };
     let indent_width = display_width(indent, tabstop);
     let mut lines: Vec<String> = Vec::new();
     let mut map: Vec<Option<(usize, usize)>> = Vec::new();
@@ -267,11 +278,13 @@ fn wrap_tokens_with_map(
     // `(joined char index where the pending gap starts, the gap string)`.
     let mut pending_gap: Option<(usize, String)> = None;
 
-    // The first line's leader IS part of the joined text.
-    for ch in leader.chars() {
-        map.push(Some((0, current.chars().count())));
-        current.push(ch);
+    // The first line's leader IS part of the joined text: map each of its
+    // chars onto the rebuilt indent, clamped where the two differ in length.
+    let shown_len = shown_leader.chars().count();
+    for (i, _) in leader.chars().enumerate() {
+        map.push(Some((0, i.min(shown_len.saturating_sub(1)))));
     }
+    current.push_str(&shown_leader);
     let mut current_width = leader_width;
 
     for (word, gap) in tokens {
@@ -1204,12 +1217,14 @@ mod tests {
         xs.iter().map(|s| s.to_string()).collect()
     }
 
-    /// `textwidth` / `tabstop` with vim's default `'autoindent'` on.
+    /// `textwidth` / `tabstop` with `'autoindent'` on and `'noexpandtab'`, vim's
+    /// defaults.
     fn ai(width: usize, tabstop: usize) -> WrapOpts {
         WrapOpts {
             width,
             tabstop,
             autoindent: true,
+            expandtab: false,
         }
     }
 

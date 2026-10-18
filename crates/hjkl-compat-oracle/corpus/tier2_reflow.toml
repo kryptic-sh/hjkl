@@ -284,3 +284,48 @@ expandtab = true
 autoindent = false
 textwidth = 20
 
+
+# ── The indent is rebuilt ────────────────────────────────────────────────────
+#
+# vim formats with `set_indent`: the same width, rebuilt as spaces under
+# `expandtab` and as tabs + spaces under `noexpandtab`.
+
+[[cases]]
+name = "reflow_rebuilds_a_tab_indent_as_spaces_under_expandtab"
+initial_buffer = "\taa bb cc dd ee ff gg"
+initial_cursor = [0, 0]
+keys = "gqq"
+expected_buffer = "    aa bb cc dd ee\nff gg"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 20
+
+[[cases]]
+name = "reflow_rebuilds_a_mixed_indent"
+initial_buffer = "  \taa bb"
+initial_cursor = [0, 0]
+keys = "gqq"
+expected_buffer = "    aa bb"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 40
+
+
+[[cases]]
+name = "reflow_rebuilds_a_space_indent_as_a_tab_under_noexpandtab"
+initial_buffer = "    aa bb cc dd ee ff gg"
+initial_cursor = [0, 0]
+keys = "gqq"
+expected_buffer = "\taa bb cc dd ee\n\tff gg"
+expected_mode = "normal"
+shiftwidth = 4
+tabstop = 4
+expandtab = false
+autoindent = true
+textwidth = 20

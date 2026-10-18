@@ -644,11 +644,11 @@ pub fn indent_width(s: &str, tabstop: usize) -> usize {
 }
 /// Build a leading-whitespace string of `width` columns honoring `expandtab`
 /// (spaces) vs `noexpandtab` (tabs for full `tabstop` runs, spaces remainder).
-pub fn build_indent(width: usize, settings: &hjkl_engine::Settings) -> String {
-    if settings.expandtab {
+pub fn build_indent(width: usize, expandtab: bool, tabstop: usize) -> String {
+    if expandtab {
         return " ".repeat(width);
     }
-    let ts = settings.tabstop.max(1);
+    let ts = tabstop.max(1);
     let tabs = width / ts;
     let spaces = width % ts;
     format!("{}{}", "\t".repeat(tabs), " ".repeat(spaces))
@@ -670,7 +670,11 @@ pub fn reindent_block(text: &str, target_width: usize, settings: &hjkl_engine::S
             }
             let old_w = indent_width(line, ts) as isize;
             let new_w = (old_w + delta).max(0) as usize;
-            format!("{}{}", build_indent(new_w, settings), trimmed)
+            format!(
+                "{}{}",
+                build_indent(new_w, settings.expandtab, settings.tabstop),
+                trimmed
+            )
         })
         .collect::<Vec<_>>()
         .join("\n")
