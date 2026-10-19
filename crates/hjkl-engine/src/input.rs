@@ -76,146 +76,85 @@ pub fn encode_macro(inputs: &[Input]) -> String {
     out
 }
 
+/// The longest tag body [`decode_macro`] recognises (`PageDown`). A `>`
+/// further away than this cannot close a known tag, so the search for it
+/// stops here and decoding stays linear in the input.
+const LONGEST_TAG: usize = "PageDown".len();
+
 /// Reverse of [`encode_macro`] — parse the textual form back into
-/// `Input` events for replay. Unknown `<…>` tags are emitted as their
-/// literal characters so pasted register text round-trips without
+/// `Input` events for replay. A `<` that does not open a known `<…>` tag is
+/// a literal `<`, and scanning resumes right after it, as vim's notation
+/// parser does: `<<Esc>` is `<` then Escape, and an unknown `<xyz>` replays
+/// as its literal characters, so pasted register text round-trips without
 /// silently dropping user content.
 pub fn decode_macro(s: &str) -> Vec<Input> {
+    let chars: Vec<char> = s.chars().collect();
     let mut out = Vec::new();
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c != '<' {
-            out.push(Input {
-                key: Key::Char(c),
-                ..Input::default()
-            });
-            continue;
-        }
-        let mut tag = String::new();
-        let mut closed = false;
-        for ch in chars.by_ref() {
-            if ch == '>' {
-                closed = true;
-                break;
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        i += 1;
+        if c == '<' {
+            let rest = &chars[i..];
+            let close = rest.iter().take(LONGEST_TAG + 1).position(|&ch| ch == '>');
+            if let Some(len) = close
+                && let Some(input) = key_from_tag(&rest[..len].iter().collect::<String>())
+            {
+                out.push(input);
+                i += len + 1;
+                continue;
             }
-            tag.push(ch);
         }
-        if !closed {
-            // Stray `<` with no `>` — emit the literal so we don't
-            // silently drop user text.
-            out.push(Input {
-                key: Key::Char('<'),
-                ..Input::default()
-            });
-            for ch in tag.chars() {
-                out.push(Input {
-                    key: Key::Char(ch),
-                    ..Input::default()
-                });
+        out.push(Input {
+            key: Key::Char(c),
+            ..Input::default()
+        });
+    }
+    out
+}
+
+/// The key a `<tag>` body names, or `None` when it names none.
+fn key_from_tag(tag: &str) -> Option<Input> {
+    let key = match tag {
+        "Esc" => Key::Esc,
+        "CR" => Key::Enter,
+        "BS" => Key::Backspace,
+        "Tab" => Key::Tab,
+        "Up" => Key::Up,
+        "Down" => Key::Down,
+        "Left" => Key::Left,
+        "Right" => Key::Right,
+        "Del" => Key::Delete,
+        "Home" => Key::Home,
+        "End" => Key::End,
+        "PageUp" => Key::PageUp,
+        "PageDown" => Key::PageDown,
+        "lt" => Key::Char('<'),
+        t => {
+            let mut parts = t.chars();
+            let (modifier, dash, ch) = (parts.next()?, parts.next()?, parts.next()?);
+            if dash != '-' || parts.next().is_some() {
+                return None;
             }
-            continue;
-        }
-        let input = match tag.as_str() {
-            "Esc" => Input {
-                key: Key::Esc,
-                ..Input::default()
-            },
-            "CR" => Input {
-                key: Key::Enter,
-                ..Input::default()
-            },
-            "BS" => Input {
-                key: Key::Backspace,
-                ..Input::default()
-            },
-            "Tab" => Input {
-                key: Key::Tab,
-                ..Input::default()
-            },
-            "Up" => Input {
-                key: Key::Up,
-                ..Input::default()
-            },
-            "Down" => Input {
-                key: Key::Down,
-                ..Input::default()
-            },
-            "Left" => Input {
-                key: Key::Left,
-                ..Input::default()
-            },
-            "Right" => Input {
-                key: Key::Right,
-                ..Input::default()
-            },
-            "Del" => Input {
-                key: Key::Delete,
-                ..Input::default()
-            },
-            "Home" => Input {
-                key: Key::Home,
-                ..Input::default()
-            },
-            "End" => Input {
-                key: Key::End,
-                ..Input::default()
-            },
-            "PageUp" => Input {
-                key: Key::PageUp,
-                ..Input::default()
-            },
-            "PageDown" => Input {
-                key: Key::PageDown,
-                ..Input::default()
-            },
-            "lt" => Input {
-                key: Key::Char('<'),
-                ..Input::default()
-            },
-            t if t.starts_with("C-") => {
-                let Some(ch) = t.chars().nth(2) else {
-                    continue;
-                };
-                Input {
+            return match modifier {
+                'C' => Some(Input {
                     key: Key::Char(ch),
                     ctrl: true,
                     ..Input::default()
-                }
-            }
-            t if t.starts_with("M-") => {
-                let Some(ch) = t.chars().nth(2) else {
-                    continue;
-                };
-                Input {
+                }),
+                'M' => Some(Input {
                     key: Key::Char(ch),
                     alt: true,
                     ..Input::default()
-                }
-            }
-            _ => {
-                // Unrecognized `<tag>` — emit the literal characters (`<`,
-                // tag body, `>`) so the caller doesn't silently lose user
-                // text (mirrors the unterminated-`<foo` branch above).
-                out.push(Input {
-                    key: Key::Char('<'),
-                    ..Input::default()
-                });
-                for ch in tag.chars() {
-                    out.push(Input {
-                        key: Key::Char(ch),
-                        ..Input::default()
-                    });
-                }
-                out.push(Input {
-                    key: Key::Char('>'),
-                    ..Input::default()
-                });
-                continue;
-            }
-        };
-        out.push(input);
-    }
-    out
+                }),
+                _ => None,
+            };
+        }
+    };
+    Some(Input {
+        key,
+        ..Input::default()
+    })
 }
 
 /// Decode a [`crate::types::Input`] (alias: [`crate::PlannedInput`]) to the
@@ -363,6 +302,33 @@ mod tests {
             ch('k'),
         ];
         assert_eq!(decoded, expected);
+    }
+
+    /// A `<` that opens no known tag is literal and scanning resumes right
+    /// after it, so a known tag nested inside the would-be tag still decodes:
+    /// `<<$<Esc>` is `<`, `<`, `$`, Escape, as nvim reads it.
+    #[test]
+    fn literal_lt_rescans_for_a_nested_tag() {
+        fn ch(c: char) -> Input {
+            Input {
+                key: Key::Char(c),
+                ..Input::default()
+            }
+        }
+        let esc = Input {
+            key: Key::Esc,
+            ..Input::default()
+        };
+        assert_eq!(
+            decode_macro("<<$<Esc>"),
+            vec![ch('<'), ch('<'), ch('$'), esc]
+        );
+        assert_eq!(decode_macro("<<Esc>"), vec![ch('<'), esc]);
+        assert_eq!(decode_macro("<ab"), vec![ch('<'), ch('a'), ch('b')]);
+        assert_eq!(
+            decode_macro("<C-ab>"),
+            "<C-ab>".chars().map(ch).collect::<Vec<_>>()
+        );
     }
 
     /// Round-trip sanity: encode/decode must still agree after the fix.

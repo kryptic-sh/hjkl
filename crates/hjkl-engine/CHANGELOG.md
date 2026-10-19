@@ -17,6 +17,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `decode_macro` reads a `<` that opens no known tag as a literal `<` and scans
+  on from the next character, as vim's notation parser does, so a known tag
+  inside it still decodes: `<<$<Esc>` is `<`, `<`, `$`, Escape, where it was
+  eight literal characters. `<C-ab>` and `<C->` are now literal text too; they
+  decoded as Ctrl-a and as nothing.
 - `Search::find_next` / `find_prev` on `View` wrap all the way round: a match
   earlier on the cursor's own line (later, for `find_prev`) is found once
   nothing turns up elsewhere. The scan stopped one row short of coming back, so

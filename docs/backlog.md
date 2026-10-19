@@ -566,14 +566,15 @@ with ripgrep installed are unaffected.
 
 ### 1.7 Harness, coverage, and hardening
 
-- **`decode_macro` does not re-scan inside an unknown `<tag>`, as vim does.**
-  `decode_macro` (`hjkl-engine` `input.rs`) reads `<` up to the next `>` and,
-  when the tag is unknown, emits it all literally; vim treats the `<` alone as
-  literal and scans on from the next character. So `<<$<Esc>` reaches hjkl as
-  `< < $ < E s c >` but nvim as `<<$` then Escape. difffuzz 2000 424242 lists
-  three cases that are only this (`<<$<Esc>`, `<i'<Esc>`, `Vgg<$<Esc>`):
-  replayed with the keys hjkl actually receives (`<<$<E`, …), hjkl matches nvim.
-  The same decoder serves macro text in the editor, not just the oracle.
+- **`:normal` and `@q` decode key notation; vim's take raw keys.**
+  `normal_handler` (`hjkl-ex` `builtins.rs`) and the macro replay in `hjkl-vim`
+  (`normal.rs`, `editor_ext.rs`) run their text through `decode_macro`, so
+  `:normal A!<Esc>` ends with Escape, where nvim inserts the text `<Esc>` (noted
+  in `harness_probes.rs`, which keeps that shape out of the ex fuzz). For `@q`
+  it follows from storing macros as notation text (`encode_macro`): a register
+  yanked from the buffer and replayed is decoded too, which vim would type
+  literally — not measured. Changing either means deciding how a recorded macro
+  is stored, which needs the user's call.
 - **The vim-compat corpus runs only in the weekly Cron, never in `ci.yml`.**
   Nothing in PR or main CI runs `hjkl-compat-oracle`, so a corpus case can land
   broken and stay that way until Monday:
@@ -1152,7 +1153,23 @@ Seen while measuring, not `gq`:
   `d%` @ (0,0) on `"ab"`: nvim `"b"`, register `"a"`; hjkl does nothing. Odd for
   a `%` that finds no match, so it wants reading `nv_percent` / `findmatch`
   before copying; measured only, not explained. (`succeeds_in_place` in
-  `op_motion.rs` is where a zero-distance success would be added.)
+  `op_motion.rs` is where a zero-distance success would be added.) `<%` @ (0,21)
+  on `"  'xy'  _id.A-B  'self.x'"` likewise outdents in nvim and does nothing in
+  hjkl.
+- **A shift that changes nothing still records an undo step.** `<<u` @ (0,1) on
+  `"abc"`: `<<` lands both on (0,0), then hjkl's `u` puts the cursor back on
+  (0,1) while nvim, with nothing to undo, stays on (0,0). `1<Mu` @ (0,2) on
+  `"[A-B]"` the same. Found once `decode_macro` stopped hiding `<…<Esc>` keys
+  from the fuzz (2026-10-19); not looked into.
+- **Shift cursor gaps the decoder fix exposed** (difffuzz 2000 424242, measured
+  2026-10-19, not looked into):
+  - `<C-v>L<` @ (0,3) on `"(n1)  a.'end', (xy)"`: nothing to shift on either
+    side; nvim's cursor goes to (0,0), hjkl's stays on (0,3). `<C-v>l<` @ (0,4)
+    on `"abc def"` agrees.
+  - `<aw` @ (1,0) on `"a\n\n    {foo}"`: nvim outdents the last line (`aw` on a
+    blank line takes the next line's word), hjkl does nothing.
+  - `3g~i"<Esc>` @ (0,1) on `"\"foo\" "`: same buffer, cursor (0,0) in nvim and
+    (0,1) in hjkl; `g~i"` without the count agrees.
 - **A charwise cut ending on the buffer's last line, when it is empty, takes the
   break before it.** `vd` / `vx` / `vU` @ (1,0) on `"ab\n\n"`: nvim leaves the
   buffer alone, hjkl leaves `"ab\n"` (and `vd` yanks `"\n"` where nvim yanks
