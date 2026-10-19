@@ -76,6 +76,8 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     // `ignorecase` + `smartcase` on: `/a` would match an `A` on one side only.
     editor.settings_mut().ignore_case = false;
     editor.settings_mut().smartcase = false;
+    // vim has no autopair, which hjkl defaults on: `i[` would type `[]`.
+    editor.settings_mut().autopair = false;
 
     // 2b. Apply per-case indent settings so `>>` / `<<` match nvim's output.
     if let Some(sw) = case.shiftwidth {

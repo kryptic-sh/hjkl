@@ -978,3 +978,14 @@ keys = "j"
 expected_buffer = "日本語x\nabcdef\n"
 expected_cursor = [1, 5]
 expected_mode = "normal"
+
+# vim types brackets and quotes as they are; hjkl's `autopair` (on by
+# default) would close each one, so the driver turns it off.
+[[cases]]
+name = "insert_brackets_do_not_autopair"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "ia[b(c{d\"e<Esc>"
+expected_buffer = "a[b(c{d\"e"
+expected_cursor = [0, 8]
+expected_mode = "normal"
