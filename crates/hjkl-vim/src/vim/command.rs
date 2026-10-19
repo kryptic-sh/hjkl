@@ -1096,8 +1096,10 @@ pub fn visual_paste<H: hjkl_engine::types::Host>(
             let anchor = vim(ed).visual_anchor;
             let cursor = ed.cursor();
             let (top, bot) = order(anchor, cursor);
-            // Delete the selection into the unnamed register.
-            cut_vim_range(ed, top, bot, RangeKind::Inclusive);
+            // Delete the selection into the unnamed register. A selection
+            // ending on a line's NUL takes the line break with it.
+            let (from, to, kind) = charwise_visual_range(ed, top, bot);
+            cut_vim_range(ed, from, to, kind);
             // Insert the register text where the selection started.
             if reg_linewise {
                 // Linewise register into a charwise hole: vim splits the line

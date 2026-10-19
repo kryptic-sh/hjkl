@@ -32,7 +32,7 @@ and this project adheres to
 
 - `cut_vim_range` with an inclusive end on a line's NUL stops at the end of that
   line instead of taking its break, as `read_vim_range` already did; the Visual
-  `d` / `c` paths go through `charwise_visual_range`, which says when a
+  `d` / `c` / `p` paths go through `charwise_visual_range`, which says when a
   selection does take the break (an empty line with a real line after it).
 - `word_text_object` is a port of vim's `current_word` and its word motions
   (`fwd_word`, `bck_word`, `end_word`, `bckend_word`) over `VimBuf`, replacing

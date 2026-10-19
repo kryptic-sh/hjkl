@@ -390,3 +390,15 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+
+[[cases]]
+name = "visual_paste_over_an_empty_line_takes_its_break"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [0, 0]
+keys = "yiwjvp"
+expected_buffer = "ab\nabcd"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
