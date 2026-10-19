@@ -566,6 +566,16 @@ with ripgrep installed are unaffected.
 
 ### 1.7 Harness, coverage, and hardening
 
+- **`recovery_restores_undo_tree_after_crash` flakes on macOS CI.** The pty e2e
+  test (`apps/hjkl/tests/pty_harness/recovery.rs`) failed all three nextest
+  tries on `test macos-latest` in CI run 39283039626 (commit `6b0eefa6`, which
+  changed only `decode_macro`): after recovery the second `<C-r>` never showed
+  the retained `world` branch. A rerun of the same job passed, as did ubuntu on
+  that run and macOS on the CI runs for `7f6e1c09` and `5da8afb4`. The test
+  waits for the post-undo swap to land before the SIGKILL, so the suspect is the
+  undo tree written in that swap versus the one in memory at crash time; not
+  investigated. The pty tests do not run on Windows, so local runs there never
+  cover it.
 - **`:normal` and `@q` decode key notation; vim's take raw keys.**
   `normal_handler` (`hjkl-ex` `builtins.rs`) and the macro replay in `hjkl-vim`
   (`normal.rs`, `editor_ext.rs`) run their text through `decode_macro`, so
