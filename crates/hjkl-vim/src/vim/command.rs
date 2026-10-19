@@ -105,15 +105,13 @@ pub(super) fn cut_vim_range_inner<H: hjkl_engine::types::Host>(
         RangeKind::Inclusive => {
             let line_chars = buf_line_chars(ed.buffer(), bot.0);
             // Advance one cell past `bot` so the buffer's exclusive
-            // `cut_chars` actually drops the inclusive endpoint. Wrap
-            // to the next row when bot already sits on the last char.
-            let next = if bot.1 < line_chars {
-                Position::new(bot.0, bot.1 + 1)
-            } else if bot.0 + 1 < buf_row_count(ed.buffer()) {
-                Position::new(bot.0 + 1, 0)
-            } else {
-                Position::new(bot.0, line_chars)
-            };
+            // `cut_chars` actually drops the inclusive endpoint. An end on
+            // the line's NUL (an empty line, `d3$` ending on one) covers
+            // nothing more: vim's `op_delete` never takes the line break
+            // through it, as `read_vim_range` doesn't. A Visual selection
+            // that does (`vd` on an empty line) says so with an exclusive
+            // end on the next line (`charwise_visual_range`).
+            let next = Position::new(bot.0, (bot.1 + 1).min(line_chars));
             (Position::new(top.0, top.1), next, BufKind::Char)
         }
         RangeKind::Exclusive => (

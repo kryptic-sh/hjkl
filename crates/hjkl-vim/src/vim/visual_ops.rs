@@ -198,7 +198,8 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                 }
                 Operator::Delete => {
                     ed.push_undo();
-                    cut_vim_range(ed, top, bot, RangeKind::Inclusive);
+                    let (from, to, kind) = charwise_visual_range(ed, top, bot);
+                    cut_vim_range(ed, from, to, kind);
                     // A cut through the end of the line leaves the cursor past
                     // the new end; Normal mode puts it on the last character.
                     clamp_cursor_to_normal_mode(ed);
@@ -210,7 +211,8 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                     // Record BEFORE entering insert: `AfterChange` patches
                     // `inserted` into this entry when the user hits Esc.
                     record_visual_last_change(ed, op, charwise_extent(top, bot), register);
-                    cut_vim_range(ed, top, bot, RangeKind::Inclusive);
+                    let (from, to, kind) = charwise_visual_range(ed, top, bot);
+                    cut_vim_range(ed, from, to, kind);
                     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
                 }
                 Operator::Uppercase

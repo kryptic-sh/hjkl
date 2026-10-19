@@ -43,6 +43,10 @@ patch bumps.
 
 ### Fixed
 
+- An operator over a motion that ends on an empty line no longer takes that
+  line's break: `d3$` leaves the empty line, as in vim, and `gU3$` no longer
+  deletes it. Visual `d` / `x` / `U` on the buffer's last, empty line do
+  nothing, as in vim, where they removed the line break before it.
 - The word text objects (`iw`, `aw`, `iW`, `aW`) follow vim: in Visual mode a
   wider selection grows by whole words from the cursor's end (`vlaw`, `vawaw`,
   `vhaw`), counts cross lines (`d3aw`), `diw` on an empty line does nothing, and

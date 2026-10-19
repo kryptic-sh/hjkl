@@ -1158,21 +1158,8 @@ Seen while measuring, not `gq`:
   - `<C-v>L<` @ (0,3) on `"(n1)  a.'end', (xy)"`: nothing to shift on either
     side; nvim's cursor goes to (0,0), hjkl's stays on (0,3). `<C-v>l<` @ (0,4)
     on `"abc def"` agrees.
-  - `<aw` @ (1,0) on `"a\n\n    {foo}"`: nvim outdents the last line (`aw` on a
-    blank line takes the next line's word), hjkl does nothing.
   - `3g~i"<Esc>` @ (0,1) on `"\"foo\" "`: same buffer, cursor (0,0) in nvim and
     (0,1) in hjkl; `g~i"` without the count agrees.
-- **A charwise cut ending on the buffer's last line, when it is empty, takes the
-  break before it.** `vd` / `vx` / `vU` @ (1,0) on `"ab\n\n"`: nvim leaves the
-  buffer alone, hjkl leaves `"ab\n"` (and `vd` yanks `"\n"` where nvim yanks
-  nothing). In `cut_vim_range_inner` (`command.rs`); `read_vim_range` already
-  takes nothing there. Present on the parent build too.
-- **An operator over `[count]$` ending on an empty line takes its break.** `d3$`
-  @ (0,1) on `"ab\nc\n\nd"`: nvim `"a\nd"` and yanks `"b\nc\n"`, hjkl `"ad"` and
-  yanks `"b\nc\n\n"`; `gU3$` deletes the empty line outright (nvim
-  `"aB\nC\n\nd"`, hjkl `"aB\nC\nd"`). The inclusive cut in `cut_vim_range_inner`
-  takes the break of an empty end line, which a `$` motion never should (`y3$`
-  reads correctly, through `read_vim_range`). Present on the parent build too.
 - **`.` after a multi-line charwise `vd` replays the wrong range.** `vjd.` @
   (0,1) on `"abc\nd\n\ncd"`: nvim `""`, hjkl `"acd"` (register `"\n\n"` against
   nvim's `"a\ncd"`). Present on the parent build too; not looked at.
@@ -1185,7 +1172,10 @@ Seen while measuring, not `gq`:
   want parks on the NUL too — `v$j` / `V$j` @ (0,0) on `"ab\nxxxxxxxx\nabc"` put
   nvim's cursor on (1,8), hjkl's on (1,7), and `v$jd` leaves hjkl an empty first
   line where nvim joins (measured 2026-10-19). The Visual vertical motions
-  (`Move::Vertical`) clamp to the last character in every mode.
+  (`Move::Vertical`) clamp to the last character in every mode. `l` is the same
+  gap: in Visual it moves onto the NUL in vim, so `vld` / `vly` @ (0,1) on
+  `"ab\ncd"` take `"b\n"` there and `"b"` in hjkl (measured 2026-10-20, on the
+  parent build too).
 - **Text-object operators skip vim's column-0 exclusive adjustment.** vim's
   `do_pending_operator` pulls an exclusive end in column 0 of a later line back
   onto the previous line's end, turning the motion inclusive or, with the start

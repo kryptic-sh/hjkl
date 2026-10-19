@@ -1024,3 +1024,88 @@ expected_mode = "insert"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "count_dollar_delete_ending_on_an_empty_line"
+initial_buffer = "ab\nc\n\nd"
+initial_cursor = [0, 1]
+keys = "d3$"
+expected_buffer = "a\nd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "b\nc\n"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_dollar_case_op_ending_on_an_empty_line"
+initial_buffer = "ab\nc\n\nd"
+initial_cursor = [0, 1]
+keys = "gU3$"
+expected_buffer = "aB\nC\n\nd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_dollar_change_ending_on_an_empty_line"
+initial_buffer = "ab\nc\n\nd"
+initial_cursor = [0, 1]
+keys = "c3$Z<Esc>"
+expected_buffer = "aZ\nd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_delete_on_the_last_empty_line_is_a_noop"
+initial_buffer = "ab\n\n"
+initial_cursor = [1, 0]
+keys = "vd"
+expected_buffer = "ab\n\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_upper_on_the_last_empty_line_is_a_noop"
+initial_buffer = "ab\n\n"
+initial_cursor = [1, 0]
+keys = "vU"
+expected_buffer = "ab\n\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_delete_on_a_mid_empty_line_joins"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [1, 0]
+keys = "vd"
+expected_buffer = "ab\ncd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_change_on_a_mid_empty_line_joins"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [1, 0]
+keys = "vcZ<Esc>"
+expected_buffer = "ab\nZcd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
