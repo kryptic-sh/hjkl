@@ -52,7 +52,7 @@ pub fn text_object_range<H: hjkl_engine::types::Host>(
             word_text_object(ed, inner, big, count).map(|(s, e)| (s, e, RangeKind::Exclusive))
         }
         TextObject::Quote(q) => {
-            quote_text_object(ed, q, inner).map(|(s, e)| (s, e, RangeKind::Exclusive))
+            quote_text_object(ed, q, inner, count).map(|(s, e)| (s, e, RangeKind::Exclusive))
         }
         TextObject::Bracket(open) => bracket_text_object(ed, open, inner, count),
         TextObject::Paragraph => {
@@ -1553,10 +1553,13 @@ pub fn check_and_apply_abbrev<H: hjkl_engine::types::Host>(
 
     true
 }
+/// `i<q>` / `a<q>`. With a `count` of 2 or more, `i<q>` takes the quotes
+/// themselves but none of the white space `a<q>` adds (`:h i"`).
 pub fn quote_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     q: char,
     inner: bool,
+    count: usize,
 ) -> Option<((usize, usize), (usize, usize))> {
     let (row, col) = ed.cursor();
     let line = buf_line(ed.buffer(), row)?;
@@ -1595,7 +1598,9 @@ pub fn quote_text_object<H: hjkl_engine::types::Host>(
     let open = open_idx?;
     let close = close_idx?;
     // End columns are *exclusive* — one past the last character to act on.
-    if inner {
+    if inner && count >= 2 {
+        Some(((row, open), (row, close + 1)))
+    } else if inner {
         if close <= open + 1 {
             return None;
         }

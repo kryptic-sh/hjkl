@@ -18,7 +18,7 @@ pub fn text_object_inner_quote_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     quote: char,
 ) -> Option<((usize, usize), (usize, usize))> {
-    quote_text_object(ed, quote, true)
+    quote_text_object(ed, quote, true, 1)
 }
 /// Resolve the range of `a<quote>` (around quote) at the current cursor
 /// position. Includes surrounding whitespace on one side per vim semantics.
@@ -26,7 +26,7 @@ pub fn text_object_around_quote_bridge<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     quote: char,
 ) -> Option<((usize, usize), (usize, usize))> {
-    quote_text_object(ed, quote, false)
+    quote_text_object(ed, quote, false, 1)
 }
 /// Resolve the range of `i<bracket>` (inner bracket pair). `open` must be
 /// one of `'('`, `'{'`, `'['`, `'<'`; the corresponding close is derived

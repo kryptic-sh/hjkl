@@ -43,6 +43,8 @@ patch bumps.
 
 ### Fixed
 
+- `i"` / `i'` with a count of 2 or more cover the quotes themselves, as in vim:
+  `2di"` deletes `"ab"`, where hjkl ignored the count and deleted only `ab`.
 - An operator over a motion that ends on an empty line no longer takes that
   line's break: `d3$` leaves the empty line, as in vim, and `gU3$` no longer
   deletes it. Visual `d` / `x` / `U` on the buffer's last, empty line do

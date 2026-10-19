@@ -1153,13 +1153,10 @@ Seen while measuring, not `gq`:
   `op_motion.rs` is where a zero-distance success would be added.) `<%` @ (0,21)
   on `"  'xy'  _id.A-B  'self.x'"` likewise outdents in nvim and does nothing in
   hjkl.
-- **Shift cursor gaps the decoder fix exposed** (difffuzz 2000 424242, measured
-  2026-10-19, not looked into):
-  - `<C-v>L<` @ (0,3) on `"(n1)  a.'end', (xy)"`: nothing to shift on either
-    side; nvim's cursor goes to (0,0), hjkl's stays on (0,3). `<C-v>l<` @ (0,4)
-    on `"abc def"` agrees.
-  - `3g~i"<Esc>` @ (0,1) on `"\"foo\" "`: same buffer, cursor (0,0) in nvim and
-    (0,1) in hjkl; `g~i"` without the count agrees.
+- **A Visual-block shift with nothing to shift leaves the cursor.** `<C-v>L<` @
+  (0,3) on `"(n1)  a.'end', (xy)"` (difffuzz 2000 424242, measured 2026-10-19):
+  nvim's cursor goes to (0,0), hjkl's stays on (0,3). `<C-v>l<` @ (0,4) on
+  `"abc def"` agrees. Not looked into.
 - **`.` after a multi-line charwise `vd` replays the wrong range.** `vjd.` @
   (0,1) on `"abc\nd\n\ncd"`: nvim `""`, hjkl `"acd"` (register `"\n\n"` against
   nvim's `"a\ncd"`). Present on the parent build too; not looked at.

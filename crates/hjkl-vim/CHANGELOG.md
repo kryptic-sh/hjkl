@@ -30,6 +30,8 @@ and this project adheres to
 
 ### Fixed
 
+- `quote_text_object` takes the count: with 2 or more, `i<q>` covers the quotes
+  but none of `a<q>`'s white space (`:h i"`).
 - `cut_vim_range` with an inclusive end on a line's NUL stops at the end of that
   line instead of taking its break, as `read_vim_range` already did; the Visual
   `d` / `c` / `p` paths go through `charwise_visual_range`, which says when a

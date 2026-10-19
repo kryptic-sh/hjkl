@@ -57,3 +57,76 @@ initial_cursor = [0, 6]
 keys = "dat"
 expected_buffer = "<a></a>\n"
 expected_mode = "normal"
+
+[[cases]]
+name = "count_two_inner_quote_deletes_the_quotes"
+initial_buffer = "x \"ab\" y"
+initial_cursor = [0, 3]
+keys = "2di\""
+expected_buffer = "x  y"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_two_inner_quote_yanks_the_quotes"
+initial_buffer = "x \"ab\" y"
+initial_cursor = [0, 3]
+keys = "2yi\""
+expected_buffer = "x \"ab\" y"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+expected_register = ['"', "\"ab\""]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_three_inner_quote_case_op"
+initial_buffer = "\"foo\" "
+initial_cursor = [0, 1]
+keys = "3g~i\""
+expected_buffer = "\"FOO\" "
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_two_inner_quote_change"
+initial_buffer = "\"foo\" "
+initial_cursor = [0, 1]
+keys = "2ci\"Z<Esc>"
+expected_buffer = "Z "
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_count_two_inner_quote"
+initial_buffer = "\"foo\" "
+initial_cursor = [0, 1]
+keys = "v2i\"<Esc>"
+expected_buffer = "\"foo\" "
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_two_inner_single_quote"
+initial_buffer = "x 'ab' y"
+initial_cursor = [0, 3]
+keys = "2di'"
+expected_buffer = "x  y"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
