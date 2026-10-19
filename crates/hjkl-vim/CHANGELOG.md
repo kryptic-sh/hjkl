@@ -30,6 +30,9 @@ and this project adheres to
 
 ### Fixed
 
+- `execute_motion` stores `usize::MAX` as the sticky column after
+  `Motion::LineEnd` (vim's MAXCOL curswant), and leaves the sticky column alone
+  when `h` / `l` / `<Space>` / `<BS>` fail to move, as vim's failed commands do.
 - `do_char_delete` (`x` / `X`) resets the curswant through
   `remember_operator_column`, so the `.` replay, which calls it directly, does
   too.

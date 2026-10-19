@@ -736,3 +736,111 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "dollar_then_j_keeps_to_the_line_end"
+initial_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+initial_cursor = [0, 0]
+keys = "$j"
+expected_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+expected_cursor = [1, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dollar_then_j_through_short_and_empty_lines"
+initial_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+initial_cursor = [0, 0]
+keys = "$jjjj"
+expected_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+expected_cursor = [4, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dollar_then_j_and_back_up"
+initial_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+initial_cursor = [0, 0]
+keys = "$jjjjk"
+expected_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+expected_cursor = [3, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_dollar_then_j"
+initial_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+initial_cursor = [0, 0]
+keys = "2$j"
+expected_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+expected_cursor = [2, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "end_key_then_j"
+initial_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+initial_cursor = [0, 0]
+keys = "<End>j"
+expected_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+expected_cursor = [1, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dollar_failed_l_keeps_the_line_end_want"
+initial_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+initial_cursor = [0, 0]
+keys = "$lj"
+expected_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+expected_cursor = [1, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dollar_h_resets_the_want"
+initial_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+initial_cursor = [0, 0]
+keys = "$hj"
+expected_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_to_eol_then_j_takes_the_cursor_column"
+initial_buffer = "ab\nxxxxxxxx\nabc\n\nxxxxx"
+initial_cursor = [0, 0]
+keys = "d$j"
+expected_buffer = "\nxxxxxxxx\nabc\n\nxxxxx"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dollar_on_a_tab_line_then_j"
+initial_buffer = "a\tb\nxxxxxxxxxx"
+initial_cursor = [0, 0]
+keys = "$j"
+expected_buffer = "a\tb\nxxxxxxxxxx"
+expected_cursor = [1, 9]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

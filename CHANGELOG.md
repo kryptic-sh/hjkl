@@ -43,6 +43,9 @@ patch bumps.
 
 ### Fixed
 
+- `j` / `k` after `$` (or `<End>`) keep to the end of each line, as in vim,
+  where they aimed for the column `$` happened to land on; an `h` / `l` that
+  cannot move no longer forgets that.
 - `j` / `k` after `.` repeats `x` or `X` aim for the column the repeat left the
   cursor in, as after the `x` itself (`lx.j` at a line end).
 - `g_`, `gM` and `gm` work after an operator (`dg_`, `yg_`, `dgM`, …), where

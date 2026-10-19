@@ -137,9 +137,24 @@ pub fn execute_motion<H: hjkl_engine::types::Host>(
                 col: pos.1,
             });
         }
+        // An `h` / `l` that cannot move fails in vim (`nv_left` / `nv_right`
+        // beep), and a failed command leaves curswant alone: `$lj` still
+        // aims for the end of the line.
+        MotionClass::Horizontal
+            if pre_pos == post_pos
+                && matches!(
+                    motion,
+                    Motion::Left | Motion::Right | Motion::SpaceFwd | Motion::BackspaceBack
+                ) => {}
         MotionClass::Horizontal => {
             // Sticky tracks the landed column.
             ed.move_cursor(Move::Horizontal { col: ed.cursor().1 });
+            // vim's `nv_dollar` sets curswant to MAXCOL instead, so `j` / `k`
+            // after `$` keep to the end of every line they reach. Every
+            // reader clamps the want to the row it lands on.
+            if matches!(motion, Motion::LineEnd) {
+                ed.set_sticky_col(Some(usize::MAX));
+            }
         }
     }
     if motion_opens_fold(&motion, count, pre_pos != post_pos) {

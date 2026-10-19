@@ -1180,7 +1180,17 @@ Seen while measuring, not `gq`:
   yanks `"ab\n"`, hjkl `"ab"`; `v$d` likewise leaves the line unjoined. In vim
   `$` in Visual puts the selection end on the line's NUL, which
   `charwise_visual_range` (`visual_ops.rs`) would already cover if the cursor
-  stood there; hjkl stops it on the last character. Not looked into further.
+  stood there; hjkl stops it on the last character. Not looked into further. The
+  same shows after `j`: `$` now stores vim's MAXCOL curswant, and in Visual that
+  want parks on the NUL too — `v$j` / `V$j` @ (0,0) on `"ab\nxxxxxxxx\nabc"` put
+  nvim's cursor on (1,8), hjkl's on (1,7), and `v$jd` leaves hjkl an empty first
+  line where nvim joins (measured 2026-10-19). The Visual vertical motions
+  (`Move::Vertical`) clamp to the last character in every mode.
+- **`decode_macro` has no `<Space>` tag.** nvim's `nvim_input` reads `<Space>`
+  as a space; `key_from_tag` (`hjkl-engine` `input.rs`) does not know it, so
+  `j<Space>k` reaches hjkl as the seven characters plus `k` (on `"xxxxxxxx\nab"`
+  @ (0,4) it ends in Insert mode with `"a>k"` on row 1). The fuzz types spaces
+  literally, so it only shows in hand-written keys.
 - **`vlaw` extends to the wrong end.** `vlaw<Esc>` then `` `> `` @ (0,0) on
   `"ab cd"`: nvim (0,4), hjkl (0,2) — the word object's Visual-extend path, the
   same gap the sentence object had; not looked at.
