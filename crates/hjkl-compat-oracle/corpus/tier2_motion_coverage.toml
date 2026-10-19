@@ -435,3 +435,159 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+[[cases]]
+name = "inplace_y_dollar_after_j_short_line"
+initial_buffer = "abcdefgh\nab\nabcdefgh"
+initial_cursor = [0, 6]
+keys = "jy$"
+expected_buffer = "abcdefgh\nab\nabcdefgh"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+expected_register = ['"', "b"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inplace_d_dollar_last_char"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 1]
+keys = "d$"
+expected_buffer = "a\ncd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inplace_c_dollar_last_char"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 1]
+keys = "c$Z"
+expected_buffer = "aZ\ncd"
+expected_cursor = [0, 2]
+expected_mode = "insert"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inplace_gu_dollar_last_char"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 1]
+keys = "gU$"
+expected_buffer = "aB\ncd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inplace_count_dollar_last_line_noop"
+initial_buffer = "ab"
+initial_cursor = [0, 1]
+keys = "2d$"
+expected_buffer = "ab"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inplace_d_e_buffer_end"
+initial_buffer = "ab"
+initial_cursor = [0, 1]
+keys = "de"
+expected_buffer = "a"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inplace_d_e_trailing_blank_buffer_end"
+initial_buffer = "ab  "
+initial_cursor = [0, 3]
+keys = "de"
+expected_buffer = "ab "
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inplace_d_count_e_buffer_end"
+initial_buffer = "ab"
+initial_cursor = [0, 1]
+keys = "d2e"
+expected_buffer = "a"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inplace_d_ge_buffer_start_noop"
+initial_buffer = "ab"
+initial_cursor = [0, 0]
+keys = "dge"
+expected_buffer = "ab"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inplace_d_t_adjacent"
+initial_buffer = "abc d"
+initial_cursor = [0, 0]
+keys = "dtb"
+expected_buffer = "bc d"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inplace_d_count_t_adjacent_noop"
+initial_buffer = "abc"
+initial_cursor = [0, 0]
+keys = "d2tb"
+expected_buffer = "abc"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inplace_d_semicolon_skips_adjacent_t"
+initial_buffer = "abab"
+initial_cursor = [0, 0]
+keys = "tbd;"
+expected_buffer = "b"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inplace_d_dollar_dot"
+initial_buffer = "ab\ncb"
+initial_cursor = [0, 1]
+keys = "d$j$."
+expected_buffer = "a\nc"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

@@ -1064,11 +1064,16 @@ fn handle_after_op<H: Host>(
     if let Some(motion) = parse_motion(&input) {
         let motion = match motion {
             Motion::FindRepeat { reverse } => match ed.last_find() {
-                Some((ch, forward, till)) => Motion::Find {
-                    ch,
-                    forward: if reverse { !forward } else { forward },
-                    till,
-                },
+                Some((ch, forward, till)) => {
+                    // A `t`/`T` repeat skips an adjacent match under an
+                    // operator too (`tbd;`), as the cursor path flags it.
+                    crate::vim_state::vim_mut(ed).find_repeat_skip = true;
+                    Motion::Find {
+                        ch,
+                        forward: if reverse { !forward } else { forward },
+                        till,
+                    }
+                }
                 None => return true,
             },
             m => crate::vim::operator::change_word_motion(

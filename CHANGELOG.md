@@ -43,6 +43,10 @@ patch bumps.
 
 ### Fixed
 
+- `d$`, `y$`, `c$` and `gU$` on a line's last character act on it, as in vim,
+  where they did nothing (most visibly after `j` onto a shorter line); so do
+  `de` at the end of the buffer and `dtx` with `x` right after the cursor. `d;`
+  after such a `t` skips the adjacent match, as in vim.
 - After an operator such as `Vjy`, `>j` or `gUU`, `j` / `k` land in the column
   the operator left the cursor in, as in vim, not the column from before it.
 - `.` after `Vjd` / `Vjc` near the end of the buffer acts on the lines left, as

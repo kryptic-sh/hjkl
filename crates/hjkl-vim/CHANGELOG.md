@@ -30,6 +30,14 @@ and this project adheres to
 
 ### Fixed
 
+- An inclusive motion that succeeds without moving operates on the cursor's
+  character, as in vim: `d$` / `y$` / `c$` / `gU$` on a line's last character,
+  `de` / `dE` / `d2e` at the end of the buffer, and `dtx` with `x` adjacent all
+  did nothing, because `apply_op_with_motion` read every zero-distance range as
+  a failed motion. `succeeds_in_place` tells the two apart per motion, so `2d$`
+  on the last line, `d2tx` and `dge` at the buffer start stay no-ops. Under an
+  operator, `;` / `,` after a `t` / `T` now set `find_repeat_skip` as the cursor
+  path does, so `tbd;` skips the adjacent match.
 - After an operator, `j` / `k` aim for the column the operator left the cursor
   in, as vim does (`'curswant'` is reset): `Vjy`, `Vj>`, `>j`, `gUU`, `yy`, `=`
   and the rest went back to the column from before. One rule in

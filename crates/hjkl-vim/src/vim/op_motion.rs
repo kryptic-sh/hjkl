@@ -16,6 +16,9 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     count: usize,
 ) {
     let start = ed.cursor();
+    // Peeked before the motion consumes it: a `;`/`,` repeat of `t`/`T`
+    // skips the adjacent match, so staying put there means it failed.
+    let find_repeat = vim(ed).find_repeat_skip;
     // Tentatively apply motion to find the endpoint. Operator context
     // so `l` on the last char advances past-last (standard vim
     // exclusive-motion endpoint behaviour), enabling `dl` / `cl` /
@@ -72,20 +75,59 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
             kind = RangeKind::Inclusive;
         }
     }
-    // `cw` on the last character of a word does not move (vim's `end_word()`
-    // `stop` flag) and changes exactly that character. Same zero-distance
-    // shape as the `}` tail above, and written the same way — a one-char
-    // EXCLUSIVE range, because the abort below and `run_operator_over_range`
-    // both reject zero-width charwise ranges.
+    // An inclusive motion that succeeds without moving operates on the
+    // cursor's character: `d$` on a line's last char, `de` at the end of the
+    // buffer, `cw` on a word's last char (vim's `end_word()` `stop` flag),
+    // `dtb` with `b` adjacent. Same zero-distance shape as the `}` tail
+    // above, and written the same way — a one-char EXCLUSIVE range, because
+    // the abort below and `run_operator_over_range` both reject zero-width
+    // charwise ranges.
     if start == end
-        && matches!(motion, Motion::ChangeWordEnd { .. })
         && end.1 < buf_line_chars(ed.buffer(), end.0)
+        && succeeds_in_place(ed, motion, count, find_repeat)
     {
         end = (end.0, end.1 + 1);
         kind = RangeKind::Exclusive;
     }
     let word_fwd = matches!(motion, Motion::WordFwd | Motion::BigWordFwd);
     operate_over_motion_range(ed, op, start, end, kind, word_fwd);
+}
+
+/// Whether `motion`, having left the cursor where it was, succeeded rather
+/// than failed — the motion layer reports no status, so each case reads it
+/// back from the buffer. Measured against nvim 0.12.5: `$` succeeds unless a
+/// count runs it off the last line (`2d$` there is a no-op); `e` / `E` at the
+/// end of the buffer succeed, counted or not; `t` / `T` succeed in place only
+/// on an adjacent target with no count and outside a `;` / `,` repeat; `ge`
+/// at the buffer start and every other motion fail.
+fn succeeds_in_place<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    motion: &Motion,
+    count: usize,
+    find_repeat: bool,
+) -> bool {
+    match *motion {
+        Motion::LineEnd => count <= 1,
+        Motion::WordEnd | Motion::BigWordEnd | Motion::ChangeWordEnd { .. } => true,
+        Motion::Find {
+            ch,
+            forward,
+            till: true,
+        } if count <= 1 && !find_repeat => {
+            let (row, col) = ed.cursor();
+            let line: Vec<char> = buf_line(ed.buffer(), row)
+                .unwrap_or_default()
+                .chars()
+                .collect();
+            let adjacent = if forward {
+                line.get(col + 1)
+            } else {
+                col.checked_sub(1).and_then(|c| line.get(c))
+            };
+            adjacent == Some(&ch)
+        }
+        _ => false,
+    }
 }
 
 /// `d'a` / ``d`a`` — `op` over the motion to mark `ch`: linewise for `'`,

@@ -566,6 +566,14 @@ with ripgrep installed are unaffected.
 
 ### 1.7 Harness, coverage, and hardening
 
+- **`decode_macro` does not re-scan inside an unknown `<tag>`, as vim does.**
+  `decode_macro` (`hjkl-engine` `input.rs`) reads `<` up to the next `>` and,
+  when the tag is unknown, emits it all literally; vim treats the `<` alone as
+  literal and scans on from the next character. So `<<$<Esc>` reaches hjkl as
+  `< < $ < E s c >` but nvim as `<<$` then Escape. difffuzz 2000 424242 lists
+  three cases that are only this (`<<$<Esc>`, `<i'<Esc>`, `Vgg<$<Esc>`):
+  replayed with the keys hjkl actually receives (`<<$<E`, …), hjkl matches nvim.
+  The same decoder serves macro text in the editor, not just the oracle.
 - **The vim-compat corpus runs only in the weekly Cron, never in `ci.yml`.**
   Nothing in PR or main CI runs `hjkl-compat-oracle`, so a corpus case can land
   broken and stay that way until Monday:
@@ -1135,11 +1143,16 @@ Seen while measuring, not `gq`:
   `"abcd\nefgh\nijkl\nmnop"`: nvim (1,1), hjkl (1,2); `lxj` itself agrees. The
   replay of a plain `x` does not take the curswant from the cursor the way
   operators now do (`remember_operator_column`).
-- **`y$` / `d$` after `j` onto a shorter line act on nothing.** On
-  `"abcdefgh\nab\nabcdefgh"` @ (0,6), `jy$` yanks `""` (nvim `"b"`) and `jd$`
-  deletes nothing (nvim deletes `"b"`). The `$` operator range seems to start
-  from the curswant (6) rather than the clamped cursor (1); not looked into.
-  Present on the parent build too.
+- **`g_` does nothing under an operator.** `dg_` / `yg_` @ (0,0) on `"abc d"`:
+  nvim deletes / yanks `"abc d"`, hjkl leaves buffer and register alone, though
+  a bare `g_` lands on (0,4) in both. `d2g_` on `"ab\ncd"` likewise does nothing
+  (nvim empties the buffer, register `"ab\ncd\n"`). Looks like the `g` prefix in
+  operator-pending never routes `_`; not looked into.
+- **`d%` with no bracket on the line deletes the cursor's character in nvim.**
+  `d%` @ (0,0) on `"ab"`: nvim `"b"`, register `"a"`; hjkl does nothing. Odd for
+  a `%` that finds no match, so it wants reading `nv_percent` / `findmatch`
+  before copying; measured only, not explained. (`succeeds_in_place` in
+  `op_motion.rs` is where a zero-distance success would be added.)
 - **A charwise cut ending on the buffer's last line, when it is empty, takes the
   break before it.** `vd` / `vx` / `vU` @ (1,0) on `"ab\n\n"`: nvim leaves the
   buffer alone, hjkl leaves `"ab\n"` (and `vd` yanks `"\n"` where nvim yanks
