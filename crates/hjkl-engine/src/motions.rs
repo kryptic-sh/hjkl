@@ -24,9 +24,7 @@
 //! `iskeyword` spec so the host can change it without re-publishing
 //! it onto the buffer. Both have lived as `Editor` fields since 0.0.28.
 //!
-use hjkl_buffer::{
-    KeywordSpec, Position, Wrap, char_col_to_visual_col, visual_col_to_char_col, wrap,
-};
+use hjkl_buffer::{KeywordSpec, Position, Wrap, cursor_visual_col, visual_col_to_char_col, wrap};
 
 use crate::types::{Cursor, FoldProvider, Pos, Query};
 
@@ -1046,7 +1044,7 @@ fn move_screen_vertical<B: Cursor + Query>(
         col
     } else {
         let cursor_line = read_line(buf, cursor.row);
-        char_col_to_visual_col(&cursor_line, cursor.col, tabstop)
+        cursor_visual_col(&cursor_line, cursor.col, tabstop)
     };
     *sticky_col = Some(want);
     // The current row's wrap layout is computed ONCE here and threaded
@@ -1139,7 +1137,7 @@ fn move_vertical<B: Cursor + Query>(
         col
     } else {
         let cursor_line = read_line(buf, cursor.row);
-        char_col_to_visual_col(&cursor_line, cursor.col, tabstop)
+        cursor_visual_col(&cursor_line, cursor.col, tabstop)
     };
     *sticky_col = Some(want);
     // Walk one visible row at a time so closed folds count as one

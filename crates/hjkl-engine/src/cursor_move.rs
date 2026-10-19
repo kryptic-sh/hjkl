@@ -14,7 +14,7 @@
 
 use crate::Editor;
 use crate::buf_helpers::{buf_line, buf_line_chars};
-use hjkl_buffer::{char_col_to_visual_col, visual_col_to_char_col};
+use hjkl_buffer::visual_col_to_char_col;
 
 /// How a cursor move relates to `sticky_col` (vim's `curswant`) — the column
 /// `j` / `k` aim at.
@@ -88,10 +88,9 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
                 // Bootstrap from the current column on the very first vertical
                 // motion, exactly as `apply_sticky_col` does.
                 let (current_row, current_col) = self.cursor();
-                let current_line = buf_line(&self.buffer, current_row).unwrap_or_default();
-                let want = self.sticky_col().unwrap_or_else(|| {
-                    char_col_to_visual_col(&current_line, current_col, self.settings().tabstop)
-                });
+                let want = self
+                    .sticky_col()
+                    .unwrap_or_else(|| self.cursor_want(current_row, current_col));
                 // Record the un-clamped want first so the next vertical motion
                 // still sees it even though this one may clamp short.
                 self.set_sticky_col(Some(want));

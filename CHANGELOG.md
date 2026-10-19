@@ -43,6 +43,8 @@ patch bumps.
 
 ### Fixed
 
+- `j` / `k` from a tab aim for the column the cursor is drawn in, the tab's last
+  cell, as in vim; they used its first, landing short on the next line.
 - `j` / `k` after `$` (or `<End>`) keep to the end of each line, as in vim,
   where they aimed for the column `$` happened to land on; an `h` / `l` that
   cannot move no longer forgets that.

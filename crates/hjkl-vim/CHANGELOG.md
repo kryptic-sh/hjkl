@@ -30,6 +30,8 @@ and this project adheres to
 
 ### Fixed
 
+- `remember_operator_column` takes the curswant from `Editor::cursor_want`, so
+  an operator that leaves the cursor on a tab stores the tab's last cell.
 - `execute_motion` stores `usize::MAX` as the sticky column after
   `Motion::LineEnd` (vim's MAXCOL curswant), and leaves the sticky column alone
   when `h` / `l` / `<Space>` / `<BS>` fail to move, as vim's failed commands do.

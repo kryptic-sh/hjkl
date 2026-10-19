@@ -31,8 +31,7 @@ pub fn remember_operator_column<H: hjkl_engine::types::Host>(
 ) {
     if vim(ed).mode == Mode::Normal {
         let (row, col) = ed.cursor();
-        let line = hjkl_engine::buf_helpers::buf_line(ed.buffer(), row).unwrap_or_default();
-        let want = hjkl_buffer::char_col_to_visual_col(&line, col, ed.settings().tabstop);
+        let want = ed.cursor_want(row, col);
         ed.set_sticky_col(Some(want));
     }
 }

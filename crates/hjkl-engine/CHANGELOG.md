@@ -17,6 +17,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- The sticky column (vim's `curswant`) for a cursor on a tab is the tab's last
+  cell outside Insert mode, as in vim, so `j` off a tab aims where the cursor is
+  drawn: `jump_cursor`, the `Move::Vertical` bootstrap and the `move_vertical` /
+  screen-line bootstraps take it from the new `Editor::cursor_want`, or from
+  `hjkl_buffer::cursor_visual_col` where no mode is known.
 - `decode_macro` knows `<Space>`, as nvim's `nvim_input` does; it typed the
   seven characters.
 - `decode_macro` reads a `<` that opens no known tag as a literal `<` and scans

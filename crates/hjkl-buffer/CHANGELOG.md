@@ -8,6 +8,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `cursor_visual_col(line, char_col, tab_width)`: the display column a Normal-
+  or Visual-mode cursor is drawn in, vim's `curswant` — a tab's last cell, any
+  other character's first.
 - `View::open_folds_containing(row)` opens every closed fold containing `row`,
   its first line included — vim's `foldOpenCursor()`. `reveal_row` still opens
   only the folds that hide the row.

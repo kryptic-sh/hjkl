@@ -122,10 +122,12 @@ pub fn visual_col_to_char_col(line: &str, visual_col: usize, tab_width: usize) -
 /// [`visual_col_to_char_col`].
 ///
 /// Used to anchor screen overlays (e.g. the K-key hover popup) at a document
-/// position — the doc→cell counterpart of mouse-click translation — and to
-/// store vim's `curswant`. Returning the first cell matches vim: with the
-/// cursor on `世` in `ab世界cd`, `getcurpos()[4]` (curswant) is 3 in vim's
-/// 1-based columns, i.e. the leading cell, not the trailing one.
+/// position — the doc→cell counterpart of mouse-click translation — and, in
+/// Insert mode, to store vim's `curswant`. Outside Insert mode a cursor on a
+/// tab stands in its last cell instead; [`cursor_visual_col`] has that rule.
+/// The first cell matches vim for a double-width glyph: with the cursor on
+/// `世` in `ab世界cd`, `getcurpos()[4]` (curswant) is 3 in vim's 1-based
+/// columns, i.e. the leading cell, not the trailing one.
 ///
 /// `tab_width == 0` is treated as 1. `char_col` past the line end clamps to the
 /// line's full visual width. See the module docs for the per-char width rule.
@@ -157,6 +159,32 @@ pub fn char_col_to_visual_col(line: &str, char_col: usize, tab_width: usize) -> 
         visual += cell_width(ch, visual, tab_w);
     }
     visual
+}
+
+/// vim's `curswant` for a Normal- or Visual-mode cursor on `char_col`: the
+/// display column the cursor is drawn in. That is a tab's LAST cell — outside
+/// Insert mode vim puts the cursor at the end of a tab, and `j` off one aims
+/// there — and every other character's first, as [`char_col_to_visual_col`]
+/// gives (a double-width glyph keeps its leading cell).
+///
+/// # Examples
+///
+/// ```rust
+/// use hjkl_buffer::cursor_visual_col;
+///
+/// // On the tab of `a\tb` (tab width 4) the cursor stands in cell 3.
+/// assert_eq!(cursor_visual_col("a\tb", 1, 4), 3);
+/// // Any other char: its first cell.
+/// assert_eq!(cursor_visual_col("a\tb", 2, 4), 4);
+/// assert_eq!(cursor_visual_col("ab世界cd", 3, 4), 4);
+/// ```
+pub fn cursor_visual_col(line: &str, char_col: usize, tab_width: usize) -> usize {
+    if line.chars().nth(char_col) == Some('\t') {
+        // A tab is at least one cell wide, so its successor starts past it.
+        char_col_to_visual_col(line, char_col + 1, tab_width) - 1
+    } else {
+        char_col_to_visual_col(line, char_col, tab_width)
+    }
 }
 
 /// Visual width of `line`'s leading run of whitespace: `' '` occupies one

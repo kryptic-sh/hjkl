@@ -2464,8 +2464,21 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// else resets it to the column where the cursor actually landed.
     pub fn jump_cursor(&mut self, row: usize, col: usize) {
         buf_set_cursor_rc(&mut self.buffer, row, col);
+        self.sticky_col = Some(self.cursor_want(row, col));
+    }
+
+    /// vim's `curswant` for a cursor at `(row, col)`: the display column it
+    /// is drawn in. Insert mode puts the cursor before a character, at its
+    /// first cell; every other mode draws it at the end of a tab
+    /// ([`hjkl_buffer::cursor_visual_col`]).
+    pub fn cursor_want(&self, row: usize, col: usize) -> usize {
         let line = buf_line(&self.buffer, row).unwrap_or_default();
-        self.sticky_col = Some(char_col_to_visual_col(&line, col, self.settings().tabstop));
+        let tabstop = self.settings().tabstop;
+        if self.coarse_mode() == crate::CoarseMode::Insert {
+            char_col_to_visual_col(&line, col, tabstop)
+        } else {
+            hjkl_buffer::cursor_visual_col(&line, col, tabstop)
+        }
     }
 
     /// Set the cursor to `(row, col)` without modifying `sticky_col`.
