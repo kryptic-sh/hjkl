@@ -120,6 +120,7 @@ fn key_from_tag(tag: &str) -> Option<Input> {
         "CR" => Key::Enter,
         "BS" => Key::Backspace,
         "Tab" => Key::Tab,
+        "Space" => Key::Char(' '),
         "Up" => Key::Up,
         "Down" => Key::Down,
         "Left" => Key::Left,
@@ -302,6 +303,16 @@ mod tests {
             ch('k'),
         ];
         assert_eq!(decoded, expected);
+    }
+
+    /// `<Space>` is a space, as `nvim_input` reads it.
+    #[test]
+    fn space_tag_decodes_to_a_space() {
+        let space = Input {
+            key: Key::Char(' '),
+            ..Input::default()
+        };
+        assert_eq!(decode_macro("<Space>"), vec![space]);
     }
 
     /// A `<` that opens no known tag is literal and scanning resumes right

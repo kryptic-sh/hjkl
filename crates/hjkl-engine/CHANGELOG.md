@@ -17,6 +17,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `decode_macro` knows `<Space>`, as nvim's `nvim_input` does; it typed the
+  seven characters.
 - `decode_macro` reads a `<` that opens no known tag as a literal `<` and scans
   on from the next character, as vim's notation parser does, so a known tag
   inside it still decodes: `<<$<Esc>` is `<`, `<`, `$`, Escape, where it was

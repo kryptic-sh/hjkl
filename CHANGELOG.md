@@ -57,7 +57,8 @@ patch bumps.
   the operator. `Vky` likewise leaves the cursor in its column.
 - Key notation sent through `nvim_input` or `hjkl_input` decodes `<Esc>` and the
   other tags after a stray `<`, as nvim's `nvim_input` does: `<<$<Esc>` ends
-  with Escape instead of typing `<Esc>` as text.
+  with Escape instead of typing `<Esc>` as text. `<Space>` is read as a space
+  there too.
 - `d$`, `y$`, `c$` and `gU$` on a line's last character act on it, as in vim,
   where they did nothing (most visibly after `j` onto a shorter line); so do
   `de` at the end of the buffer and `dtx` with `x` right after the cursor. `d;`
