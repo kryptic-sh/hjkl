@@ -74,7 +74,35 @@ pub fn land_after_linewise_delete<H: hjkl_engine::types::Host>(
     move_first_non_whitespace(ed);
 }
 
+/// A doubled line operator (`dd`, `>>`, `3gUU`, …) and its `.` repeat.
 pub fn execute_line_op<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    op: Operator,
+    count: usize,
+) {
+    // vim's `nv_lineop`: with no count the doubled operator's motion stays on
+    // the line and lands on its first non-blank; the earlier of that and the
+    // cursor becomes the operator's start — the cursor the undo step saves,
+    // so `>>u` returns there. With a count the motion ends on a later line
+    // and the start keeps its column. `gqq` / `gww` keep it either way.
+    if count == 1
+        && !matches!(
+            op,
+            Operator::Yank | Operator::Reflow | Operator::ReflowKeepCursor
+        )
+    {
+        let (row, col) = ed.cursor();
+        move_first_non_whitespace(ed);
+        if ed.cursor().1 > col {
+            buf_set_cursor_rc(ed.buffer_mut(), row, col);
+        }
+    }
+    execute_line_op_from_cursor(ed, op, count);
+}
+
+/// `op` over `count` lines from the cursor's row, starting where the cursor
+/// stands — the Visual-line `.` repeat, which has no `nv_lineop` motion.
+pub fn execute_line_op_from_cursor<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     count: usize,

@@ -188,10 +188,18 @@ fn operate_over_motion_range<H: hjkl_engine::types::Host>(
     mut kind: RangeKind,
     word_fwd: bool,
 ) {
-    // Where the cursor is parked before the operator runs. Held separately
+    // Where the cursor is parked before the operator runs: vim's operator
+    // start, the earlier of the cursor and the motion's end, which is also the
+    // cursor the undo step saves (`<ku` / `cbx<Esc>u` return there). `gq` /
+    // `gw` keep the cursor's own (`gqku` returns to it in nvim 0.12.5), and
+    // `gw` reads the parked cursor as the one to put back. Held separately
     // from `start` because the exclusive-motion adjustment below can move the
     // range's *backward* endpoint, which must not drag the parked cursor.
-    let cursor_restore = start;
+    let cursor_restore = if matches!(op, Operator::Reflow | Operator::ReflowKeepCursor) {
+        start
+    } else {
+        start.min(end)
+    };
     // Linewise motions always cover their row when successful even if
     // `start == end` (e.g. `d_` with count 1 on a single row deletes it).
     if start == end && !matches!(kind, RangeKind::Linewise) {

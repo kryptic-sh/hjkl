@@ -184,7 +184,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                     // count and clamps it to the buffer's last line; unlike
                     // `[count]dd` it never aborts for lack of lines.
                     let fit = last_content_row(ed).saturating_sub(ed.cursor().0) + 1;
-                    execute_line_op(ed, op, lines.min(fit));
+                    execute_line_op_from_cursor(ed, op, lines.min(fit));
                     if let Some(text) = inserted {
                         replay_insert_and_finish(ed, &text);
                     }

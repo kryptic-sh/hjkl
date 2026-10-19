@@ -378,3 +378,15 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+[[cases]]
+name = "visual_line_yank_upward_leaves_the_cursor_column"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [1, 1]
+keys = "Vky"
+expected_buffer = "ab\ncd\nef"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

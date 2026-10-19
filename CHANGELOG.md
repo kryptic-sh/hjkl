@@ -43,6 +43,10 @@ patch bumps.
 
 ### Fixed
 
+- `u` after an operator puts the cursor where vim does: on the first non-blank
+  after `>>`, `dd`, `cc` or `guu`; at column 0 after `V>` or `Vjd`; at the
+  motion's end after `<k`, `cb` or `gUb`. It went back to the column from before
+  the operator. `Vky` likewise leaves the cursor in its column.
 - Key notation sent through `nvim_input` or `hjkl_input` decodes `<Esc>` and the
   other tags after a stray `<`, as nvim's `nvim_input` does: `<<$<Esc>` ends
   with Escape instead of typing `<Esc>` as text.

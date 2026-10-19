@@ -1132,14 +1132,10 @@ Seen while measuring, not `gq`:
   Visual-line only while the selection is one row; a taller `V` selection, and
   Visual-block, still take hjkl's own paths. Unmeasured how far those differ
   from vim.
-- **Cursor gaps after Visual-line operators**, on plain `V` as well as the
-  uppercase charwise forms that reuse the path (measured 2026-10-18 on
-  `"ab\ncd\nef"`, cursor (0,1) unless noted):
-  - `Vjdu`: the cursor after the undo is (1,1) in hjkl, (0,0) in nvim.
-  - `Vky` @ (1,1): nvim leaves the cursor at (0,1), hjkl at (0,0); `vjY` and
-    `Vjy` (cursor already on the top row) agree.
-  - `dj.` on the last line, where the repeat fails, moves hjkl's cursor to (0,1)
-    and leaves nvim's at (0,0).
+- **Redo after a Visual-line operator lands on the first non-blank.**
+  `Vj>u<C-r>` @ (0,4) on `"  abc\n  def\nx"`: nvim (0,0), hjkl (0,2) — on the
+  parent of the undo-cursor fix too. `>>u<C-r>` and `ddu<C-r>` agree; not looked
+  into.
 - **`.` after `x` keeps the old curswant.** `lx.j` @ (0,1) on
   `"abcd\nefgh\nijkl\nmnop"`: nvim (1,1), hjkl (1,2); `lxj` itself agrees. The
   replay of a plain `x` does not take the curswant from the cursor the way
@@ -1156,11 +1152,6 @@ Seen while measuring, not `gq`:
   `op_motion.rs` is where a zero-distance success would be added.) `<%` @ (0,21)
   on `"  'xy'  _id.A-B  'self.x'"` likewise outdents in nvim and does nothing in
   hjkl.
-- **A shift that changes nothing still records an undo step.** `<<u` @ (0,1) on
-  `"abc"`: `<<` lands both on (0,0), then hjkl's `u` puts the cursor back on
-  (0,1) while nvim, with nothing to undo, stays on (0,0). `1<Mu` @ (0,2) on
-  `"[A-B]"` the same. Found once `decode_macro` stopped hiding `<…<Esc>` keys
-  from the fuzz (2026-10-19); not looked into.
 - **Shift cursor gaps the decoder fix exposed** (difffuzz 2000 424242, measured
   2026-10-19, not looked into):
   - `<C-v>L<` @ (0,3) on `"(n1)  a.'end', (xy)"`: nothing to shift on either

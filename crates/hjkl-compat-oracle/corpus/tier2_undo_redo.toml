@@ -195,3 +195,183 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+[[cases]]
+name = "undo_after_shift_line_returns_to_first_nonblank"
+initial_buffer = "  abc\n  def\nx"
+initial_cursor = [0, 4]
+keys = ">>u"
+expected_buffer = "  abc\n  def\nx"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_counted_shift_keeps_the_column"
+initial_buffer = "  abc\n  def\nx"
+initial_cursor = [0, 4]
+keys = "2>>u"
+expected_buffer = "  abc\n  def\nx"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_dd_returns_to_first_nonblank"
+initial_buffer = "  abc\n  def\nx"
+initial_cursor = [0, 4]
+keys = "ddu"
+expected_buffer = "  abc\n  def\nx"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_guu_returns_to_first_nonblank"
+initial_buffer = "  abc\n  def\nx"
+initial_cursor = [0, 4]
+keys = "guuu"
+expected_buffer = "  abc\n  def\nx"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_shift_from_inside_indent_keeps_the_column"
+initial_buffer = "  abc\n  def\nx"
+initial_cursor = [0, 0]
+keys = ">>u"
+expected_buffer = "  abc\n  def\nx"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_gqq_keeps_the_column"
+initial_buffer = "  abc\n  def\nx"
+initial_cursor = [0, 4]
+keys = "gqqu"
+expected_buffer = "  abc\n  def\nx"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_visual_line_delete_returns_to_column_0"
+initial_buffer = "  abc\n  def\nx"
+initial_cursor = [0, 4]
+keys = "Vjdu"
+expected_buffer = "  abc\n  def\nx"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_visual_line_shift_returns_to_column_0"
+initial_buffer = "  abc\n  def\nx"
+initial_cursor = [1, 4]
+keys = "V>u"
+expected_buffer = "  abc\n  def\nx"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_upward_visual_line_shift_keeps_the_column"
+initial_buffer = "  abc\n  def\nx"
+initial_cursor = [1, 4]
+keys = "Vk>u"
+expected_buffer = "  abc\n  def\nx"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_noop_outdent_returns_to_first_nonblank"
+initial_buffer = "abc"
+initial_cursor = [0, 1]
+keys = "<<u"
+expected_buffer = "abc"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_upward_shift_returns_to_the_motion_end"
+initial_buffer = "  abc def\n  ghi jkl\nx"
+initial_cursor = [1, 6]
+keys = "<ku"
+expected_buffer = "  abc def\n  ghi jkl\nx"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_backward_change_returns_to_the_motion_end"
+initial_buffer = "  abc def\n  ghi jkl\nx"
+initial_cursor = [1, 6]
+keys = "cbZ<Esc>u"
+expected_buffer = "  abc def\n  ghi jkl\nx"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_backward_case_op_returns_to_the_motion_end"
+initial_buffer = "  abc def\n  ghi jkl\nx"
+initial_cursor = [1, 6]
+keys = "gUbu"
+expected_buffer = "  abc def\n  ghi jkl\nx"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_upward_gq_keeps_the_cursor"
+initial_buffer = "  abc def\n  ghi jkl\nx"
+initial_cursor = [1, 6]
+keys = "gqku"
+expected_buffer = "  abc def\n  ghi jkl\nx"
+expected_cursor = [1, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_visual_line_shift_repeat_keeps_the_cursor"
+initial_buffer = "  abc\n  def\nx"
+initial_cursor = [0, 4]
+keys = "V>j.u"
+expected_buffer = "      abc\n  def\nx"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

@@ -30,6 +30,15 @@ and this project adheres to
 
 ### Fixed
 
+- Operators park the cursor at vim's operator start before they run — the cursor
+  the undo step saves, so `u` returns there: the earlier of the cursor and the
+  motion's end (`operate_over_motion_range`), the earlier of the cursor and the
+  line's first non-blank for a doubled operator with no count
+  (`execute_line_op`, after `nv_lineop`), and the earlier of the cursor and
+  `(anchor, 0)` in Visual-line mode, which is also where `Vky` leaves the
+  cursor. `gq` / `gw` keep the cursor, as in vim. The Visual-line `.` repeat
+  goes through the new `execute_line_op_from_cursor`, which has no `nv_lineop`
+  step.
 - An inclusive motion that succeeds without moving operates on the cursor's
   character, as in vim: `d$` / `y$` / `c$` / `gU$` on a line's last character,
   `de` / `dE` / `d2e` at the end of the buffer, and `dtx` with `x` adjacent all

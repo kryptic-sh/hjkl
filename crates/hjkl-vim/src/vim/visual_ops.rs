@@ -50,10 +50,24 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
     let register = vim(ed).pending_register;
     match vim(ed).mode {
         Mode::VisualLine => {
-            let cursor_row = buf_cursor_pos(ed.buffer()).row;
-            let top = cursor_row.min(vim(ed).visual_line_anchor);
-            let bot = cursor_row.max(vim(ed).visual_line_anchor);
+            let (cursor_row, cursor_col) = ed.cursor();
+            let anchor_row = vim(ed).visual_line_anchor;
+            let top = cursor_row.min(anchor_row);
+            let bot = cursor_row.max(anchor_row);
             ed.set_yank_linewise(true);
+            // vim takes the Visual-line anchor at column 0, and the earlier of
+            // it and the cursor as the operator's start — the cursor the undo
+            // step saves and where a yank leaves it: `V>u` returns to
+            // (top, 0), `Vk>u` and `Vky` to the cursor. `gq` / `gw` keep the
+            // cursor.
+            let start_col = if cursor_row < anchor_row {
+                cursor_col
+            } else {
+                0
+            };
+            if !matches!(op, Operator::Reflow | Operator::ReflowKeepCursor) {
+                buf_set_cursor_rc(ed.buffer_mut(), top, start_col);
+            }
             match op {
                 Operator::Yank => {
                     let text = read_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
@@ -62,7 +76,6 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                         let target = vim_mut(ed).pending_register.take();
                         ed.record_yank(text, true, target);
                     }
-                    buf_set_cursor_rc(ed.buffer_mut(), top, 0);
                     vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Delete => {
@@ -107,9 +120,6 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                 | Operator::Lowercase
                 | Operator::ToggleCase
                 | Operator::Rot13 => {
-                    let bot = buf_cursor_pos(ed.buffer())
-                        .row
-                        .max(vim(ed).visual_line_anchor);
                     apply_case_op_to_selection(ed, op, (top, 0), (bot, 0), RangeKind::Linewise);
                     buf_set_cursor_rc(ed.buffer_mut(), top, 0);
                     record_visual_last_change(
@@ -123,8 +133,6 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                 }
                 Operator::Indent | Operator::Outdent => {
                     ed.push_undo();
-                    let (cursor_row, _) = ed.cursor();
-                    let bot = cursor_row.max(vim(ed).visual_line_anchor);
                     if op == Operator::Indent {
                         indent_rows(ed, top, bot, levels);
                     } else {
@@ -160,8 +168,6 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                 }
                 Operator::AutoIndent => {
                     ed.push_undo();
-                    let (cursor_row, _) = ed.cursor();
-                    let bot = cursor_row.max(vim(ed).visual_line_anchor);
                     auto_indent_rows(ed, top, bot);
                     vim_mut(ed).mode = Mode::Normal;
                 }
