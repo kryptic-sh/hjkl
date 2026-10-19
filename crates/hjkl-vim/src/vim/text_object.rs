@@ -7,6 +7,8 @@ use hjkl_vim_types::{RangeKind, TextObject};
 
 use hjkl_engine::rope_util::{rope_line_to_str, rope_to_lines_vec};
 
+use super::vim_buf::{VimBuf, is_vim_white, with_vim_buf};
+use super::word_object::word_text_object;
 use crate::vim_state::vim;
 use hjkl_engine::Editor;
 use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line, buf_set_cursor_rc};
@@ -672,14 +674,14 @@ pub fn sentence_step_forward<H: hjkl_engine::types::Host>(
 /// none after. Returns `(start, end)` with `end` exclusive, as every text
 /// object does. `None` only for a buffer without a single character.
 ///
-/// The walk reads lines on demand (`SentBuf`), so it costs the distance it
+/// The walk reads lines on demand (`VimBuf`), so it costs the distance it
 /// covers, not the buffer's size.
 pub fn sentence_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
     count: usize,
 ) -> Option<((usize, usize), (usize, usize))> {
-    with_sentence_buf(ed, |buf, cursor| {
+    with_vim_buf(ed, |buf, cursor| {
         buf.current_sent(cursor, inner, count.max(1))
     })
 }
@@ -695,14 +697,14 @@ pub enum VisualSentence {
 }
 
 /// Visual-mode `is` / `as` with the selection anchored at `anchor`: vim's
-/// `current_sent` with Visual active (see `SentBuf::current_sent_visual`).
+/// `current_sent` with Visual active (see `VimBuf::current_sent_visual`).
 pub fn sentence_visual<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     anchor: Pos,
     inner: bool,
     count: usize,
 ) -> Option<VisualSentence> {
-    with_sentence_buf(ed, |buf, cursor| {
+    with_vim_buf(ed, |buf, cursor| {
         buf.current_sent_visual(cursor, anchor, inner, count.max(1))
     })
 }
@@ -715,129 +717,13 @@ struct SentenceFound {
     skipped: Pos,
 }
 
-/// Run `f` over the buffer as vim's sentence code sees it ([`SentBuf`]),
-/// from the cursor clamped onto a real cell. `None` for a buffer without a
-/// single character.
-fn with_sentence_buf<H: hjkl_engine::types::Host, T>(
-    ed: &Editor<hjkl_buffer::View, H>,
-    f: impl FnOnce(&SentBuf<'_>, Pos) -> T,
-) -> Option<T> {
-    let rope = hjkl_engine::types::Query::rope(ed.buffer());
-    if rope.chars().all(|c| c == '\n') {
-        return None;
-    }
-    let line_chars = |r: usize| -> Vec<char> {
-        let start = rope.line_to_byte(r);
-        rope.byte_slice(start..start + hjkl_buffer::rope_line_bytes(&rope, r))
-            .chars()
-            .collect()
-    };
-    let buf = SentBuf::new(rope.len_lines(), &line_chars);
-    let row = ed.cursor().0.min(buf.n_lines - 1);
-    let cursor = (row, ed.cursor().1.min(buf.len(row)));
-    Some(f(&buf, cursor))
-}
-
-/// vim `ascii_iswhite`.
-fn is_vim_white(c: char) -> bool {
-    c == ' ' || c == '\t'
-}
-
 /// vim's sentence punctuation: what `findsent` backs up over.
 fn is_sentence_punct(c: char) -> bool {
     is_sentence_terminator(c) || is_sentence_closing(c)
 }
 
-/// The buffer the way vim's sentence code sees it: lines without their
-/// break, read from the rope on demand, and no phantom row after a trailing
-/// newline. A position is `(row, col)` in chars; `col == len` is the NUL at
-/// the end of the line.
-///
-/// The walk moves a character at a time, so the row it is on is cached:
-/// a character read is an index, and a line is fetched once per visit.
-struct SentBuf<'a> {
-    line_chars: &'a dyn Fn(usize) -> Vec<char>,
-    n_lines: usize,
-    line: std::cell::RefCell<Option<(usize, Vec<char>)>>,
-}
-
-impl<'a> SentBuf<'a> {
-    /// `raw_lines` counts the phantom row, as the rope does.
-    fn new(raw_lines: usize, line_chars: &'a dyn Fn(usize) -> Vec<char>) -> Self {
-        let phantom = raw_lines > 1 && line_chars(raw_lines - 1).is_empty();
-        Self {
-            line_chars,
-            n_lines: raw_lines - usize::from(phantom),
-            line: std::cell::RefCell::new(None),
-        }
-    }
-
-    fn with_line<T>(&self, row: usize, f: impl FnOnce(&[char]) -> T) -> T {
-        let mut line = self.line.borrow_mut();
-        if line.as_ref().is_none_or(|(cached, _)| *cached != row) {
-            *line = Some((row, (self.line_chars)(row)));
-        }
-        f(line.as_ref().map_or(&[], |(_, chars)| chars))
-    }
-
-    fn len(&self, row: usize) -> usize {
-        self.with_line(row, <[char]>::len)
-    }
-
-    /// vim `gchar_pos`: the character at `p`, `None` for the NUL past the
-    /// end of the line.
-    fn gchar(&self, p: Pos) -> Option<char> {
-        self.with_line(p.0, |line| line.get(p.1).copied())
-    }
-
-    /// vim `inc`: 0 moved within the line, 2 moved onto the line's NUL,
-    /// 1 moved to the next line, -1 at the end of the buffer.
-    fn inc(&self, p: &mut Pos) -> i32 {
-        let len = self.len(p.0);
-        if p.1 < len {
-            p.1 += 1;
-            return if p.1 < len { 0 } else { 2 };
-        }
-        if p.0 + 1 < self.n_lines {
-            *p = (p.0 + 1, 0);
-            return 1;
-        }
-        -1
-    }
-
-    /// vim `incl`: `inc`, skipping the NUL at the end of a non-empty line.
-    fn incl(&self, p: &mut Pos) -> i32 {
-        let mut r = self.inc(p);
-        if r >= 1 && p.1 != 0 {
-            r = self.inc(p);
-        }
-        r
-    }
-
-    /// vim `dec`: 0 within the line, 1 onto the previous line's NUL, -1 at
-    /// the start of the buffer.
-    fn dec(&self, p: &mut Pos) -> i32 {
-        if p.1 > 0 {
-            p.1 -= 1;
-            return 0;
-        }
-        if p.0 > 0 {
-            p.0 -= 1;
-            p.1 = self.len(p.0);
-            return 1;
-        }
-        -1
-    }
-
-    /// vim `decl`: `dec`, skipping the NUL at the end of a non-empty line.
-    fn decl(&self, p: &mut Pos) -> i32 {
-        let mut r = self.dec(p);
-        if r == 1 && p.1 != 0 {
-            r = self.dec(p);
-        }
-        r
-    }
-
+/// vim's sentence code, over [`VimBuf`].
+impl VimBuf<'_> {
     /// vim `startPS(lnum, NUL, false)`: an empty line or one starting with a
     /// form feed. The nroff `'paragraphs'` / `'sections'` macros (`.PP`, …)
     /// are not recognised.
@@ -1665,130 +1551,6 @@ pub fn check_and_apply_abbrev<H: hjkl_engine::types::Host>(
     buf_set_cursor_rc(ed.buffer_mut(), row, new_col);
 
     true
-}
-pub fn word_text_object<H: hjkl_engine::types::Host>(
-    ed: &Editor<hjkl_buffer::View, H>,
-    inner: bool,
-    big: bool,
-    count: usize,
-) -> Option<((usize, usize), (usize, usize))> {
-    let count = count.max(1);
-    let (row, col) = ed.cursor();
-    let line = buf_line(ed.buffer(), row)?;
-    let chars: Vec<char> = line.chars().collect();
-    if chars.is_empty() {
-        return None;
-    }
-    let len = chars.len();
-    let at = col.min(len.saturating_sub(1));
-    let classify = |c: char| -> u8 {
-        if c.is_whitespace() {
-            0
-        } else if big || is_wordchar(c) {
-            1
-        } else {
-            2
-        }
-    };
-    let cls = classify(chars[at]);
-    let mut start = at;
-    while start > 0 && classify(chars[start - 1]) == cls {
-        start -= 1;
-    }
-    let mut end = at;
-    while end + 1 < len && classify(chars[end + 1]) == cls {
-        end += 1;
-    }
-    // Columns are char indices — the convention used by the operator
-    // pipeline (`cut_vim_range` / `read_vim_range`) and the visual-mode
-    // extend path. Pre-0.33.5 this converted to BYTE offsets, which those
-    // consumers re-interpreted as char columns — `diw` / `viw` acted on
-    // the wrong span whenever the line held multibyte text.
-    let mut start_col = start;
-    // Exclusive end: char index AFTER the last-included char. Assigned in each
-    // branch below (inner / aw-on-whitespace / aw-on-word).
-    let end_col;
-    if inner {
-        // `Niw` selects N alternating runs (word / punct / whitespace), so
-        // extend the end over `count - 1` further runs.
-        let mut rem = count - 1;
-        while rem > 0 && end + 1 < len {
-            let next_kind = classify(chars[end + 1]);
-            end += 1;
-            while end + 1 < len && classify(chars[end + 1]) == next_kind {
-                end += 1;
-            }
-            rem -= 1;
-        }
-        end_col = end + 1;
-    } else if cls == 0 {
-        // `aw` with the cursor on whitespace: vim selects the whitespace run
-        // plus the FOLLOWING word (`:help aw`). `start..end` already covers the
-        // whitespace run; consume `count` following non-blank runs, including
-        // any whitespace between them.
-        let mut e = end;
-        let mut rem = count;
-        while rem > 0 && e + 1 < len {
-            // Skip whitespace to the next word (no-op right after the initial
-            // run, relevant only for count > 1).
-            while e + 1 < len && chars[e + 1].is_whitespace() {
-                e += 1;
-            }
-            if e + 1 >= len {
-                break;
-            }
-            // Consume the word (non-blank run).
-            e += 1;
-            let k = classify(chars[e]);
-            while e + 1 < len && classify(chars[e + 1]) == k {
-                e += 1;
-            }
-            rem -= 1;
-        }
-        end_col = e + 1;
-    } else {
-        // `Naw` with the cursor on a word — include N non-blank runs plus the
-        // whitespace between them, then the trailing whitespace after the last
-        // run; if the last run has no trailing whitespace, absorb the leading
-        // whitespace before the first instead (vim `:help aw`).
-        let mut e = end;
-        let mut words_done = 1;
-        let mut included_trailing = false;
-        loop {
-            let mut t = e + 1;
-            let mut got_ws = false;
-            while t < len && chars[t].is_whitespace() {
-                got_ws = true;
-                t += 1;
-            }
-            if words_done == count {
-                if got_ws {
-                    e = t - 1;
-                    included_trailing = true;
-                }
-                break;
-            }
-            if t >= len {
-                break; // no further word to include
-            }
-            // Advance onto the next non-blank run and consume it.
-            e = t;
-            let k = classify(chars[e]);
-            while e + 1 < len && classify(chars[e + 1]) == k {
-                e += 1;
-            }
-            words_done += 1;
-        }
-        end_col = e + 1;
-        if !included_trailing {
-            let mut s = start;
-            while s > 0 && chars[s - 1].is_whitespace() {
-                s -= 1;
-            }
-            start_col = s;
-        }
-    }
-    Some(((row, start_col), (row, end_col)))
 }
 pub fn quote_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,

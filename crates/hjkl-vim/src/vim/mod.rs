@@ -35,8 +35,10 @@ pub(crate) mod sneak;
 pub(crate) mod state;
 pub(crate) mod text_object;
 pub(crate) mod text_object_ops;
+pub(crate) mod vim_buf;
 pub(crate) mod visual;
 pub(crate) mod visual_ops;
+pub(crate) mod word_object;
 
 pub use hjkl_engine::abbrev::{Abbrev, AbbrevKind, AbbrevTrigger};
 pub use hjkl_engine::search::SearchPrompt;
@@ -69,6 +71,7 @@ pub(crate) use text_object::*;
 pub(crate) use text_object_ops::*;
 pub(crate) use visual::*;
 pub(crate) use visual_ops::*;
+pub(crate) use word_object::*;
 
 // The vim discipline's actual public API.
 pub use motion::parse_motion;
