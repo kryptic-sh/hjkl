@@ -591,3 +591,112 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "op_g_underscore_delete"
+initial_buffer = "abc def  \nxy z"
+initial_cursor = [0, 1]
+keys = "dg_"
+expected_buffer = "a  \nxy z"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_g_underscore_yank"
+initial_buffer = "abc def  \nxy z"
+initial_cursor = [0, 1]
+keys = "yg_"
+expected_buffer = "abc def  \nxy z"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+expected_register = ['"', "bc def"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_g_underscore_change"
+initial_buffer = "abc def  \nxy z"
+initial_cursor = [0, 1]
+keys = "cg_Z<Esc>"
+expected_buffer = "aZ  \nxy z"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_count_g_underscore_spans_lines"
+initial_buffer = "abc def  \nxy z"
+initial_cursor = [0, 1]
+keys = "d2g_"
+expected_buffer = "a"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_g_underscore_in_place"
+initial_buffer = "abc d"
+initial_cursor = [0, 4]
+keys = "dg_"
+expected_buffer = "abc "
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_g_underscore_moves_down"
+initial_buffer = "abc def  \nxy z"
+initial_cursor = [0, 1]
+keys = "2g_"
+expected_buffer = "abc def  \nxy z"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_g_underscore_on_last_line_fails"
+initial_buffer = "ab\ncd"
+initial_cursor = [1, 0]
+keys = "d2g_"
+expected_buffer = "ab\ncd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_g_line_middle_delete"
+initial_buffer = "abc def  \nxy z"
+initial_cursor = [0, 1]
+keys = "dgM"
+expected_buffer = "adef  \nxy z"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "op_g_screen_middle_delete"
+initial_buffer = "abc def  \nxy z"
+initial_cursor = [0, 1]
+keys = "dgm"
+expected_buffer = "a \nxy z"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

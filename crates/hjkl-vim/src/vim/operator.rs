@@ -252,6 +252,22 @@ pub fn gn_operate<H: hjkl_engine::types::Host>(
         Some(_) => {}
     }
 }
+/// The motion a `g`-prefixed key names after an operator (`dge`, `yg_`, …),
+/// or `None` for a key that is not a `g` motion.
+pub fn op_g_motion(ch: char) -> Option<Motion> {
+    Some(match ch {
+        'g' => Motion::FileTop,
+        'e' => Motion::WordEndBack,
+        'E' => Motion::BigWordEndBack,
+        'j' => Motion::ScreenDown,
+        'k' => Motion::ScreenUp,
+        '_' => Motion::LastNonBlank,
+        'M' => Motion::LineMiddle,
+        'm' => Motion::ScreenLineMiddle,
+        _ => return None,
+    })
+}
+
 /// Shared implementation: apply operator over a g-chord motion or case-op
 /// linewise form. Called by `Editor::apply_op_g` (the public controller API)
 /// so the hjkl-vim reducer can dispatch `ApplyOpG` without re-entering the FSM.
@@ -259,9 +275,9 @@ pub fn gn_operate<H: hjkl_engine::types::Host>(
 /// - If `op` is Uppercase/Lowercase/ToggleCase and `ch` matches the op's char
 ///   (`U`/`u`/`~`): executes the line op and updates `last_change`.
 /// - `n` / `N` operate on the search match (`dgn` / `cgn`).
-/// - Otherwise, maps `ch` to a motion (`g`→FileTop, `e`→WordEndBack,
-///   `E`→BigWordEndBack, `j`→ScreenDown, `k`→ScreenUp) and applies. Unknown
-///   chars are silently ignored (no-op), matching the engine FSM's behaviour.
+/// - Otherwise, maps `ch` to a motion through [`op_g_motion`] and applies.
+///   Unknown chars are silently ignored (no-op), matching the engine FSM's
+///   behaviour.
 pub fn apply_op_g_inner<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
@@ -299,13 +315,8 @@ pub fn apply_op_g_inner<H: hjkl_engine::types::Host>(
         gn_operate(ed, Some(op), ch == 'n', total_count);
         return;
     }
-    let motion = match ch {
-        'g' => Motion::FileTop,
-        'e' => Motion::WordEndBack,
-        'E' => Motion::BigWordEndBack,
-        'j' => Motion::ScreenDown,
-        'k' => Motion::ScreenUp,
-        _ => return, // Unknown char — no-op.
+    let Some(motion) = op_g_motion(ch) else {
+        return; // Unknown char — no-op.
     };
     let register = vim(ed).pending_register;
     apply_op_with_motion(ed, op, &motion, total_count);

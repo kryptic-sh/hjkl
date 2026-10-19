@@ -546,6 +546,29 @@ fn motion_opens_fold(motion: &Motion, count: usize, moved: bool) -> bool {
         | Motion::GotoColumn => false,
     }
 }
+/// The `cursor_down(count - 1)` that vim's `nv_dollar` and `g_` run before
+/// moving along the line; false when it fails, which aborts the command.
+/// It fails only on the last line: a count that overshoots the buffer still
+/// succeeds, clamped (`5$` on three rows lands on row 2). Without this, `2$`
+/// on a one-line buffer moved to the line end and `2C` / `2D` emptied the
+/// line, where vim does nothing at all.
+fn count_lines_down<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    count: usize,
+) -> bool {
+    if count <= 1 {
+        return true;
+    }
+    if ed.cursor().0 >= last_content_row(ed) {
+        return false;
+    }
+    let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
+    let mut sticky = ed.sticky_col();
+    let tabstop = ed.settings().tabstop;
+    hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, count - 1, &mut sticky, tabstop);
+    ed.set_sticky_col(sticky);
+    true
+}
 pub fn apply_motion_cursor<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     motion: &Motion,
@@ -705,30 +728,9 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         Motion::LineEnd => {
             // `[count]$`: move count-1 lines down, then to line end.
             // Vim normal-mode `$` lands on the last char, not one past it.
-            if count > 1 {
-                // vim's `nv_dollar` runs `cursor_down(count - 1)` first and
-                // aborts the whole command when that FAILS — which it does
-                // only on the last line. A count that overshoots the buffer
-                // still succeeds, clamped (`5$` on three rows lands on row
-                // 2). Without this, `2$` on a one-line buffer moved to the
-                // line end and `2C` / `2D` emptied the line, where vim does
-                // nothing at all.
-                if ed.cursor().0 >= last_content_row(ed) {
-                    return;
-                }
-                let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
-                let mut sticky = ed.sticky_col();
-                let tabstop = ed.settings().tabstop;
-                hjkl_engine::motions::move_down(
-                    ed.buffer_mut(),
-                    &folds,
-                    count - 1,
-                    &mut sticky,
-                    tabstop,
-                );
-                ed.set_sticky_col(sticky);
+            if count_lines_down(ed, count) {
+                hjkl_engine::motions::move_line_end(ed.buffer_mut());
             }
-            hjkl_engine::motions::move_line_end(ed.buffer_mut());
         }
         Motion::FileTop => {
             // `count gg` jumps to line `count` (first non-blank);
@@ -812,7 +814,10 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             );
         }
         Motion::LastNonBlank => {
-            hjkl_engine::motions::move_last_non_blank(ed.buffer_mut());
+            // `[count]g_`: count-1 lines down, as `$`.
+            if count_lines_down(ed, count) {
+                hjkl_engine::motions::move_last_non_blank(ed.buffer_mut());
+            }
         }
         Motion::LineMiddle => {
             let row = ed.cursor().0;

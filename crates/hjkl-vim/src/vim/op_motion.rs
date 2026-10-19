@@ -95,8 +95,9 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
 
 /// Whether `motion`, having left the cursor where it was, succeeded rather
 /// than failed — the motion layer reports no status, so each case reads it
-/// back from the buffer. Measured against nvim 0.12.5: `$` succeeds unless a
-/// count runs it off the last line (`2d$` there is a no-op); `e` / `E` at the
+/// back from the buffer. Measured against nvim 0.12.5: `$` and `g_` succeed
+/// unless a count runs them off the last line (`2d$` there is a no-op), and
+/// in place they stand on the line's last (non-blank) character; `e` / `E` at the
 /// end of the buffer succeed, counted or not; `t` / `T` succeed in place only
 /// on an adjacent target with no count and outside a `;` / `,` repeat; `ge`
 /// at the buffer start and every other motion fail.
@@ -107,7 +108,7 @@ fn succeeds_in_place<H: hjkl_engine::types::Host>(
     find_repeat: bool,
 ) -> bool {
     match *motion {
-        Motion::LineEnd => count <= 1,
+        Motion::LineEnd | Motion::LastNonBlank => count <= 1,
         Motion::WordEnd | Motion::BigWordEnd | Motion::ChangeWordEnd { .. } => true,
         Motion::Find {
             ch,
@@ -462,6 +463,8 @@ pub fn motion_kind(motion: &Motion) -> RangeKind {
         Motion::UnmatchedBracket { .. } => RangeKind::Exclusive,
         // `$` now lands on the last char — operator ranges include it.
         Motion::LineEnd => RangeKind::Inclusive,
+        // `g_` too (`:h g_`, "inclusive").
+        Motion::LastNonBlank => RangeKind::Inclusive,
         // Linewise motions: +/-/_ land on the first non-blank of a line.
         Motion::FirstNonBlankNextLine
         | Motion::FirstNonBlankPrevLine

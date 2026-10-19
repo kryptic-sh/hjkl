@@ -43,6 +43,9 @@ patch bumps.
 
 ### Fixed
 
+- `g_`, `gM` and `gm` work after an operator (`dg_`, `yg_`, `dgM`, …), where
+  they did nothing, and `[count]g_` goes down `count - 1` lines first, as in
+  vim.
 - `u` after an operator puts the cursor where vim does: on the first non-blank
   after `>>`, `dd`, `cc` or `guu`; at column 0 after `V>` or `Vjd`; at the
   motion's end after `<k`, `cb` or `gUb`. It went back to the column from before

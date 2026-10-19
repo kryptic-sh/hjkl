@@ -30,6 +30,11 @@ and this project adheres to
 
 ### Fixed
 
+- Operator-pending `g` maps `_`, `M` and `m` to `Motion::LastNonBlank`,
+  `LineMiddle` and `ScreenLineMiddle` (`op_g_motion`, now the one table that
+  `apply_op_g_inner` and `range_for_op_g_bridge` share), and `g_` is an
+  inclusive motion. `Motion::LastNonBlank` takes its count as `$` does: down
+  `count - 1` lines first, failing on the last line (`count_lines_down`).
 - Operators park the cursor at vim's operator start before they run — the cursor
   the undo step saves, so `u` returns there: the earlier of the cursor and the
   motion's end (`operate_over_motion_range`), the earlier of the cursor and the

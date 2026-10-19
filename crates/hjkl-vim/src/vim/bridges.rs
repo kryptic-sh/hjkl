@@ -506,14 +506,7 @@ pub fn range_for_op_g_bridge<H: hjkl_engine::types::Host>(
     total_count: usize,
 ) -> Option<(usize, usize)> {
     let start = ed.cursor();
-    let motion = match ch {
-        'g' => Motion::FileTop,
-        'e' => Motion::WordEndBack,
-        'E' => Motion::BigWordEndBack,
-        'j' => Motion::ScreenDown,
-        'k' => Motion::ScreenUp,
-        _ => return None,
-    };
+    let motion = op_g_motion(ch)?;
     apply_motion_cursor_ctx(ed, &motion, total_count, true);
     let end = ed.cursor();
     buf_set_cursor_rc(ed.buffer_mut(), start.0, start.1);

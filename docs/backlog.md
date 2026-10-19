@@ -1140,11 +1140,6 @@ Seen while measuring, not `gq`:
   `"abcd\nefgh\nijkl\nmnop"`: nvim (1,1), hjkl (1,2); `lxj` itself agrees. The
   replay of a plain `x` does not take the curswant from the cursor the way
   operators now do (`remember_operator_column`).
-- **`g_` does nothing under an operator.** `dg_` / `yg_` @ (0,0) on `"abc d"`:
-  nvim deletes / yanks `"abc d"`, hjkl leaves buffer and register alone, though
-  a bare `g_` lands on (0,4) in both. `d2g_` on `"ab\ncd"` likewise does nothing
-  (nvim empties the buffer, register `"ab\ncd\n"`). Looks like the `g` prefix in
-  operator-pending never routes `_`; not looked into.
 - **`d%` with no bracket on the line deletes the cursor's character in nvim.**
   `d%` @ (0,0) on `"ab"`: nvim `"b"`, register `"a"`; hjkl does nothing. Odd for
   a `%` that finds no match, so it wants reading `nv_percent` / `findmatch`
