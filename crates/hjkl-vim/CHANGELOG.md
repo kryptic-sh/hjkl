@@ -30,6 +30,11 @@ and this project adheres to
 
 ### Fixed
 
+- Insert-mode `<Up>` / `<Down>` (`insert_vertical`) take the want from the
+  cursor unless the previous Insert-mode keys were vertical — tracked by the new
+  `VimState::insert_want_current`, which `step_insert` clears for every other
+  key and `begin_insert_noundo` on entry — and land up to the line's length, not
+  its last character. `<End>` stores the MAXCOL want.
 - `remember_operator_column` takes the curswant from `Editor::cursor_want`, so
   an operator that leaves the cursor on a tab stores the tab's last cell.
 - `execute_motion` stores `usize::MAX` as the sticky column after

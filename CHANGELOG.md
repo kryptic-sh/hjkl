@@ -43,6 +43,10 @@ patch bumps.
 
 ### Fixed
 
+- Insert-mode `<Down>` / `<Up>` aim for the cursor's column after typing,
+  `<Left>`, `<Right>`, `<Home>`, `a` or `A`, as in vim, where they reused a
+  column from before; they may stand one past the line's end, and after `<End>`
+  they keep to the end of each line.
 - `j` / `k` from a tab aim for the column the cursor is drawn in, the tab's last
   cell, as in vim; they used its first, landing short on the next line.
 - `j` / `k` after `$` (or `<End>`) keep to the end of each line, as in vim,

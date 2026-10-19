@@ -12,6 +12,12 @@ pub fn step_insert<H: Host>(
     ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
 ) -> bool {
+    // vim resets curswant from the cursor on any Insert-mode cursor change but
+    // `<Up>` / `<Down>` (and `<End>`, which sets it to the line end), so only
+    // those keys keep the want the next vertical key reads.
+    if input.ctrl || !matches!(input.key, Key::Up | Key::Down | Key::End) {
+        crate::vim_state::vim_mut(ed).insert_want_current = false;
+    }
     // `Ctrl-R {reg}` paste — the previous keystroke armed the wait. Any
     // non-char key cancels (matches vim, which beeps on selectors like
     // Esc and re-emits the literal text otherwise).

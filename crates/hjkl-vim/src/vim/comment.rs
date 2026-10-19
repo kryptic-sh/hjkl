@@ -430,6 +430,7 @@ pub fn begin_insert_noundo<H: hjkl_engine::types::Host>(
         start_col: col,
     });
     vim_mut(ed).mode = Mode::Insert;
+    vim_mut(ed).insert_want_current = false;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().
     vim_mut(ed).current_mode = hjkl_engine::VimMode::Insert;
     drop_blame_if_left_normal(ed);

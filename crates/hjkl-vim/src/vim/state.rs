@@ -41,6 +41,12 @@ pub struct VimState {
     /// `t`/`T` find skips an immediately-adjacent match (vim's repeat quirk).
     /// Read and cleared by the `Motion::Find` cursor dispatch.
     pub find_repeat_skip: bool,
+    /// True while `sticky_col` is the want for the next Insert-mode `<Up>` /
+    /// `<Down>`: set by those keys and `<End>`, cleared by every other
+    /// Insert-mode key and on entering Insert. vim resets curswant from the
+    /// cursor on any other cursor change, so a clear flag means the next
+    /// vertical key takes its want from the cursor (`step_insert`).
+    pub insert_want_current: bool,
     /// Most-recent mutating command for `.` dot-repeat.
     pub last_change: Option<LastChange>,
     /// Captured on insert-mode entry: count, buffer snapshot, entry kind.

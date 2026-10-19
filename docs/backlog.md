@@ -1146,11 +1146,6 @@ Seen while measuring, not `gq`:
   `Vj>u<C-r>` @ (0,4) on `"  abc\n  def\nx"`: nvim (0,0), hjkl (0,2) — on the
   parent of the undo-cursor fix too. `>>u<C-r>` and `ddu<C-r>` agree; not looked
   into.
-- **Insert-mode `<Down>` / `<Up>` after `<Right>` lose the column.**
-  `i<Right><Down>` @ (0,0) on `"a\tb\nxxxxxxxxxx"`: nvim (1,1), hjkl (1,0) — on
-  the parent of the tab-curswant fix too (2026-10-20). The arrow keys in
-  `insert_bridges.rs` read `sticky_col`; whether `<Right>` updates it there was
-  not looked at.
 - **`d%` with no bracket on the line deletes the cursor's character in nvim.**
   `d%` @ (0,0) on `"ab"`: nvim `"b"`, register `"a"`; hjkl does nothing. Odd for
   a `%` that finds no match, so it wants reading `nv_percent` / `findmatch`

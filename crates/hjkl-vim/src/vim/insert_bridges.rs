@@ -591,23 +591,40 @@ pub fn insert_arrow_bridge<H: hjkl_engine::types::Host>(
         InsertDir::Right => {
             hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
         }
-        InsertDir::Up => {
-            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
-            let mut sticky = ed.sticky_col();
-            let tabstop = ed.settings().tabstop;
-            hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky, tabstop);
-            ed.set_sticky_col(sticky);
-        }
-        InsertDir::Down => {
-            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
-            let mut sticky = ed.sticky_col();
-            let tabstop = ed.settings().tabstop;
-            hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, 1, &mut sticky, tabstop);
-            ed.set_sticky_col(sticky);
-        }
+        InsertDir::Up | InsertDir::Down => insert_vertical(ed, dir == InsertDir::Down),
     }
     break_undo_group_in_insert(ed);
     false
+}
+/// Insert-mode `<Down>` / `<Up>`. The want is the sticky column only while
+/// the previous Insert-mode keys were vertical (`insert_want_current`);
+/// otherwise it comes from the cursor, as vim resets curswant on every other
+/// cursor change. Insert mode may stand one past the last character, so the
+/// landing column is clamped to the line length, not its last character.
+fn insert_vertical<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>, down: bool) {
+    let (start_row, col) = ed.cursor();
+    if !vim(ed).insert_want_current {
+        let want = ed.cursor_want(start_row, col);
+        ed.set_sticky_col(Some(want));
+    }
+    vim_mut(ed).insert_want_current = true;
+    let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
+    let mut sticky = ed.sticky_col();
+    let tabstop = ed.settings().tabstop;
+    if down {
+        hjkl_engine::motions::move_down(ed.buffer_mut(), &folds, 1, &mut sticky, tabstop);
+    } else {
+        hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky, tabstop);
+    }
+    ed.set_sticky_col(sticky);
+    let row = ed.cursor().0;
+    if row != start_row {
+        let line = buf_line(ed.buffer(), row).unwrap_or_default();
+        let want = sticky.unwrap_or_default();
+        let col =
+            hjkl_buffer::visual_col_to_char_col(&line, want, tabstop).min(line.chars().count());
+        buf_set_cursor_rc(ed.buffer_mut(), row, col);
+    }
 }
 /// Move the cursor to the start of the current line, breaking the undo group.
 /// Clears the autopair pending-closes stack. Returns `false` (no mutation).
@@ -628,6 +645,10 @@ pub fn insert_end_bridge<H: hjkl_engine::types::Host>(
     ed.sync_buffer_content_from_textarea();
     ed.pending_closes_mut().clear();
     hjkl_engine::motions::move_line_end(ed.buffer_mut());
+    // vim's `<End>` sets curswant to MAXCOL, so `<Down>` after it keeps to
+    // the end of each line.
+    ed.set_sticky_col(Some(usize::MAX));
+    vim_mut(ed).insert_want_current = true;
     break_undo_group_in_insert(ed);
     false
 }
