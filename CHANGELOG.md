@@ -8,6 +8,12 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- In Visual-block mode, `gg` and `G` move the block's column to where they land,
+  as in vim: `<C-v>Gd` deletes from column 0 to the starting column on every
+  line, where hjkl kept only the starting column.
+
 ## [0.43.0] - 2026-10-20
 
 ### Changed (BREAKING)

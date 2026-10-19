@@ -34,6 +34,8 @@ and this project adheres to
 
 ### Fixed
 
+- `update_block_vcol` moves `block_vcol` (and clears the ragged-`$` flag) for
+  `Motion::FileTop` and `FileBottom`, which reset vim's curswant.
 - `quote_text_object` takes the count: with 2 or more, `i<q>` covers the quotes
   but none of `a<q>`'s white space (`:h i"`).
 - `cut_vim_range` with an inclusive end on a line's NUL stops at the end of that

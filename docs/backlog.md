@@ -1153,10 +1153,28 @@ Seen while measuring, not `gq`:
   `op_motion.rs` is where a zero-distance success would be added.) `<%` @ (0,21)
   on `"  'xy'  _id.A-B  'self.x'"` likewise outdents in nvim and does nothing in
   hjkl.
-- **A Visual-block shift with nothing to shift leaves the cursor.** `<C-v>L<` @
-  (0,3) on `"(n1)  a.'end', (xy)"` (difffuzz 2000 424242, measured 2026-10-19):
-  nvim's cursor goes to (0,0), hjkl's stays on (0,3). `<C-v>l<` @ (0,4) on
-  `"abc def"` agrees. Not looked into.
+- **Visual-block `H` / `M` / `L` keep the block's column; a corpus case pins it.
+  Needs a decision.** In nvim 0.12.5, `<C-v>Ld` / `<C-v>Hd` @ (0,3) on
+  `"ab cd\nef gh\nij"` take columns 0–3 (register `"ab c\nef g\nij"`), and
+  `<C-v>L<` @ (0,3) on `"(n1)  a.'end', (xy)"` leaves the cursor on (0,0); hjkl
+  keeps column 3. Adding `ViewportTop` / `ViewportMiddle` / `ViewportBottom` to
+  `update_block_vcol`'s syncing arm (as `FileTop` / `FileBottom` now are) fixes
+  all three — but fails `blockwise_is_anchor_below_via_H_keeps_block_mode` and
+  `blockwise_as_anchor_below_via_H_keeps_block_mode`
+  (`tier2_block_textobj.toml`), which expect (4,5) / (4,4) for `<C-v>His` /
+  `<C-v>Has` @ (25,6) on 30 lines of `"aaa. bbb."`. Live nvim 0.12.5 through
+  `dfcase` gives (3,5) for `<C-v>His` — what the change produces — while the
+  parent build gives the corpus's (4,5). Either the case was recorded under
+  different conditions (other corpus comments cite nvim 0.12.4) or `dfcase`'s
+  setup differs from the corpus run; settle which before changing the case or
+  the code. The reverse block-sentence probe in `visual_text_obj_extend_counted`
+  (`editor_ext.rs`) reads `block_vcol` and documents relying on `H` keeping it.
+- **A Visual block taken down onto a shorter line keeps the wrong columns.**
+  `<C-v>jjd` @ (0,3) on `"ab cd\nef gh\nij"`: nvim deletes columns 2–3 from the
+  first two lines (register `" c\n g\n"`), hjkl columns 3 only plus a stray
+  space (`"c\ng\n "`). The cursor clamps to `"ij"`'s last column on the way; why
+  vim's block then starts at column 2 was not worked out. Measured 2026-10-20;
+  not looked into.
 - **`.` after a multi-line charwise `vd` replays the wrong range.** `vjd.` @
   (0,1) on `"abc\nd\n\ncd"`: nvim `""`, hjkl `"acd"` (register `"\n\n"` against
   nvim's `"a\ncd"`). Present on the parent build too; not looked at.

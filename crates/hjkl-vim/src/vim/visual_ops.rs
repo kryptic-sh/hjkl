@@ -411,12 +411,17 @@ pub fn update_block_vcol<H: hjkl_engine::types::Host>(
         | Motion::WordAtCursor { .. }
         | Motion::Find { .. }
         | Motion::FindRepeat { .. }
-        | Motion::MatchBracket => {
+        | Motion::MatchBracket
+        // `gg` / `G` reset vim's curswant to where they land, so the block's
+        // column follows them: `<C-v>Gd` takes columns 0 to the anchor's.
+        // `H` / `M` / `L` would too by the same measurement, but a corpus
+        // case pins the old column for them (see `docs/backlog.md`).
+        | Motion::FileTop
+        | Motion::FileBottom => {
             vim_mut(ed).block_vcol = ed.cursor().1;
             vim_mut(ed).block_to_eol = false;
         }
-        // Up / Down / FileTop / FileBottom / Search — preserve vcol AND
-        // the ragged flag.
+        // Up / Down / Search — preserve vcol AND the ragged flag.
         _ => {}
     }
 }

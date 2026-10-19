@@ -806,3 +806,39 @@ expected_cursor = [0, 2]
 expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
+
+[[cases]]
+name = "block_file_bottom_resets_the_block_column"
+initial_buffer = "ab cd\nef gh\nij"
+initial_cursor = [0, 3]
+keys = "<C-v>Gd"
+expected_buffer = "d\nh\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_file_top_after_bottom_shift_cursor"
+initial_buffer = "ab cd\nef gh\nij"
+initial_cursor = [0, 3]
+keys = "<C-v>Ggg<"
+expected_buffer = "ab cd\nef gh\nij"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_down_keeps_the_block_column"
+initial_buffer = "ab cd\nef gh\nij"
+initial_cursor = [0, 3]
+keys = "<C-v>jd"
+expected_buffer = "ab d\nef h\nij"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
