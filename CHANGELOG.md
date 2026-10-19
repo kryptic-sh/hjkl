@@ -43,6 +43,13 @@ patch bumps.
 
 ### Fixed
 
+- The word text objects (`iw`, `aw`, `iW`, `aW`) follow vim: in Visual mode a
+  wider selection grows by whole words from the cursor's end (`vlaw`, `vawaw`,
+  `vhaw`), counts cross lines (`d3aw`), `diw` on an empty line does nothing, and
+  a delete from an empty line or across lines can take whole lines. A count with
+  too few words leaves the cursor where it ran out.
+- Leaving Visual mode with `<Esc>` puts the cursor back on the line's last
+  character when the selection stood past it (`5v<Esc>`).
 - Insert-mode `<Down>` / `<Up>` aim for the cursor's column after typing,
   `<Left>`, `<Right>`, `<Home>`, `a` or `A`, as in vim, where they reused a
   column from before; they may stand one past the line's end, and after `<End>`

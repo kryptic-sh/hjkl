@@ -435,6 +435,9 @@ pub fn jump_forward_bridge<H: hjkl_engine::types::Host>(
 }
 pub fn force_normal_bridge<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     vim_mut(ed).force_normal();
+    // Visual may stand on a line's NUL (`5v`, a word object that ran out of
+    // words); Normal mode puts the cursor back on the last character.
+    clamp_cursor_to_normal_mode(ed);
 }
 pub fn mouse_click_doc_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,

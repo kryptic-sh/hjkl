@@ -30,6 +30,14 @@ and this project adheres to
 
 ### Fixed
 
+- `word_text_object` is a port of vim's `current_word` and its word motions
+  (`fwd_word`, `bck_word`, `end_word`, `bckend_word`) over `VimBuf`, replacing
+  the single-line scan; Visual-mode word objects go through the new
+  `word_visual`, as sentences go through `sentence_visual` (the shared result
+  type is now `VisualTextObject`). `op_delete`'s linewise promotion
+  (`delete_goes_linewise`) now covers text objects as well as motions, and
+  `force_normal_bridge` / `exit_visual_to_normal_bridge` clamp the cursor onto
+  the last character.
 - Insert-mode `<Up>` / `<Down>` (`insert_vertical`) take the want from the
   cursor unless the previous Insert-mode keys were vertical — tracked by the new
   `VimState::insert_want_current`, which `step_insert` clears for every other

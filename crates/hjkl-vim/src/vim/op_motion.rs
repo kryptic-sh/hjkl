@@ -312,34 +312,10 @@ fn operate_over_motion_range<H: hjkl_engine::types::Host>(
             }
         }
     }
-    // Vim's "strange Vi behaviour" in `op_delete()`: a charwise DELETE that
-    // spans more than one line, whose range ends with nothing but whitespace
-    // left on the last line and whose start sits in the leading indent, is
-    // promoted to linewise — so `d}` over the final paragraph removes those
-    // rows outright instead of leaving an empty one behind, and the register
-    // gets linewise content. Delete only; `y}` / `c}` keep their charwise
-    // range, which is why this is not folded into the adjustment above.
-    if op == Operator::Delete && kind != RangeKind::Linewise {
-        let (top, bot) = order(start, end);
-        if bot.0 > top.0 {
-            let bot_line = buf_line(ed.buffer(), bot.0).unwrap_or_default();
-            let bot_chars: Vec<char> = bot_line.chars().collect();
-            let mut idx = bot.1;
-            if idx < bot_chars.len() && kind == RangeKind::Inclusive {
-                idx += 1;
-            }
-            let tail_blank = bot_chars[idx.min(bot_chars.len())..]
-                .iter()
-                .all(|c| *c == ' ' || *c == '\t');
-            let indent = buf_line(ed.buffer(), top.0)
-                .unwrap_or_default()
-                .chars()
-                .take_while(|c| *c == ' ' || *c == '\t')
-                .count();
-            if tail_blank && top.1 <= indent {
-                kind = RangeKind::Linewise;
-            }
-        }
+    // Delete only; `y}` / `c}` keep their charwise range, which is why this is
+    // not folded into the adjustment above.
+    if delete_goes_linewise(ed, op, start, end, kind) {
+        kind = RangeKind::Linewise;
     }
     // Restore cursor before selecting (so Yank leaves cursor at start).
     ed.jump_cursor(cursor_restore.0, cursor_restore.1);
@@ -398,6 +374,43 @@ pub fn last_word_end_before<H: hjkl_engine::types::Host>(
     }
     None
 }
+/// Vim's "strange Vi behaviour" in `op_delete()`: a charwise DELETE that
+/// spans more than one line, whose range ends with nothing but whitespace left
+/// on the last line and whose start sits in the leading indent, is promoted to
+/// linewise — so `d}` over the final paragraph removes those rows outright
+/// instead of leaving an empty one behind, and the register gets linewise
+/// content. It lives in `op_delete`, so motions and text objects (`2daw` from
+/// an empty line) both get it.
+fn delete_goes_linewise<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    op: Operator,
+    start: (usize, usize),
+    end: (usize, usize),
+    kind: RangeKind,
+) -> bool {
+    if op != Operator::Delete || kind == RangeKind::Linewise {
+        return false;
+    }
+    let (top, bot) = order(start, end);
+    if bot.0 <= top.0 {
+        return false;
+    }
+    let bot_line = buf_line(ed.buffer(), bot.0).unwrap_or_default();
+    let bot_chars: Vec<char> = bot_line.chars().collect();
+    let mut idx = bot.1;
+    if idx < bot_chars.len() && kind == RangeKind::Inclusive {
+        idx += 1;
+    }
+    let tail_blank = bot_chars[idx.min(bot_chars.len())..]
+        .iter()
+        .all(|c| *c == ' ' || *c == '\t');
+    let indent = buf_line(ed.buffer(), top.0)
+        .unwrap_or_default()
+        .chars()
+        .take_while(|c| *c == ' ' || *c == '\t')
+        .count();
+    tail_blank && top.1 <= indent
+}
 pub fn apply_op_with_text_object<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
@@ -409,6 +422,14 @@ pub fn apply_op_with_text_object<H: hjkl_engine::types::Host>(
     // count ceiling (`:h count`).
     let count = count.min(MAX_COUNT);
     let Some((mut start, mut end, mut kind)) = text_object_range(ed, obj, inner, count) else {
+        // A word object that runs out of words cancels the operator but
+        // leaves the cursor where vim's walk stopped.
+        if let TextObject::Word { big } = obj
+            && let Some((row, col)) = word_object_stop(ed, inner, big, count)
+        {
+            ed.jump_cursor(row, col);
+            clamp_cursor_to_normal_mode(ed);
+        }
         return;
     };
     // vim's exclusive-motion adjustment (`:h exclusive`), applied to the
@@ -440,6 +461,23 @@ pub fn apply_op_with_text_object<H: hjkl_engine::types::Host>(
             end = (prev, prev_len.saturating_sub(1));
             kind = RangeKind::Inclusive;
         }
+    }
+    // vim pulls an exclusive end in column 0 back onto the previous line
+    // (`:h exclusive`) before `op_delete` looks at it, so `das` that stops at
+    // a blank line is a one-line delete; judge the promotion on that end.
+    let (judged_end, judged_kind) = if kind == RangeKind::Exclusive && end.1 == 0 && end.0 > start.0
+    {
+        let prev = end.0 - 1;
+        let last = buf_line_chars(ed.buffer(), prev).saturating_sub(1);
+        ((prev, last), RangeKind::Inclusive)
+    } else {
+        (end, kind)
+    };
+    if delete_goes_linewise(ed, op, start, judged_end, judged_kind) {
+        // The rows are the adjusted range's: the column-0 end's own row is
+        // not part of it.
+        end = judged_end;
+        kind = RangeKind::Linewise;
     }
     ed.jump_cursor(start.0, start.1);
     run_operator_over_range(ed, op, start, end, kind);

@@ -143,6 +143,9 @@ pub fn exit_visual_to_normal_bridge<H: hjkl_engine::types::Host>(
     vim_mut(ed).count = 0;
     vim_mut(ed).insert_session = None;
     set_vim_mode_bridge(ed, Mode::Normal);
+    // The snapshot above keeps a cursor on the NUL for `gv`; Normal mode
+    // itself stands on the last character.
+    clamp_cursor_to_normal_mode(ed);
     // Set `<` / `>` marks and stash `last_visual` — the same epilogue the FSM
     // runs when it detects a visual → non-visual transition, sharing the mark
     // math via `visual_marks_range`.

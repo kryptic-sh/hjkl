@@ -1186,9 +1186,15 @@ Seen while measuring, not `gq`:
   nvim's cursor on (1,8), hjkl's on (1,7), and `v$jd` leaves hjkl an empty first
   line where nvim joins (measured 2026-10-19). The Visual vertical motions
   (`Move::Vertical`) clamp to the last character in every mode.
-- **`vlaw` extends to the wrong end.** `vlaw<Esc>` then `` `> `` @ (0,0) on
-  `"ab cd"`: nvim (0,4), hjkl (0,2) — the word object's Visual-extend path, the
-  same gap the sentence object had; not looked at.
+- **Text-object operators skip vim's column-0 exclusive adjustment.** vim's
+  `do_pending_operator` pulls an exclusive end in column 0 of a later line back
+  onto the previous line's end, turning the motion inclusive or, with the start
+  in the indent, linewise (`:h exclusive-linewise`). `apply_op_with_text_object`
+  (`op_motion.rs`) applies that only to inner bracket objects; for the others it
+  only uses the adjusted end to decide `op_delete`'s linewise promotion
+  (`delete_goes_linewise`). Buffers already match on the measured cases (`das`
+  stopping at a blank line), but the register type of such a delete (charwise in
+  hjkl, possibly linewise in vim) was not compared.
 
 - **`Vp` with an EMPTY register over the whole buffer leaves `"\n"`.** nvim
   leaves `""` (difffuzz `V)p` on `"[xy].[foo]"`, `Vapp` on `""`): with nothing

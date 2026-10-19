@@ -686,9 +686,10 @@ pub fn sentence_text_object<H: hjkl_engine::types::Host>(
     })
 }
 
-/// What Visual-mode `is` / `as` does to the selection.
+/// What a Visual-mode text object ported from vim (`is` / `as`, `iw` / `aw`)
+/// does to the selection.
 #[derive(Debug, PartialEq, Eq)]
-pub enum VisualSentence {
+pub enum VisualTextObject {
     /// Select the object afresh, charwise: anchor and cursor, inclusive.
     Select(Pos, Pos),
     /// Extend the selection: the cursor lands here, the anchor and the
@@ -703,7 +704,7 @@ pub fn sentence_visual<H: hjkl_engine::types::Host>(
     anchor: Pos,
     inner: bool,
     count: usize,
-) -> Option<VisualSentence> {
+) -> Option<VisualTextObject> {
     with_vim_buf(ed, |buf, cursor| {
         buf.current_sent_visual(cursor, anchor, inner, count.max(1))
     })
@@ -881,19 +882,19 @@ impl VimBuf<'_> {
         anchor: Pos,
         inner: bool,
         count: usize,
-    ) -> VisualSentence {
+    ) -> VisualTextObject {
         if anchor != cursor {
             let next = self.findsent(cursor, true, 1).unwrap_or(cursor);
             let landing = self.current_sent_extend(cursor, cursor, next, anchor, inner, count);
-            return VisualSentence::Extend(landing);
+            return VisualTextObject::Extend(landing);
         }
         let found = self.current_sent_found(cursor, inner, count);
         if found.start == found.last {
             let landing =
                 self.current_sent_extend(cursor, found.skipped, found.last, anchor, inner, count);
-            return VisualSentence::Extend(landing);
+            return VisualTextObject::Extend(landing);
         }
-        VisualSentence::Select(found.start, found.last)
+        VisualTextObject::Select(found.start, found.last)
     }
 
     /// The body of vim `current_sent` outside the extend path: the object's

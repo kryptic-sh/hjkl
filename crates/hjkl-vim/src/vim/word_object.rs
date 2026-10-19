@@ -1,130 +1,404 @@
-//! The `iw` / `aw` / `iW` / `aW` word text objects.
+//! The `iw` / `aw` / `iW` / `aW` word text objects: vim's `current_word`
+//! (`textobject.c`) and the word motions it walks with (`fwd_word`,
+//! `bck_word`, `end_word`, `bckend_word`), ported over [`VimBuf`]. vim's
+//! closed-fold steps (`hasFolding`) are not ported.
 
-use super::text_object::is_wordchar;
+use super::text_object::{Pos, VisualTextObject, is_wordchar};
+use super::vim_buf::{VimBuf, with_vim_buf};
 use hjkl_engine::Editor;
-use hjkl_engine::buf_helpers::buf_line;
 
+/// `iw` / `aw` (`big`: `iW` / `aW`) for an operator: `(start, end)` with
+/// `end` exclusive. `None` when vim's `current_word` fails, and for a buffer
+/// without a single character.
 pub fn word_text_object<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     inner: bool,
     big: bool,
     count: usize,
-) -> Option<((usize, usize), (usize, usize))> {
-    let count = count.max(1);
-    let (row, col) = ed.cursor();
-    let line = buf_line(ed.buffer(), row)?;
-    let chars: Vec<char> = line.chars().collect();
-    if chars.is_empty() {
-        return None;
-    }
-    let len = chars.len();
-    let at = col.min(len.saturating_sub(1));
-    let classify = |c: char| -> u8 {
-        if c.is_whitespace() {
-            0
-        } else if big || is_wordchar(c) {
-            1
+) -> Option<(Pos, Pos)> {
+    with_vim_buf(ed, |buf, cursor| {
+        let words = Words { buf, big };
+        let (found, ok) = words.current_word(cursor, None, !inner, count.max(1));
+        ok.then(|| (found.start, words.exclusive_end(&found)))
+    })
+    .flatten()
+}
+
+/// Where an operator's `iw` / `aw` that FAILs leaves the cursor: vim's
+/// `current_word` moves it as it walks, so `d9aw` with fewer words cancels
+/// the delete but still moves the cursor. `None` when the object succeeds.
+pub fn word_object_stop<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    inner: bool,
+    big: bool,
+    count: usize,
+) -> Option<Pos> {
+    with_vim_buf(ed, |buf, cursor| {
+        let words = Words { buf, big };
+        let (found, ok) = words.current_word(cursor, None, !inner, count.max(1));
+        (!ok).then_some(found.cursor)
+    })
+    .flatten()
+}
+
+/// Visual-mode `iw` / `aw` with the selection anchored at `anchor`: vim's
+/// `current_word` with Visual active. A one-character selection selects the
+/// object afresh; a wider one extends from the cursor's end of it. vim moves
+/// the cursor as it goes, so a count that runs out of words still leaves the
+/// selection where the walk stopped (`v3aw` on `"a b"` ends on the `b`).
+pub fn word_visual<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    anchor: Pos,
+    inner: bool,
+    big: bool,
+    count: usize,
+) -> Option<VisualTextObject> {
+    with_vim_buf(ed, |buf, cursor| {
+        let words = Words { buf, big };
+        let (found, _) = words.current_word(cursor, Some(anchor), !inner, count.max(1));
+        if anchor == cursor {
+            VisualTextObject::Select(found.start, found.cursor)
         } else {
-            2
+            VisualTextObject::Extend(found.cursor)
         }
-    };
-    let cls = classify(chars[at]);
-    let mut start = at;
-    while start > 0 && classify(chars[start - 1]) == cls {
-        start -= 1;
-    }
-    let mut end = at;
-    while end + 1 < len && classify(chars[end + 1]) == cls {
-        end += 1;
-    }
-    // Columns are char indices — the convention used by the operator
-    // pipeline (`cut_vim_range` / `read_vim_range`) and the visual-mode
-    // extend path. Pre-0.33.5 this converted to BYTE offsets, which those
-    // consumers re-interpreted as char columns — `diw` / `viw` acted on
-    // the wrong span whenever the line held multibyte text.
-    let mut start_col = start;
-    // Exclusive end: char index AFTER the last-included char. Assigned in each
-    // branch below (inner / aw-on-whitespace / aw-on-word).
-    let end_col;
-    if inner {
-        // `Niw` selects N alternating runs (word / punct / whitespace), so
-        // extend the end over `count - 1` further runs.
-        let mut rem = count - 1;
-        while rem > 0 && end + 1 < len {
-            let next_kind = classify(chars[end + 1]);
-            end += 1;
-            while end + 1 < len && classify(chars[end + 1]) == next_kind {
-                end += 1;
-            }
-            rem -= 1;
+    })
+}
+
+/// What `current_word` leaves behind: the object's start (vim's `oap->start`
+/// or `VIsual`), the cursor at its end, and whether that end is inclusive.
+struct Found {
+    start: Pos,
+    cursor: Pos,
+    inclusive: bool,
+}
+
+/// vim's word code for one `iw` / `iW` flavour (`cls_bigword`).
+struct Words<'b, 'a> {
+    buf: &'b VimBuf<'a>,
+    big: bool,
+}
+
+impl Words<'_, '_> {
+    /// vim `cls`: 0 for blank (or the NUL past a line's end), 1 for
+    /// punctuation, 2 for a keyword character; a `W` object counts every
+    /// non-blank as 1.
+    fn cls(&self, p: Pos) -> u8 {
+        match self.buf.gchar(p) {
+            None | Some(' ' | '\t') => 0,
+            Some(c) if !c.is_ascii() && c.is_whitespace() => 0,
+            Some(_) if self.big => 1,
+            Some(c) if is_wordchar(c) => 2,
+            Some(_) => 1,
         }
-        end_col = end + 1;
-    } else if cls == 0 {
-        // `aw` with the cursor on whitespace: vim selects the whitespace run
-        // plus the FOLLOWING word (`:help aw`). `start..end` already covers the
-        // whitespace run; consume `count` following non-blank runs, including
-        // any whitespace between them.
-        let mut e = end;
-        let mut rem = count;
-        while rem > 0 && e + 1 < len {
-            // Skip whitespace to the next word (no-op right after the initial
-            // run, relevant only for count > 1).
-            while e + 1 < len && chars[e + 1].is_whitespace() {
-                e += 1;
-            }
-            if e + 1 >= len {
+    }
+
+    fn line_empty(&self, row: usize) -> bool {
+        self.buf.len(row) == 0
+    }
+
+    /// vim `oneleft` outside virtual editing: false at column 0.
+    fn oneleft(p: &mut Pos) -> bool {
+        if p.1 == 0 {
+            return false;
+        }
+        p.1 -= 1;
+        true
+    }
+
+    /// vim `back_in_line`: back to the start of the word or white space
+    /// under `p`, within the line.
+    fn back_in_line(&self, p: &mut Pos) {
+        let sclass = self.cls(*p);
+        while p.1 > 0 {
+            self.buf.dec(p);
+            if self.cls(*p) != sclass {
+                self.buf.inc(p);
                 break;
             }
-            // Consume the word (non-blank run).
-            e += 1;
-            let k = classify(chars[e]);
-            while e + 1 < len && classify(chars[e + 1]) == k {
-                e += 1;
-            }
-            rem -= 1;
         }
-        end_col = e + 1;
-    } else {
-        // `Naw` with the cursor on a word — include N non-blank runs plus the
-        // whitespace between them, then the trailing whitespace after the last
-        // run; if the last run has no trailing whitespace, absorb the leading
-        // whitespace before the first instead (vim `:help aw`).
-        let mut e = end;
-        let mut words_done = 1;
-        let mut included_trailing = false;
-        loop {
-            let mut t = e + 1;
-            let mut got_ws = false;
-            while t < len && chars[t].is_whitespace() {
-                got_ws = true;
-                t += 1;
+    }
+
+    /// vim `skip_chars`: past a run of class `cclass`; true at a buffer edge.
+    fn skip_chars(&self, p: &mut Pos, cclass: u8, forward: bool) -> bool {
+        while self.cls(*p) == cclass {
+            let r = if forward {
+                self.buf.inc(p)
+            } else {
+                self.buf.dec(p)
+            };
+            if r == -1 {
+                return true;
             }
-            if words_done == count {
-                if got_ws {
-                    e = t - 1;
-                    included_trailing = true;
+        }
+        false
+    }
+
+    /// vim `fwd_word`: `count` words forward; with `eol` the last word stops
+    /// at the end of its line. False (`FAIL`) when `p` started on the last
+    /// character of the buffer.
+    fn fwd_word(&self, p: &mut Pos, mut count: usize, eol: bool) -> bool {
+        while count > 0 {
+            count -= 1;
+            let sclass = self.cls(*p);
+            let last_line = p.0 + 1 == self.buf.n_lines;
+            let i = self.buf.inc(p);
+            if i == -1 || (i >= 1 && last_line) {
+                return false;
+            }
+            if i >= 1 && eol && count == 0 {
+                return true;
+            }
+            if sclass != 0 {
+                while self.cls(*p) == sclass {
+                    let i = self.buf.inc(p);
+                    if i == -1 || (i >= 1 && eol && count == 0) {
+                        return true;
+                    }
                 }
-                break;
             }
-            if t >= len {
-                break; // no further word to include
+            // An empty line counts as a word.
+            while self.cls(*p) == 0 {
+                if p.1 == 0 && self.line_empty(p.0) {
+                    break;
+                }
+                let i = self.buf.inc(p);
+                if i == -1 || (i >= 1 && eol && count == 0) {
+                    return true;
+                }
             }
-            // Advance onto the next non-blank run and consume it.
-            e = t;
-            let k = classify(chars[e]);
-            while e + 1 < len && classify(chars[e + 1]) == k {
-                e += 1;
-            }
-            words_done += 1;
         }
-        end_col = e + 1;
-        if !included_trailing {
-            let mut s = start;
-            while s > 0 && chars[s - 1].is_whitespace() {
-                s -= 1;
+        true
+    }
+
+    /// vim `bck_word`: `count` words back; with `stop`, a cursor already on
+    /// a word's start moves one less. False at the start of the buffer.
+    fn bck_word(&self, p: &mut Pos, mut count: usize, mut stop: bool) -> bool {
+        while count > 0 {
+            count -= 1;
+            let sclass = self.cls(*p);
+            if self.buf.dec(p) == -1 {
+                return false;
             }
-            start_col = s;
+            'finished: {
+                if !stop || sclass == self.cls(*p) || sclass == 0 {
+                    while self.cls(*p) == 0 {
+                        if p.1 == 0 && self.line_empty(p.0) {
+                            break 'finished;
+                        }
+                        if self.buf.dec(p) == -1 {
+                            return true;
+                        }
+                    }
+                    if self.skip_chars(p, self.cls(*p), false) {
+                        return true;
+                    }
+                }
+                // Overshot: forward one.
+                self.buf.inc(p);
+            }
+            stop = false;
+        }
+        true
+    }
+
+    /// vim `end_word`: to the end of `count` words; with `stop`, a cursor
+    /// already on a word's end moves one less, and with `empty` an empty
+    /// line stops it. False at the end of the buffer.
+    fn end_word(&self, p: &mut Pos, mut count: usize, mut stop: bool, empty: bool) -> bool {
+        while count > 0 {
+            count -= 1;
+            let sclass = self.cls(*p);
+            if self.buf.inc(p) == -1 {
+                return false;
+            }
+            'finished: {
+                if self.cls(*p) == sclass && sclass != 0 {
+                    if self.skip_chars(p, sclass, true) {
+                        return false;
+                    }
+                } else if !stop || sclass == 0 {
+                    while self.cls(*p) == 0 {
+                        if p.1 == 0 && self.line_empty(p.0) && empty {
+                            break 'finished;
+                        }
+                        if self.buf.inc(p) == -1 {
+                            return false;
+                        }
+                    }
+                    if self.skip_chars(p, self.cls(*p), true) {
+                        return false;
+                    }
+                }
+                // Overshot: back one.
+                self.buf.dec(p);
+            }
+            stop = false;
+        }
+        true
+    }
+
+    /// vim `bckend_word`: back to the end of `count` previous words; with
+    /// `eol`, stops at a line's end. False at the start of the buffer.
+    fn bckend_word(&self, p: &mut Pos, mut count: usize, eol: bool) -> bool {
+        while count > 0 {
+            count -= 1;
+            let sclass = self.cls(*p);
+            let i = self.buf.dec(p);
+            if i == -1 {
+                return false;
+            }
+            if eol && i == 1 {
+                return true;
+            }
+            if sclass != 0 {
+                while self.cls(*p) == sclass {
+                    let i = self.buf.dec(p);
+                    if i == -1 || (eol && i == 1) {
+                        return true;
+                    }
+                }
+            }
+            while self.cls(*p) == 0 {
+                if p.1 == 0 && self.line_empty(p.0) {
+                    break;
+                }
+                let i = self.buf.dec(p);
+                if i == -1 || (eol && i == 1) {
+                    return true;
+                }
+            }
+        }
+        true
+    }
+
+    /// vim `current_word`: `count` words (`include`: with their white
+    /// space) from `cursor`. `visual` is the Visual anchor when Visual mode
+    /// is active; a selection wider than one character extends from the
+    /// cursor instead of selecting afresh. The flag is false for vim's
+    /// `FAIL`; the state is where the walk stopped either way, since vim
+    /// moves the cursor (and `VIsual`) as it goes.
+    fn current_word(
+        &self,
+        cursor: Pos,
+        visual: Option<Pos>,
+        include: bool,
+        mut count: usize,
+    ) -> (Found, bool) {
+        let mut found = Found {
+            start: visual.unwrap_or(cursor),
+            cursor,
+            inclusive: true,
+        };
+        let ok = self.walk_words(&mut found, visual.is_some(), include, &mut count);
+        (found, ok)
+    }
+
+    /// The body of [`Self::current_word`], moving `found` in place.
+    fn walk_words(
+        &self,
+        found: &mut Found,
+        visual: bool,
+        include: bool,
+        count: &mut usize,
+    ) -> bool {
+        let Found {
+            start,
+            cursor: cur,
+            inclusive,
+        } = found;
+        let mut start_pos = *cur;
+        let mut include_white = false;
+
+        if !visual || *start == *cur {
+            // The word or white space under the cursor.
+            self.back_in_line(cur);
+            start_pos = *cur;
+            if (self.cls(*cur) == 0) == include {
+                // On white space that is included (" word"), or on a word
+                // whose white space is not ("word"): find the word's end.
+                if !self.end_word(cur, 1, true, true) {
+                    return false;
+                }
+            } else {
+                // On a word whose white space is included ("word  "), or on
+                // white space that is not ("  "): find the next start. A
+                // single-char word can land in column 0 of the next line;
+                // back up to the end of this one.
+                self.fwd_word(cur, 1, true);
+                if cur.1 == 0 {
+                    self.buf.decl(cur);
+                } else {
+                    Self::oneleft(cur);
+                }
+                include_white = include;
+            }
+            *start = start_pos;
+            *count -= 1;
+        }
+
+        // Extend with more objects.
+        while *count > 0 {
+            *inclusive = true;
+            if visual && *cur < *start {
+                // Visual with the cursor at the start: move it back.
+                if self.buf.decl(cur) == -1 {
+                    return false;
+                }
+                if include != (self.cls(*cur) != 0) {
+                    if !self.bck_word(cur, 1, true) {
+                        return false;
+                    }
+                } else {
+                    if !self.bckend_word(cur, 1, true) {
+                        return false;
+                    }
+                    self.buf.incl(cur);
+                }
+            } else {
+                // Forward one word and/or white area.
+                if self.buf.incl(cur) == -1 {
+                    return false;
+                }
+                if include != (self.cls(*cur) == 0) {
+                    if !self.fwd_word(cur, 1, true) && *count > 1 {
+                        return false;
+                    }
+                    // An end just past a line break must not take the next
+                    // line's first character: put it on the white space.
+                    if !Self::oneleft(cur) {
+                        *inclusive = false;
+                    }
+                } else if !self.end_word(cur, 1, true, true) {
+                    return false;
+                }
+            }
+            *count -= 1;
+        }
+
+        // With no white space taken after the words, take the white space
+        // before them instead — but never a line's indent.
+        if include_white && (self.cls(*cur) != 0 || (cur.1 == 0 && !*inclusive)) {
+            let mut p = start_pos;
+            if Self::oneleft(&mut p) {
+                self.back_in_line(&mut p);
+                if self.cls(p) == 0 && p.1 > 0 {
+                    *start = p;
+                }
+            }
+        }
+        true
+    }
+
+    /// The exclusive end of an operator range ending at `found.cursor`. An
+    /// inclusive end on a line's NUL covers nothing more: vim's charwise
+    /// operators never take the line break through it (`diw` on an empty
+    /// line is a no-op).
+    fn exclusive_end(&self, found: &Found) -> Pos {
+        let (row, col) = found.cursor;
+        if found.inclusive && col < self.buf.len(row) {
+            (row, col + 1)
+        } else {
+            (row, col)
         }
     }
-    Some(((row, start_col), (row, end_col)))
 }

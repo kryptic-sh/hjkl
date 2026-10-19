@@ -1828,11 +1828,12 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         let Some(obj) = crate::vim::text_object_from_char(ch) else {
             return;
         };
-        // Sentences follow vim's `current_sent` with Visual active: select
-        // the object charwise, or extend the selection keeping anchor and
-        // mode. Visual-line keeps only its anchor's row, so it takes this path
-        // only while the selection is one row (anchor and cursor coincide).
-        let sentence_anchor = match crate::vim_state::vim(self).mode {
+        // Sentences and words follow vim's `current_sent` / `current_word`
+        // with Visual active: select the object charwise, or extend the
+        // selection keeping anchor and mode. Visual-line keeps only its
+        // anchor's row, so it takes this path only while the selection is one
+        // row (anchor and cursor coincide).
+        let ported_anchor = match crate::vim_state::vim(self).mode {
             FsmMode::Visual => Some(crate::vim_state::vim(self).visual_anchor),
             FsmMode::VisualLine
                 if crate::vim_state::vim(self).visual_line_anchor == self.cursor().0 =>
@@ -1841,14 +1842,20 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             }
             _ => None,
         };
-        if obj == TextObject::Sentence
-            && let Some(anchor) = sentence_anchor
-        {
-            match crate::vim::sentence_visual(self, anchor, inner, count) {
-                Some(crate::vim::VisualSentence::Extend((row, col))) => {
+        let ported =
+            match obj {
+                TextObject::Sentence => ported_anchor
+                    .map(|anchor| crate::vim::sentence_visual(self, anchor, inner, count)),
+                TextObject::Word { big } => ported_anchor
+                    .map(|anchor| crate::vim::word_visual(self, anchor, inner, big, count)),
+                _ => None,
+            };
+        if let Some(picked) = ported {
+            match picked {
+                Some(crate::vim::VisualTextObject::Extend((row, col))) => {
                     self.jump_cursor(row, col);
                 }
-                Some(crate::vim::VisualSentence::Select(start, (row, col))) => {
+                Some(crate::vim::VisualTextObject::Select(start, (row, col))) => {
                     crate::vim_state::vim_mut(self).mode = FsmMode::Visual;
                     crate::vim_state::vim_mut(self).current_mode = VimMode::Visual;
                     crate::vim_state::vim_mut(self).visual_anchor = start;

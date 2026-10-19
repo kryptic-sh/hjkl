@@ -738,3 +738,140 @@ expected_register = ['"', "f"]
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "visual_aw_extends_a_wider_selection"
+initial_buffer = "ab cd ef gh"
+initial_cursor = [0, 0]
+keys = "vlawy"
+expected_buffer = "ab cd ef gh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "ab cd"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_aw_twice"
+initial_buffer = "ab cd ef gh"
+initial_cursor = [0, 0]
+keys = "vawaw<Esc>"
+expected_buffer = "ab cd ef gh"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_aw_after_e"
+initial_buffer = "ab cd ef gh"
+initial_cursor = [0, 0]
+keys = "veaw<Esc>"
+expected_buffer = "ab cd ef gh"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_aw_extends_backward"
+initial_buffer = "ab cd ef gh"
+initial_cursor = [0, 4]
+keys = "vhawy"
+expected_buffer = "ab cd ef gh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "ab cd"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_iw_extends_backward"
+initial_buffer = "ab cd ef gh"
+initial_cursor = [0, 4]
+keys = "vhiwy"
+expected_buffer = "ab cd ef gh"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+expected_register = ['"', " cd"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_count_aw_past_the_last_word"
+initial_buffer = "a b"
+initial_cursor = [0, 0]
+keys = "v3aw<Esc>"
+expected_buffer = "a b"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inner_word_on_an_empty_line_is_a_noop"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [1, 0]
+keys = "diw"
+expected_buffer = "ab\n\ncd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "a_word_from_an_empty_line_goes_linewise"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [1, 0]
+keys = "daw"
+expected_buffer = "ab"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "\ncd\n"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_aw_across_lines_goes_linewise"
+initial_buffer = "ab\ncd ef"
+initial_cursor = [0, 1]
+keys = "d3aw"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "ab\ncd ef\n"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_aw_out_of_words_moves_the_cursor"
+initial_buffer = "ab cd ef gh"
+initial_cursor = [0, 0]
+keys = "d9aw"
+expected_buffer = "ab cd ef gh"
+expected_cursor = [0, 10]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_v_then_esc_clamps_the_cursor"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 0]
+keys = "5v<Esc>"
+expected_buffer = "ab\ncd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

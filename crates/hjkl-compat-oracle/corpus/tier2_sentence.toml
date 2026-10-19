@@ -557,3 +557,15 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+
+[[cases]]
+name = "around_sentence_over_lines_to_a_blank_line_keeps_it"
+initial_buffer = "ab cd\nef\n\ngh"
+initial_cursor = [0, 0]
+keys = "das"
+expected_buffer = "\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
