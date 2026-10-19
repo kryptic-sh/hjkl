@@ -357,3 +357,81 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+
+# ── The column j / k aim for after an operator ───────────────────────────────
+#
+# An operator resets curswant to where it leaves the cursor, so the next j
+# lands there, not in the column from before the operator.
+
+[[cases]]
+name = "j_after_a_visual_line_yank_aims_for_column_zero"
+initial_buffer = "abcd\nefgh\nijkl\nmnop"
+initial_cursor = [0, 2]
+keys = "Vjyj"
+expected_buffer = "abcd\nefgh\nijkl\nmnop"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "j_after_a_visual_line_indent_aims_for_the_first_non_blank"
+initial_buffer = "abcd\nefgh\nijkl\nmnop"
+initial_cursor = [0, 2]
+keys = "Vj>j"
+expected_buffer = "    abcd\n    efgh\nijkl\nmnop"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "j_after_an_indent_motion_aims_for_the_first_non_blank"
+initial_buffer = "abcd\nefgh\nijkl\nmnop"
+initial_cursor = [0, 2]
+keys = ">jj"
+expected_buffer = "    abcd\n    efgh\nijkl\nmnop"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "j_after_gUU_aims_for_column_zero"
+initial_buffer = "abcd\nefgh\nijkl\nmnop"
+initial_cursor = [0, 2]
+keys = "gUUj"
+expected_buffer = "ABCD\nefgh\nijkl\nmnop"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "j_after_yy_on_a_short_line_aims_for_its_column"
+initial_buffer = "abcdefgh\nab\nabcdefgh\nabcdefgh"
+initial_cursor = [0, 6]
+keys = "jyyj"
+expected_buffer = "abcdefgh\nab\nabcdefgh\nabcdefgh"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "j_after_a_block_delete_after_a_tab_keeps_the_display_column"
+initial_buffer = "\t{hello}, xy\nab"
+initial_cursor = [0, 4]
+keys = "<C-v>dj"
+expected_buffer = "\t{helo}, xy\nab"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+

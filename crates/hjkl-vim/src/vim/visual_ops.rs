@@ -16,6 +16,32 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
     op: Operator,
     count: usize,
 ) {
+    visual_operator_body(ed, op, count);
+    remember_operator_column(ed);
+}
+
+/// vim sets `'curswant'` from the cursor once an operator is done
+/// (`w_set_curswant`): a following `j` / `k` aims for the column the
+/// operator left the cursor in, not the one it had before. The sticky
+/// column is a display column, so a tab before the cursor counts at its
+/// width. An operator that entered Insert mode leaves that to the end of the
+/// insert.
+pub fn remember_operator_column<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+) {
+    if vim(ed).mode == Mode::Normal {
+        let (row, col) = ed.cursor();
+        let line = hjkl_engine::buf_helpers::buf_line(ed.buffer(), row).unwrap_or_default();
+        let want = hjkl_buffer::char_col_to_visual_col(&line, col, ed.settings().tabstop);
+        ed.set_sticky_col(Some(want));
+    }
+}
+
+fn visual_operator_body<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    op: Operator,
+    count: usize,
+) {
     // `count` is the number of indent levels for `>` / `<` (vim `2>` = two
     // shiftwidths); other visual operators ignore it.
     let levels = count.max(1);

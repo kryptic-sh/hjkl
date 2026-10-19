@@ -79,6 +79,15 @@ pub fn execute_line_op<H: hjkl_engine::types::Host>(
     op: Operator,
     count: usize,
 ) {
+    line_op_body(ed, op, count);
+    remember_operator_column(ed);
+}
+
+fn line_op_body<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    op: Operator,
+    count: usize,
+) {
     // Folded counts (`2d3d` → 6) can exceed a single prefix's cap; re-clamp
     // at vim's count ceiling (`:h count`).
     let count = count.min(MAX_COUNT);

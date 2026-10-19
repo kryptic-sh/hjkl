@@ -43,6 +43,8 @@ patch bumps.
 
 ### Fixed
 
+- After an operator such as `Vjy`, `>j` or `gUU`, `j` / `k` land in the column
+  the operator left the cursor in, as in vim, not the column from before it.
 - `.` after `Vjd` / `Vjc` near the end of the buffer acts on the lines left, as
   in vim, where it did nothing.
 - **Visual `X`, `D`, `C`, `S`, `R` and `Y` work on whole lines**, as in vim;

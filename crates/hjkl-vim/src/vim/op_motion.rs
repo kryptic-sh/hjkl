@@ -484,6 +484,21 @@ pub fn run_operator_over_range<H: hjkl_engine::types::Host>(
     end: (usize, usize),
     kind: RangeKind,
 ) {
+    operator_over_range_body(ed, op, start, end, kind);
+    // Not after `zf`: what vim's curswant becomes on a closed fold is not
+    // pinned down (docs/backlog.md), so it stays as it was.
+    if op != Operator::Fold {
+        remember_operator_column(ed);
+    }
+}
+
+fn operator_over_range_body<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    op: Operator,
+    start: (usize, usize),
+    end: (usize, usize),
+    kind: RangeKind,
+) {
     let (top, bot) = order(start, end);
     // Charwise empty range (same position). For Delete/Yank there is nothing to
     // act on. For Change, vim still enters insert at that point — `ci(` on `()`

@@ -1025,17 +1025,31 @@ fail on the parent commit, the other 6 are negative guards).
   closed in nvim. But nvim's `v/cc<CR>` DOES open a fold (`normal_search` has no
   Visual check). Not comparable today: the hjkl oracle driver mishandles `/` in
   Visual (`zfjkv/cc<CR><Esc>dd` gives garbage on the old and new binary alike).
-- **After `zf`, a vertical motion takes curswant 0; hjkl keeps the column.** On
-  `"xx yy\nabc def\nghi\njkl\n"` @ (0,3), measured with `dfcase`: `jzfjk` lands
-  (0,0) in nvim and (0,3) in hjkl, and so do `jzFk`, `jzfjj` (3,0), and even
-  `jzfjzok` / `jzfjzRk`, where the fold is open again by the time `k` runs.
-  `jyjk` and `jzfjzo$k` agree. The likely model — not confirmed in nvim's
-  source: an operator leaves `w_set_curswant` pending, the next vertical motion
-  sets curswant from `w_virtcol`, and vim holds `w_virtcol` at 0 while the
-  cursor line is folded. That `zo` before `k` still gives 0 suggests a
-  `w_virtcol` not recomputed between keys of one headless input batch, so
-  interactive nvim may differ there. hjkl has no "pending curswant" state to
-  hang this on; the closed-fold half (`jzfjk`) is the stable case to match.
+- **`zF` is not implemented.** `apply_after_z` (`hjkl-vim` `operator.rs`) has no
+  `F` arm, so `zF` / `[count]zF` create no fold: `j2zFdd` on
+  `"xx yy\nabc def\nghi\njkl\n"` @ (0,3) deletes one line in hjkl, the two-line
+  fold in nvim.
+- **The curswant after `zf` / on a closed fold is not pinned down.** The other
+  operators now reset the curswant to the cursor (`remember_operator_column`);
+  `zf{motion}` is left alone, keeping whatever curswant came before, because the
+  measurements do not fit one simple rule. All on nvim 0.12.5 through `dfcase`:
+  - `zfGj` @ (0,4) on `"abcdef"` (the `j` fails) lands on (0,0), and so does
+    `zfGgqj`; `lzfjzoj` @ (0,1) on `"abcd\nefgh\nijkl\nmnop"` lands on (1,0). A
+    curswant of 0 after `zf` fits these.
+  - But on an indented line it does not: `>EzfGgqj` @ (0,1) on `"foo, [hello]"`
+    (`>E` indents to `"    foo, [hello]"`, cursor (0,4)) stays on (0,4); and
+    `zfGr gqj` @ (0,1) on `"    [foo] [_id] bar"` stays on (0,1).
+  - The old reading of nvim's source (an operator leaves `w_set_curswant`
+    pending, the next vertical motion takes curswant from `w_virtcol`, which is
+    special on a folded line) would explain all of them if the folded-line
+    `w_virtcol` is the indent or the column of the last change, but that is not
+    confirmed. A `[count]zF`, once it exists, has the same question (`jzFk`
+    lands on (0,0)).
+- **Older call sites store a char column as the curswant.** `move_vertical`
+  (`hjkl-engine` `motions.rs`) reads the sticky column as a display column, but
+  several sites set it to `ed.cursor().1` (e.g. in `linewise.rs`, `command.rs`),
+  a char index, which is wrong after a tab. The operator paths now go through
+  `remember_operator_column`, which converts; the others were not audited.
 - **Left by the operator + mark work (2026-10-18):**
   - **Undo/redo cursor gaps left after the operator-delete fix.** On
     `"aa bb\n  cc dd\nee ff\ngg hh\n"` @ (0,3), all the same on the parent
@@ -1115,10 +1129,17 @@ Seen while measuring, not `gq`:
   - `Vjdu`: the cursor after the undo is (1,1) in hjkl, (0,0) in nvim.
   - `Vky` @ (1,1): nvim leaves the cursor at (0,1), hjkl at (0,0); `vjY` and
     `Vjy` (cursor already on the top row) agree.
-  - The column kept for later `j` / `k` (curswant) after a linewise operator is
-    the old one in hjkl, 0 in nvim: `Vjyj` lands on (1,1) against nvim's (1,0),
-    and `dj.` on the last line, where the repeat fails, moves hjkl's cursor to
-    (0,1) and leaves nvim's at (0,0).
+  - `dj.` on the last line, where the repeat fails, moves hjkl's cursor to (0,1)
+    and leaves nvim's at (0,0).
+- **`.` after `x` keeps the old curswant.** `lx.j` @ (0,1) on
+  `"abcd\nefgh\nijkl\nmnop"`: nvim (1,1), hjkl (1,2); `lxj` itself agrees. The
+  replay of a plain `x` does not take the curswant from the cursor the way
+  operators now do (`remember_operator_column`).
+- **`y$` / `d$` after `j` onto a shorter line act on nothing.** On
+  `"abcdefgh\nab\nabcdefgh"` @ (0,6), `jy$` yanks `""` (nvim `"b"`) and `jd$`
+  deletes nothing (nvim deletes `"b"`). The `$` operator range seems to start
+  from the curswant (6) rather than the clamped cursor (1); not looked into.
+  Present on the parent build too.
 - **A charwise cut ending on the buffer's last line, when it is empty, takes the
   break before it.** `vd` / `vx` / `vU` @ (1,0) on `"ab\n\n"`: nvim leaves the
   buffer alone, hjkl leaves `"ab\n"` (and `vd` yanks `"\n"` where nvim yanks

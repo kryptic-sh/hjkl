@@ -30,6 +30,12 @@ and this project adheres to
 
 ### Fixed
 
+- After an operator, `j` / `k` aim for the column the operator left the cursor
+  in, as vim does (`'curswant'` is reset): `Vjy`, `Vj>`, `>j`, `gUU`, `yy`, `=`
+  and the rest went back to the column from before. One rule in
+  `remember_operator_column`, applied where the Visual, operator-motion and line
+  operators finish; it stores a display column, so tabs before the cursor count
+  at their width.
 - `.` after a Visual-line operator applies to the lines left when fewer remain
   than it covered (`Vjd` then `.` on the last line deletes it): vim's Visual
   redo clamps the saved line count to the buffer, where the replay had taken the
