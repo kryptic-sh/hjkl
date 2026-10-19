@@ -2930,8 +2930,9 @@ impl App {
             }
             VimMode::Visual => {
                 if let Some((start, end)) = self.active_editor().char_highlight() {
-                    self.active_editor_mut()
-                        .yank_range(start, end, RangeKind::Inclusive, '"');
+                    let (from, to, kind) =
+                        hjkl_vim::charwise_visual_range(self.active_editor(), start, end);
+                    self.active_editor_mut().yank_range(from, to, kind, '"');
                 }
             }
             VimMode::VisualLine => {
@@ -2978,8 +2979,9 @@ impl App {
             }
             VimMode::Visual => {
                 if let Some((start, end)) = self.active_editor().char_highlight() {
-                    self.active_editor_mut()
-                        .delete_range(start, end, RangeKind::Inclusive, '"');
+                    let (from, to, kind) =
+                        hjkl_vim::charwise_visual_range(self.active_editor(), start, end);
+                    self.active_editor_mut().delete_range(from, to, kind, '"');
                     use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                     hjkl_vim_tui::handle_key(
                         self.active_editor_mut(),

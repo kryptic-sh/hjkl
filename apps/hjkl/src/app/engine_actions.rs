@@ -167,19 +167,23 @@ impl App {
                         let Some((start, end)) = self.active_editor().char_highlight() else {
                             return;
                         };
-                        let kind = RangeKind::Inclusive;
+                        // The text operators take the line break of a selection
+                        // ending on a line's NUL (`vi{d`); the row operators
+                        // below keep the raw selection.
+                        let (from, to, kind) =
+                            hjkl_vim::charwise_visual_range(self.active_editor(), start, end);
                         match op {
                             hjkl_vim::OperatorKind::Delete => {
                                 self.active_editor_mut()
-                                    .delete_range(start, end, kind, register);
+                                    .delete_range(from, to, kind, register);
                             }
                             hjkl_vim::OperatorKind::Yank => {
                                 self.active_editor_mut()
-                                    .yank_range(start, end, kind, register);
+                                    .yank_range(from, to, kind, register);
                             }
                             hjkl_vim::OperatorKind::Change => {
                                 self.active_editor_mut()
-                                    .change_range(start, end, kind, register);
+                                    .change_range(from, to, kind, register);
                                 // change_range transitions to Insert via
                                 // begin_insert_noundo — no explicit mode-set needed.
                                 return;

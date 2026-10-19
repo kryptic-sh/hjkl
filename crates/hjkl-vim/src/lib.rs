@@ -22,6 +22,10 @@ pub use pending::{Key, Outcome, PendingState, step};
 /// The byte budget one `p` / `P` may insert. Public so a host can report the
 /// limit it just hit rather than restating the number.
 pub use vim::command::MAX_PASTE_BYTES;
+/// The range a charwise Visual selection covers, for a host that runs the
+/// Visual operators itself: a selection ending on a line's NUL takes the line
+/// break, as vim's does.
+pub use vim::visual_ops::charwise_visual_range;
 /// Build an `Editor` that interprets keys as vim, or retro-fit the discipline
 /// onto one that already exists.
 ///

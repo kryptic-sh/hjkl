@@ -3597,6 +3597,18 @@ fn visual_uppercase_operators_act_linewise() {
 }
 
 #[test]
+fn visual_delete_through_the_keymap_takes_a_trailing_line_break() {
+    // The App keymap runs Visual `d` itself (`engine_actions`), not through
+    // the FSM: `vi{d` there must still take the inner line's break, as nvim
+    // does, collapsing the block to `{\n}`.
+    let keys = [ck('j'), ck('w'), ck('v'), ck('i'), ck('{'), ck('d')];
+    assert_eq!(
+        indent_app("fn foo() {\n    body\n}\n", &keys),
+        "fn foo() {\n}\n"
+    );
+}
+
+#[test]
 fn insert_ctrl_t_and_ctrl_d() {
     // `i` then Ctrl-T indents the current line by one shiftwidth.
     assert_eq!(indent_app("abc\n", &[ck('i'), ctrl_key('t')]), "    abc\n");

@@ -17,6 +17,10 @@ and this project adheres to
 
 ### Added
 
+- `hjkl_vim::charwise_visual_range`, for a host that runs the Visual operators
+  itself: the range a charwise selection covers, taking the line break when it
+  ends on a line's NUL. The hjkl app's Visual `d` / `y` / `c` and its Cut / Copy
+  menu use it.
 - `gI` inserts at column 0, before any indent; `.` and a count repeat it there.
 - Operator + mark motion: `d'a` / `y'a` / `c'a` / `>'a` … run linewise to mark
   `a`'s row, ``d`a`` … charwise exclusive to its position, on both the engine
