@@ -43,6 +43,8 @@ patch bumps.
 
 ### Fixed
 
+- `j` / `k` after `.` repeats `x` or `X` aim for the column the repeat left the
+  cursor in, as after the `x` itself (`lx.j` at a line end).
 - `g_`, `gM` and `gm` work after an operator (`dg_`, `yg_`, `dgM`, …), where
   they did nothing, and `[count]g_` goes down `count - 1` lines first, as in
   vim.

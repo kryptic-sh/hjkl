@@ -700,3 +700,39 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "dot_x_clamped_at_line_end_resets_curswant"
+initial_buffer = "abcd\nefgh\nijkl\nmnop"
+initial_cursor = [0, 1]
+keys = "lx.j"
+expected_buffer = "ab\nefgh\nijkl\nmnop"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_count_x_clamped_resets_curswant"
+initial_buffer = "abcd\nefgh\nijkl\nmnop"
+initial_cursor = [0, 1]
+keys = "l2x.j"
+expected_buffer = "a\nefgh\nijkl\nmnop"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_big_x_resets_curswant"
+initial_buffer = "abcd\nefgh\nijkl\nmnop"
+initial_cursor = [0, 1]
+keys = "lX.j"
+expected_buffer = "cd\nefgh\nijkl\nmnop"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

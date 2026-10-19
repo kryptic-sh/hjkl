@@ -30,6 +30,9 @@ and this project adheres to
 
 ### Fixed
 
+- `do_char_delete` (`x` / `X`) resets the curswant through
+  `remember_operator_column`, so the `.` replay, which calls it directly, does
+  too.
 - Operator-pending `g` maps `_`, `M` and `m` to `Motion::LastNonBlank`,
   `LineMiddle` and `ScreenLineMiddle` (`op_g_motion`, now the one table that
   `apply_op_g_inner` and `range_for_op_g_bridge` share), and `g_` is an

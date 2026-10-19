@@ -289,6 +289,10 @@ pub fn do_char_delete<H: hjkl_engine::types::Host>(
     if line_chars > 0 && cursor.col >= line_chars {
         buf_set_cursor_pos(ed.buffer_mut(), Position::new(cursor.row, line_chars - 1));
     }
+    // `x` / `X` are the operators `dl` / `dh`, so the curswant follows the
+    // cursor here too — the `.` replay reaches this without the live key
+    // path that otherwise resets it (`lx.j`).
+    remember_operator_column(ed);
 }
 /// A number located on one line, with its post-`delta` text already formatted.
 ///
