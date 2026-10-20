@@ -1144,6 +1144,21 @@ Seen while measuring, not `gq`:
   Visual-line only while the selection is one row; a taller `V` selection, and
   Visual-block, still take hjkl's own paths. Unmeasured how far those differ
   from vim.
+- **A counted `f` / `t` / `;` with too few targets moves; three tests pin it.
+  Needs a decision.** vim's `searchc` fails when the line holds fewer than
+  `count` targets after the cursor, and the cursor stays: measured in nvim
+  0.12.5, `3fx` on `"xaxbxc"` @ (0,0), `2d3fx` on `"xaxbxcxdxexf"` @ (0,0) and
+  `fX3;` on `"aXaXaX"` @ (0,0) all leave buffer and cursor alone (the cursor's
+  own `x` does not count). hjkl stops on the last target found (`Motion::Find`
+  in `apply_motion_cursor_ctx`, `motion.rs`), and `d2fd` deletes through it.
+  Putting the cursor back on a short count fixes all of these (and fuzz cases
+  `2f)`, `3f)rZ`), but fails `fx_with_count_3` and `two_d_3fx_total_count_6`
+  (`apps/hjkl/src/app/tests/keymap.rs`) and
+  `find_repeat_with_count_advances_count_times`
+  (`crates/hjkl-engine-tui/tests/editor_behavior.rs`), which expect the partial
+  move — the first two counting the cursor's own `x` in their comments. The
+  tests look wrong against nvim; changing them is the user's call. Found
+  2026-10-20.
 - **Visual-block `H` / `M` / `L` keep the block's column; a corpus case pins it.
   Needs a decision.** In nvim 0.12.5, `<C-v>Ld` / `<C-v>Hd` @ (0,3) on
   `"ab cd\nef gh\nij"` take columns 0–3 (register `"ab c\nef g\nij"`), and

@@ -34,6 +34,9 @@ and this project adheres to
 
 ### Fixed
 
+- The `f` / `F` / `t` / `T` entry in `normal.rs` is no longer limited to Normal
+  mode: the Visual modes take a find too, and `apply_find_char` runs it through
+  `execute_motion_with_block_vcol` so a Visual-block find moves `block_vcol`.
 - `succeeds_in_place` counts `Motion::MatchBracket` with no count as a
   zero-distance success, so an operator over a `%` that finds no match acts on
   the cursor's character, as measured in nvim 0.12.5 (vim's source not read).

@@ -525,9 +525,12 @@ pub fn step_normal<H: Host>(
         return true;
     }
 
-    // `f`/`F`/`t`/`T` entry.
-    if ed.fsm_mode() == FsmMode::Normal
-        && let Some((forward, till)) = find_entry(&input)
+    // `f`/`F`/`t`/`T` entry — in the Visual modes too, where the find moves
+    // the selection's end (`vfdy` yanks through the `d`).
+    if matches!(
+        ed.fsm_mode(),
+        FsmMode::Normal | FsmMode::Visual | FsmMode::VisualLine | FsmMode::VisualBlock
+    ) && let Some((forward, till)) = find_entry(&input)
     {
         ed.set_count(count);
         ed.set_pending(Pending::Find { forward, till });

@@ -682,7 +682,9 @@ pub fn apply_find_char<H: hjkl_engine::types::Host>(
     till: bool,
     count: usize,
 ) {
-    execute_motion(ed, Motion::Find { ch, forward, till }, count.max(1));
+    // Through the block-aware entry, so a Visual-block find moves the
+    // block's column too.
+    execute_motion_with_block_vcol(ed, Motion::Find { ch, forward, till }, count.max(1));
     vim_mut(ed).last_find = Some((ch, forward, till));
     vim_mut(ed).last_horizontal_motion = LastHorizontalMotion::FindChar;
 }

@@ -8,6 +8,13 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- `f`, `F`, `t` and `T` work in Visual, Visual-line and Visual-block mode,
+  moving the selection's end, as in vim: `vfdy` yanks through the `d`, where
+  hjkl ignored the find and ran the next key on the one-character selection
+  (`vtcd` changed it, `vfdd` deleted it).
+
 ## [0.43.1] - 2026-10-20
 
 ### Fixed
