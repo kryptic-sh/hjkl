@@ -761,3 +761,99 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "visual_sentence_fwd_without_terminator_takes_line_end"
+initial_buffer = "ab cd"
+initial_cursor = [0, 0]
+keys = "v)d"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_sentence_fwd_over_line_break_takes_next_line"
+initial_buffer = "ab.\ncd"
+initial_cursor = [0, 0]
+keys = "v)d"
+expected_buffer = "d"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_sentence_fwd_on_blank_buffer_takes_line_break"
+initial_buffer = "\n\n"
+initial_cursor = [0, 0]
+keys = "v)d"
+expected_buffer = "\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "sentence_fwd_without_terminator_lands_on_last_char"
+initial_buffer = "ab cd"
+initial_cursor = [0, 0]
+keys = ")"
+expected_buffer = "ab cd"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_sentence_fwd_past_blank_line_reaches_last_char"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [0, 0]
+keys = "3)"
+expected_buffer = "ab\n\ncd"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "sentence_fwd_over_trailing_blanks_lands_on_indent"
+initial_buffer = "ab.  \n  cd"
+initial_cursor = [0, 0]
+keys = ")"
+expected_buffer = "ab.  \n  cd"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_sentence_fwd_at_buffer_end_lands_on_the_nul"
+initial_buffer = "ab cd"
+initial_cursor = [0, 0]
+keys = "v)hd"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_sentence_fwd_on_last_sentence_lands_on_the_nul"
+initial_buffer = "ab."
+initial_cursor = [0, 0]
+keys = "v)hd"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

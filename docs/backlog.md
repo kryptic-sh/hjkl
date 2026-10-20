@@ -279,14 +279,6 @@ fixed:
   emptied case. Recording `"\n"` from the lone empty line (tried in
   `cut_vim_range_inner`, 2026-10-20) broke those three cases and was reverted.
   The fuzz cases starting from `""` with a linewise delete will keep diverging.
-- **Normal and Visual `)` keep their own walk.** An operator's `)` now goes
-  through the `findsent` port (`sentence_forward_for_operator`,
-  `text_object.rs`), which knows when it stopped on the NUL past the end; the
-  cursor motion (`Motion::SentenceNext` in `motion.rs`) still uses
-  `sentence_step_forward`, which matched nvim in every probe tried, so it was
-  left alone. Two walks of one motion can drift apart; moving the cursor motion
-  onto `findsent` (with vim's `adjust_cursor` for Normal mode, and the NUL kept
-  in Visual) would leave one.
 - **`g0` / `g^` / `g$` are not implemented at all**, in Normal, Visual or after
   an operator: `op_g_motion` (`operator.rs`) has no `0` / `^` / `$` and there is
   no `Motion` variant for them, so `cg0X<Esc>` on `"  ab cd"` @ (0,0) types

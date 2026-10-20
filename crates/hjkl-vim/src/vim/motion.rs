@@ -875,24 +875,16 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
                 ed.jump_cursor(row, col);
             }
         }
+        // A `)` landing on the NUL past a line's end steps back onto the
+        // last character in Normal mode (vim's `adjust_cursor`) and stays
+        // on it in Visual, as `$` does.
         Motion::SentenceNext => {
-            use crate::vim::text_object::SentenceStep;
-            let start = ed.cursor();
-            let total = count.max(1);
-            for i in 0..total {
-                match crate::vim::text_object::sentence_step_forward(ed) {
-                    SentenceStep::Boundary((row, col)) => ed.jump_cursor(row, col),
-                    // Already parked on the last cell: a no-op repetition,
-                    // not a failure (`9)` at end-of-buffer stays put).
-                    SentenceStep::AtEnd => {}
-                    SentenceStep::EndOfBuffer((row, col)) => {
-                        if i + 1 == total {
-                            ed.jump_cursor(row, col);
-                        } else {
-                            ed.jump_cursor(start.0, start.1);
-                            break;
-                        }
-                    }
+            if let Some((row, col)) = crate::vim::text_object::sentence_forward(ed, count) {
+                let on_nul = col > 0 && col == buf_line_chars(ed.buffer(), row);
+                if on_nul && vim(ed).is_visual() && !as_operator {
+                    buf_set_cursor_rc(ed.buffer_mut(), row, col);
+                } else {
+                    ed.jump_cursor(row, if on_nul { col - 1 } else { col });
                 }
             }
         }

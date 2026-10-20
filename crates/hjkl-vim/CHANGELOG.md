@@ -39,6 +39,11 @@ and this project adheres to
   `walk_vim_buf`), replacing the row scan `text_object::sentence_boundary`,
   which is removed: after a blank line `(` lands on the first non-blank, and
   `2(` on a buffer of blank lines reaches the top instead of failing.
+- `Motion::SentenceNext` (`)` in Normal and Visual) walks the same `findsent`
+  port as an operator's `)`: a landing on the NUL past the end steps back onto
+  the last character in Normal mode and stays on the NUL in Visual, as `$` does.
+  `text_object::sentence_step_forward`, `SentenceStep` and the row scan behind
+  them are removed.
 - The `:h word` end-of-line clamp for an operator's `w` / `W` ends the range on
   the NUL of the last word's line, exclusive, as vim's `fwd_word` stops there,
   instead of on the word's last character; the blanks after it are included.

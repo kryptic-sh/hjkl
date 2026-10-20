@@ -14,6 +14,8 @@ patch bumps.
   on `"\n  ab cd"` from `cd`, `(` lands on `ab`, where hjkl went to column 0,
   and `d(` there no longer deletes the indent. On a buffer of only blank lines a
   count of `(` (`2(`) goes to the top, where hjkl stayed put.
+- Visual `)` in a buffer's last sentence goes past its last character, as in
+  vim: `v)hd` on `"ab cd"` deletes the whole line, where hjkl kept the `d`.
 
 ## [0.43.2] - 2026-10-20
 
