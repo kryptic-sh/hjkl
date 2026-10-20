@@ -34,6 +34,9 @@ and this project adheres to
 
 ### Fixed
 
+- The `:h word` end-of-line clamp for an operator's `w` / `W` ends the range on
+  the NUL of the last word's line, exclusive, as vim's `fwd_word` stops there,
+  instead of on the word's last character; the blanks after it are included.
 - `apply_op_with_motion` takes an operator's `)` from vim's `findsent` (the
   `VimBuf` port) and its `adjust_cursor`: a landing on the NUL past the end
   makes the range inclusive, and a `FAIL` cancels the operator.

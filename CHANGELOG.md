@@ -10,6 +10,9 @@ patch bumps.
 
 ### Fixed
 
+- `dw` / `yw` / `dW` on the last word of a line take the white space after it
+  too, as in vim: `dw` on `"ab  "` leaves an empty line, where hjkl left the
+  trailing blanks.
 - `d)` / `c)` / `y)` in a buffer's last sentence reach its end, as in vim: `d)`
   takes the last character (and a closing `.`), where hjkl stopped one short,
   and `d)` / `c)` on the last character act on it instead of doing nothing. A

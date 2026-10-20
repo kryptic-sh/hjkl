@@ -275,19 +275,19 @@ fn operate_over_motion_range<H: hjkl_engine::types::Host>(
     }
     // Vim special case (`:h word`): when `w`/`W` is used with an operator and
     // the last word moved over ends its line, the operated text stops at the
-    // end of that word instead of eating the line break into the next line's
+    // end of that line instead of eating the line break into the next line's
     // first word. `d2w` that ends mid-line on a later row is unaffected, since
-    // its last word is not at end-of-line. When the word-forward motion
-    // crossed onto a later row, clamp `end` back to the last non-blank char it
-    // moved over and make the range inclusive.
+    // its last word is not at end-of-line. vim's `fwd_word` does this by
+    // stopping on the NUL of the last word's line, so the white space after
+    // that word goes too (`dw` on `"ab  "` takes `"ab  "`): when the motion
+    // crossed onto a later row, `end` becomes that NUL, still exclusive.
     if word_fwd
         && kind == RangeKind::Exclusive
         && end.0 > start.0
         && let Some(word_end) = last_word_end_before(ed, start, end)
         && word_end.0 < end.0
     {
-        end = word_end;
-        kind = RangeKind::Inclusive;
+        end = (word_end.0, buf_line_chars(ed.buffer(), word_end.0));
     }
     // Vim's exclusive-motion adjustment (`:h exclusive`), motion form — the
     // same rule `apply_op_with_text_object` applies to inner bracket objects.
@@ -412,7 +412,7 @@ fn operate_over_motion_range<H: hjkl_engine::types::Host>(
 /// Position of the last non-blank char in the half-open range `[start, end)`,
 /// scanning rows from the bottom up. Used to clamp `dw`/`dW` at end-of-line
 /// (vim's `:h word` special case): the returned position is the end of the
-/// last word moved over. For a counted `d{n}w` the last word can sit on the
+/// last word moved over, whose row the clamp stops at. For a counted `d{n}w` the last word can sit on the
 /// landing row itself (before `end.1`), so that row is scanned too — only
 /// columns `[.., end.1)` there — which is what keeps `d2w` ending mid-line
 /// (last word not at EOL, `word_end.0 == end.0`) from being clamped.

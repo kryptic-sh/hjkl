@@ -952,3 +952,75 @@ expected_register = ['"', "ab\ncd\n"]
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "delete_word_at_line_end_takes_trailing_blanks"
+initial_buffer = "ab  \ncd"
+initial_cursor = [0, 0]
+keys = "dw"
+expected_buffer = "\ncd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "yank_word_at_line_end_takes_trailing_blanks"
+initial_buffer = "ab  \ncd"
+initial_cursor = [0, 0]
+keys = "ywP"
+expected_buffer = "ab  ab  \ncd"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_delete_word_at_line_end_takes_trailing_blanks"
+initial_buffer = "x ab  \ncd"
+initial_cursor = [0, 0]
+keys = "d2w"
+expected_buffer = "\ncd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_bigword_at_line_end_takes_a_trailing_tab"
+initial_buffer = "xy\t\n[qux]"
+initial_cursor = [0, 1]
+keys = "dW"
+expected_buffer = "x\n[qux]"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_word_at_line_end_stops_before_a_blank_line"
+initial_buffer = "ab \n  \ncd"
+initial_cursor = [0, 0]
+keys = "dw"
+expected_buffer = "\n  \ncd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_delete_word_onto_a_later_word_is_unclamped"
+initial_buffer = "ab  \ncd ef"
+initial_cursor = [0, 0]
+keys = "d3w"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
