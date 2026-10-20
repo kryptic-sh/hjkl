@@ -37,3 +37,63 @@ initial_cursor = [0, 0]
 keys = "vjJ"
 expected_buffer = "foo bar\nbaz\n"
 expected_mode = "normal"
+
+[[cases]]
+name = "visual_join_with_nothing_to_join_keeps_the_start"
+initial_buffer = "  baz  xy"
+initial_cursor = [0, 3]
+keys = "vlJ"
+expected_buffer = "  baz  xy"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_join_backward_with_nothing_to_join"
+initial_buffer = "  baz  xy"
+initial_cursor = [0, 5]
+keys = "vhhJ"
+expected_buffer = "  baz  xy"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_block_join_with_nothing_to_join"
+initial_buffer = "  baz  xy"
+initial_cursor = [0, 3]
+keys = "<C-v>a{J"
+expected_buffer = "  baz  xy"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_raw_join_with_nothing_to_join"
+initial_buffer = "ab"
+initial_cursor = [0, 1]
+keys = "vgJ"
+expected_buffer = "ab"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_join_still_joins_the_next_line"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "vJ"
+expected_buffer = "ab cd\nef"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

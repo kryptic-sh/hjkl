@@ -34,6 +34,8 @@ and this project adheres to
 
 ### Fixed
 
+- `visual_join` puts the cursor on the selection's start column when no join
+  happens, instead of leaving it at `(top, 0)` where it parks before joining.
 - `toggle_case_at_cursor_bridge` (`~`) resets the curswant through
   `remember_operator_column`, and the `.` replay of `~` now calls that bridge
   instead of a copy of its loop that also skipped the end-of-line clamp.

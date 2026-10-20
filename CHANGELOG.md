@@ -10,6 +10,9 @@ patch bumps.
 
 ### Fixed
 
+- Visual `J` / `gJ` with nothing to join (a one-row selection on the last line)
+  leave the cursor where the selection starts, as in vim, where hjkl moved it to
+  column 0.
 - `j` / `k` after `~` aim for the column `~` left the cursor in, as in vim,
   where they went back to the column it started on; an operator over a `j` that
   cannot move after `~` (`~dj` on the last line) no longer drags the cursor back

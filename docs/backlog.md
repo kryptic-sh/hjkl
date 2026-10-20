@@ -1130,20 +1130,14 @@ pattern identified so far:
 
 Seen while measuring, not `gq`:
 
-- **Visual `J` with nothing to join moves the cursor to column 0.** `<C-v>a{J` @
-  (0,3) on `"  baz  xy"` (one line): nvim leaves the cursor at (0,3), hjkl at
-  (0,0). `visual_join` (`hjkl-vim` `command.rs`) parks the cursor at `(top, 0)`
-  before the joins and nothing moves it back when no join happens. Diagnosed
-  from the code, not fixed; the right landing for a Visual `J` that does join
-  was not re-measured.
-- **The sentence port (`SentBuf` in `hjkl-vim` `text_object.rs`) leaves two
-  pieces of vim out.** `startPS` recognises an empty line or a form feed, not
-  the nroff `'paragraphs'` / `'sections'` macros (`.PP`, `.SH`, …). And
-  Visual-line keeps only its anchor's row (`visual_line_anchor`), where vim
-  keeps a position, so `current_sent`'s Visual path (`sentence_visual`) runs for
-  Visual-line only while the selection is one row; a taller `V` selection, and
-  Visual-block, still take hjkl's own paths. Unmeasured how far those differ
-  from vim.
+- **The sentence port (`VimBuf`'s sentence methods in `hjkl-vim`
+  `text_object.rs`; the buffer reader itself is `vim_buf.rs`) leaves two pieces
+  of vim out.** `startPS` recognises an empty line or a form feed, not the nroff
+  `'paragraphs'` / `'sections'` macros (`.PP`, `.SH`, …). And Visual-line keeps
+  only its anchor's row (`visual_line_anchor`), where vim keeps a position, so
+  `current_sent`'s Visual path (`sentence_visual`) runs for Visual-line only
+  while the selection is one row; a taller `V` selection, and Visual-block,
+  still take hjkl's own paths. Unmeasured how far those differ from vim.
 - **A counted `f` / `t` / `;` with too few targets moves; three tests pin it.
   Needs a decision.** vim's `searchc` fails when the line holds fewer than
   `count` targets after the cursor, and the cursor stays: measured in nvim

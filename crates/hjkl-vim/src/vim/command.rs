@@ -591,19 +591,27 @@ pub fn visual_join<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     with_space: bool,
 ) {
-    let cursor_row = buf_cursor_pos(ed.buffer()).row;
-    let (top, bot) = match vim(ed).mode {
+    let (cursor_row, cursor_col) = ed.cursor();
+    // `start_col`: the selection's start column, where vim leaves the cursor
+    // when there is nothing to join.
+    let (top, bot, start_col) = match vim(ed).mode {
         Mode::VisualLine => (
             cursor_row.min(vim(ed).visual_line_anchor),
             cursor_row.max(vim(ed).visual_line_anchor),
+            0,
         ),
         Mode::VisualBlock => {
-            let a = vim(ed).block_anchor.0;
-            (a.min(cursor_row), a.max(cursor_row))
+            let a = vim(ed).block_anchor;
+            (
+                a.0.min(cursor_row),
+                a.0.max(cursor_row),
+                a.1.min(cursor_col),
+            )
         }
         Mode::Visual => {
-            let a = vim(ed).visual_anchor.0;
-            (a.min(cursor_row), a.max(cursor_row))
+            let a = vim(ed).visual_anchor;
+            let start = a.min((cursor_row, cursor_col));
+            (a.0.min(cursor_row), a.0.max(cursor_row), start.1)
         }
         _ => return,
     };
@@ -612,6 +620,7 @@ pub fn visual_join<H: hjkl_engine::types::Host>(
     let joins = (bot - top).max(1);
     ed.push_undo();
     buf_set_cursor_rc(ed.buffer_mut(), top, 0);
+    let mut joined_any = false;
     for _ in 0..joins {
         let joined = if with_space {
             join_line(ed)
@@ -621,6 +630,12 @@ pub fn visual_join<H: hjkl_engine::types::Host>(
         if !joined {
             break;
         }
+        joined_any = true;
+    }
+    if !joined_any {
+        // Nothing to join (a one-row selection on the last line): vim leaves
+        // the cursor where the selection starts, not at column 0.
+        buf_set_cursor_rc(ed.buffer_mut(), top, start_col);
     }
     // B1: visual `J`/`gJ` is exactly `[joins + 1]J`/`gJ` from the top row —
     // reuse the existing `JoinLine` dot-repeat entry (`:h v_J`) rather than
