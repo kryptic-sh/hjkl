@@ -10,6 +10,13 @@ patch bumps.
 
 ### Fixed
 
+- **Windows: copying and pasting survive another app holding the clipboard for a
+  moment.** A clipboard-history tool or an RDP sync briefly holding it made a
+  yank or paste fail outright; hjkl now retries for a moment first.
+- **Windows: a pasted screenshot is no longer transparent, and copied text with
+  a stray surrogate still pastes.** A bitmap whose alpha bytes are all zero (a
+  PrintScreen capture) pasted as a fully transparent image, and one unpaired
+  surrogate in copied text refused the whole paste.
 - In Visual-block mode, `gg` and `G` move the block's column to where they land,
   as in vim: `<C-v>Gd` deletes from column 0 to the starting column on every
   line, where hjkl kept only the starting column.

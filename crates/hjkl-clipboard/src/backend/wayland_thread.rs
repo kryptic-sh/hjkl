@@ -1603,10 +1603,8 @@ fn receive_from_offer(
     data
 }
 
-/// Cap on a single paste read so a hostile or buggy selection owner cannot
-/// stream unbounded data into memory. Generous — large images legitimately
-/// reach tens of MiB.
-const MAX_PASTE_BYTES: usize = 256 * 1024 * 1024;
+/// Cap on a single paste read: the crate-wide [`super::MAX_READ_BYTES`].
+const MAX_PASTE_BYTES: usize = super::MAX_READ_BYTES;
 
 /// Give up on a paste if the selection owner sends no data (and doesn't close
 /// the pipe) for this long. This is an **idle** timeout — it resets every time

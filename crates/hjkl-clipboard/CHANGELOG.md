@@ -8,6 +8,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Windows: `OpenClipboard` is retried briefly instead of failing at once, so
+  another process holding the clipboard for a moment (a clipboard-history tool,
+  an RDP sync) no longer fails a read or write. A failure that outlasts the
+  retries carries the OS error.
+- Windows: `CF_UNICODETEXT` is decoded lossily — an unpaired surrogate becomes
+  U+FFFD rather than failing the whole read with "not valid UTF-16".
+- `dib_png::dib_to_png` reads `biCompression` and, for 32 bpp `BI_BITFIELDS`,
+  the channel masks, instead of assuming BGRA; other compressions and masks that
+  do not select whole bytes are refused rather than decoded wrong. A 32 bpp
+  image whose alpha bytes are all zero (XRGB, as a PrintScreen capture is)
+  decodes opaque instead of fully transparent. A height of `i32::MIN` is an
+  error instead of an overflow panic.
+- `cf_hdrop::parse` ignores a trailing odd byte rather than refusing the drop
+  list: the Windows clipboard returns `GlobalSize` bytes, which may round the
+  block up past what was written.
+- Windows: a clipboard read larger than 256 MiB is refused, the cap the X11 and
+  Wayland readers already applied — now one shared constant
+  (`backend::MAX_READ_BYTES`).
 - Windows: a clipboard write whose allocation fails leaves the previous contents
   in place. `set` emptied the clipboard first and allocated after, so a failed
   `GlobalAlloc` destroyed what was there and put nothing back. Every block —

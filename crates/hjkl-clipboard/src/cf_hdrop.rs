@@ -133,11 +133,9 @@ pub fn parse(bytes: &[u8]) -> Result<Vec<PathBuf>, ClipboardError> {
     let list_bytes = &bytes[p_files..];
 
     // The list is a sequence of null-terminated UTF-16 LE strings, terminated
-    // by an extra null u16.
-    if !list_bytes.len().is_multiple_of(2) {
-        return Err(bad());
-    }
-
+    // by an extra null u16. A trailing odd byte is ignored, not refused: the
+    // clipboard hands back `GlobalSize` bytes, which may round the block up past
+    // what its writer filled.
     let units: Vec<u16> = list_bytes
         .as_chunks::<2>()
         .0
@@ -313,6 +311,13 @@ mod tests {
     // -----------------------------------------------------------------------
     // parse error cases
     // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_ignores_a_trailing_odd_byte() {
+        let mut bytes = build(&[Path::new(r"C:\a.txt")]).unwrap();
+        bytes.push(0);
+        assert_eq!(parse(&bytes).unwrap(), [PathBuf::from(r"C:\a.txt")]);
+    }
 
     #[test]
     fn parse_rejects_too_short() {

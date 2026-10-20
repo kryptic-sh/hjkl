@@ -10,7 +10,7 @@ use std::sync::OnceLock;
 
 use crate::{ClipboardError, MimeType, Selection, Uri};
 
-use super::Backend;
+use super::{Backend, MAX_READ_BYTES};
 
 // ---------------------------------------------------------------------------
 // Win32 type aliases — integer-backed, no external crates.
@@ -177,18 +177,40 @@ fn cf_rtf_format() -> UINT {
 /// or panic.
 struct ClipboardOpen;
 
+/// How many times [`ClipboardOpen::new`] tries `OpenClipboard`, and how long it
+/// waits between tries. Another process may hold the clipboard open for a
+/// moment — a clipboard-history tool or an RDP sync reading what was just
+/// copied — and `OpenClipboard` fails at once rather than waiting.
+const OPEN_ATTEMPTS: u32 = 10;
+const OPEN_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(10);
+
 impl ClipboardOpen {
     fn new() -> Result<Self, ClipboardError> {
         // SAFETY: OpenClipboard with a NULL hwnd is the documented way to
         // acquire the clipboard from code that does not own a window. The call
         // is safe to make from any thread; failure is indicated by a zero
         // return value.
-        let ok = unsafe { OpenClipboard(std::ptr::null_mut()) };
-        if ok == 0 {
-            return Err(ClipboardError::io_other("OpenClipboard failed"));
-        }
-        Ok(Self)
+        open_with_retry(|| unsafe { OpenClipboard(std::ptr::null_mut()) } != 0)
+            .map(|()| Self)
+            .map_err(|error| ClipboardError::io_other(&format!("OpenClipboard failed: {error}")))
     }
+}
+
+/// Call `open` until it succeeds, up to [`OPEN_ATTEMPTS`] times, sleeping
+/// [`OPEN_RETRY_DELAY`] between tries. On failure, the OS error from the
+/// last try.
+fn open_with_retry(mut open: impl FnMut() -> bool) -> std::io::Result<()> {
+    for attempt in 1..=OPEN_ATTEMPTS {
+        if open() {
+            return Ok(());
+        }
+        let error = std::io::Error::last_os_error();
+        if attempt == OPEN_ATTEMPTS {
+            return Err(error);
+        }
+        std::thread::sleep(OPEN_RETRY_DELAY);
+    }
+    unreachable!("the last attempt returns")
 }
 
 impl Drop for ClipboardOpen {
@@ -225,6 +247,23 @@ impl LockedHandle {
     fn ptr(&self) -> *mut c_void {
         self.ptr
     }
+
+    /// The locked block's size in bytes, refused past [`MAX_READ_BYTES`].
+    fn size(&self) -> Result<usize, ClipboardError> {
+        // SAFETY: `self.handle` is a valid HGLOBAL, locked for this guard's
+        // life. `GlobalSize` only reads its allocation size.
+        within_read_cap(unsafe { GlobalSize(self.handle) })
+    }
+}
+
+/// `size` if a read of it is within [`MAX_READ_BYTES`].
+fn within_read_cap(size: usize) -> Result<usize, ClipboardError> {
+    if size > MAX_READ_BYTES {
+        return Err(ClipboardError::io_other(
+            "clipboard data is larger than the read cap",
+        ));
+    }
+    Ok(size)
 }
 
 impl Drop for LockedHandle {
@@ -349,12 +388,8 @@ fn get_text() -> Result<Vec<u8>, ClipboardError> {
     // Lock the handle (RAII releases on drop, even on early-return errors).
     let locked = LockedHandle::new(handle)?;
 
-    // Determine the length in UTF-16 code units. `GlobalSize` returns bytes;
-    // each UTF-16 unit is 2 bytes.
-    //
-    // SAFETY: `handle` is a valid, locked HGLOBAL. `GlobalSize` is safe to
-    // call on any HGLOBAL returned by `GlobalAlloc` or the clipboard.
-    let byte_size = unsafe { GlobalSize(handle) };
+    // Determine the length in UTF-16 code units: each unit is 2 bytes.
+    let byte_size = locked.size()?;
     let max_units = byte_size / 2;
 
     // SAFETY: `locked.ptr()` is a valid pointer to `byte_size` bytes
@@ -362,15 +397,18 @@ fn get_text() -> Result<Vec<u8>, ClipboardError> {
     // units and stop at the first null terminator.
     let slice = unsafe { std::slice::from_raw_parts(locked.ptr().cast::<u16>(), max_units) };
 
-    // Find the null terminator; exclude it from the string.
-    let len_without_nul = slice.iter().position(|&c| c == 0).unwrap_or(max_units);
-    let text_slice = &slice[..len_without_nul];
-
-    let text = String::from_utf16(text_slice)
-        .map_err(|_| ClipboardError::io_other("clipboard data is not valid UTF-16"))?;
+    let text = decode_unicode_text(slice);
 
     // `locked` drops here → GlobalUnlock. `_guard` drops next → CloseClipboard.
     Ok(text.into_bytes())
+}
+
+/// `CF_UNICODETEXT` units as a string: up to the first NUL, with any unpaired
+/// surrogate replaced by U+FFFD. Windows strings are not checked UTF-16, so one
+/// stray surrogate in copied text must not refuse the whole paste.
+fn decode_unicode_text(units: &[u16]) -> String {
+    let len = units.iter().position(|&c| c == 0).unwrap_or(units.len());
+    String::from_utf16_lossy(&units[..len])
 }
 
 // ---------------------------------------------------------------------------
@@ -411,9 +449,7 @@ fn get_bytes(format: UINT) -> Result<Vec<u8>, ClipboardError> {
 
     let locked = LockedHandle::new(handle)?;
 
-    // SAFETY: `handle` is a valid locked HGLOBAL. `GlobalSize` returns the
-    // allocation size in bytes.
-    let byte_size = unsafe { GlobalSize(handle) };
+    let byte_size = locked.size()?;
 
     // SAFETY: `locked.ptr()` is a valid pointer to `byte_size` readable bytes.
     let slice = unsafe { std::slice::from_raw_parts(locked.ptr().cast::<u8>(), byte_size) };
@@ -560,8 +596,7 @@ fn get_png() -> Result<Vec<u8>, ClipboardError> {
             let handle = unsafe { GetClipboardData(png_id) };
             if !handle.is_null() {
                 let locked = LockedHandle::new(handle)?;
-                // SAFETY: handle is a valid locked HGLOBAL.
-                let byte_size = unsafe { GlobalSize(handle) };
+                let byte_size = locked.size()?;
                 // SAFETY: locked.ptr() is valid for `byte_size` readable bytes.
                 let slice =
                     unsafe { std::slice::from_raw_parts(locked.ptr().cast::<u8>(), byte_size) };
@@ -584,8 +619,7 @@ fn get_png() -> Result<Vec<u8>, ClipboardError> {
         ));
     }
     let locked = LockedHandle::new(handle)?;
-    // SAFETY: handle is a valid locked HGLOBAL.
-    let byte_size = unsafe { GlobalSize(handle) };
+    let byte_size = locked.size()?;
     // SAFETY: locked.ptr() is valid for `byte_size` readable bytes.
     let slice = unsafe { std::slice::from_raw_parts(locked.ptr().cast::<u8>(), byte_size) };
     let dib = slice.to_vec();
@@ -735,6 +769,44 @@ mod tests {
         // SAFETY: the locked block is readable for `size` >= `data.len()` bytes.
         let copy = unsafe { std::slice::from_raw_parts(locked.ptr().cast::<u8>(), data.len()) };
         assert_eq!(copy, data);
+    }
+
+    #[test]
+    fn a_read_past_the_cap_is_refused() {
+        assert_eq!(within_read_cap(MAX_READ_BYTES).unwrap(), MAX_READ_BYTES);
+        assert!(within_read_cap(MAX_READ_BYTES + 1).is_err());
+    }
+
+    /// A clipboard held open by someone else for a moment is waited for, not
+    /// failed at once; one held past every try fails with the OS's reason.
+    #[test]
+    fn opening_retries_a_clipboard_held_for_a_moment() {
+        let mut tries = 0;
+        open_with_retry(|| {
+            tries += 1;
+            tries == 3
+        })
+        .unwrap();
+        assert_eq!(tries, 3);
+
+        let mut tries = 0;
+        assert!(
+            open_with_retry(|| {
+                tries += 1;
+                false
+            })
+            .is_err()
+        );
+        assert_eq!(tries, OPEN_ATTEMPTS);
+    }
+
+    /// One unpaired surrogate in copied text costs that character, not the
+    /// whole paste; the text still ends at the first NUL.
+    #[test]
+    fn unicode_text_decodes_lossily_up_to_the_nul() {
+        let units = [u16::from(b'a'), 0xD800, u16::from(b'b'), 0, u16::from(b'c')];
+        assert_eq!(decode_unicode_text(&units), "a\u{FFFD}b");
+        assert_eq!(decode_unicode_text(&[u16::from(b'x')]), "x");
     }
 
     /// Every format through the real Win32 clipboard, in one test so nothing

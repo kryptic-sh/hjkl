@@ -427,7 +427,12 @@ pub fn png_to_dib(png: &[u8]) -> Result<Vec<u8>, ClipboardError> {
 ///
 /// The input must begin with a `BITMAPV5HEADER` (124 bytes) — no
 /// `BITMAPFILEHEADER`. Both bottom-up (positive height) and top-down (negative
-/// height) DIBs are accepted. Only 24 bpp and 32 bpp are supported.
+/// height) DIBs are accepted. Only 24 bpp and 32 bpp are supported, as
+/// `BI_RGB`, or 32 bpp `BI_BITFIELDS` whose masks each select one whole byte.
+///
+/// A 32 bpp image whose alpha bytes are all zero is read as opaque: an `XRGB`
+/// bitmap (a PrintScreen capture, say) leaves the fourth byte unused at 0, and
+/// pasting a wholly transparent picture is never what was copied.
 pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
     let bad = |msg: &'static str| ClipboardError::io_other(msg);
 
@@ -444,13 +449,15 @@ pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
     let width = i32::from_le_bytes(dib[4..8].try_into().unwrap());
     let height_raw = i32::from_le_bytes(dib[8..12].try_into().unwrap());
     let bpp = u16::from_le_bytes(dib[14..16].try_into().unwrap());
+    let compression = u32::from_le_bytes(dib[16..20].try_into().unwrap());
 
     if width <= 0 {
         return Err(bad("DIB width must be positive"));
     }
 
+    // `unsigned_abs`, not negation: `-i32::MIN` overflows.
     let (height, top_down) = if height_raw < 0 {
-        ((-height_raw) as u32, true)
+        (height_raw.unsigned_abs(), true)
     } else if height_raw > 0 {
         (height_raw as u32, false)
     } else {
@@ -463,6 +470,34 @@ pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
         32 => 4,
         24 => 3,
         _ => return Err(bad("unsupported DIB bit depth (only 24 and 32 bpp)")),
+    };
+
+    // Where each channel sits in a stored pixel: (red, green, blue, alpha).
+    // `BI_RGB` is BGR(X); `BI_BITFIELDS` names the bytes with its masks.
+    let layout = match (compression, channels) {
+        (BI_RGB, _) => (2, 1, 0, Some(3)),
+        (BI_BITFIELDS, 4) => {
+            let mask = |at: usize| u32::from_le_bytes(dib[at..at + 4].try_into().unwrap());
+            let byte = |mask: u32| match mask {
+                0x0000_00FF => Some(0),
+                0x0000_FF00 => Some(1),
+                0x00FF_0000 => Some(2),
+                0xFF00_0000 => Some(3),
+                _ => None,
+            };
+            let unsupported = || bad("unsupported DIB channel masks");
+            let alpha = match mask(52) {
+                0 => None,
+                a => Some(byte(a).ok_or_else(unsupported)?),
+            };
+            (
+                byte(mask(40)).ok_or_else(unsupported)?,
+                byte(mask(44)).ok_or_else(unsupported)?,
+                byte(mask(48)).ok_or_else(unsupported)?,
+                alpha,
+            )
+        }
+        _ => return Err(bad("unsupported DIB compression")),
     };
 
     // Checked stride/size math: width and height come from an untrusted header
@@ -486,12 +521,9 @@ pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
         let src = &image_data[r * stride..r * stride + width as usize * channels];
         let mut row = Vec::with_capacity(width as usize * channels);
         if channels == 4 {
-            // BGRA -> RGBA
+            let (r, g, b, a) = layout;
             for px in src.as_chunks::<4>().0 {
-                row.push(px[2]); // R
-                row.push(px[1]); // G
-                row.push(px[0]); // B
-                row.push(px[3]); // A
+                row.extend_from_slice(&[px[r], px[g], px[b], a.map_or(u8::MAX, |a| px[a])]);
             }
         } else {
             // BGR -> RGB
@@ -502,6 +534,12 @@ pub fn dib_to_png(dib: &[u8]) -> Result<Vec<u8>, ClipboardError> {
             }
         }
         rows.push(row);
+    }
+
+    if channels == 4 && rows.iter().flatten().skip(3).step_by(4).all(|&a| a == 0) {
+        for alpha in rows.iter_mut().flatten().skip(3).step_by(4) {
+            *alpha = u8::MAX;
+        }
     }
 
     // Bottom-up DIB stores rows in reverse order — flip so index 0 is the top.
@@ -903,6 +941,85 @@ pub mod tests {
         assert!(dib_to_png(&make_dib(i32::MAX, i32::MAX, 32)).is_err());
         // Top-down variant (negative height) of the same bomb.
         assert!(dib_to_png(&make_dib(i32::MAX, i32::MIN + 1, 24)).is_err());
+    }
+
+    /// A 1x2 32 bpp DIB holding `pixels` (RGBA), with its compression and
+    /// masks then rewritten to `compression` and `masks` (red, green, blue,
+    /// alpha) — the stored bytes stay BGRA.
+    fn dib_32(pixels: &[u8], compression: u32, masks: [u32; 4]) -> Vec<u8> {
+        let mut dib = png_to_dib(&build_png(1, 2, 4, pixels)).unwrap();
+        dib[16..20].copy_from_slice(&compression.to_le_bytes());
+        for (i, mask) in masks.iter().enumerate() {
+            dib[40 + 4 * i..44 + 4 * i].copy_from_slice(&mask.to_le_bytes());
+        }
+        dib
+    }
+
+    const ARGB: [u32; 4] = [0x00FF_0000, 0x0000_FF00, 0x0000_00FF, 0xFF00_0000];
+
+    #[test]
+    fn dib_height_of_i32_min_is_an_error_not_a_panic() {
+        let mut dib = dib_32(&[0; 8], BI_BITFIELDS, ARGB);
+        dib[8..12].copy_from_slice(&i32::MIN.to_le_bytes());
+        assert!(dib_to_png(&dib).is_err());
+    }
+
+    /// An XRGB bitmap leaves every fourth byte 0; it pastes opaque, not
+    /// wholly transparent.
+    #[test]
+    fn an_all_zero_alpha_dib_reads_as_opaque() {
+        #[rustfmt::skip]
+        let pixels = [
+            10, 20, 30, 0,
+            40, 50, 60, 0,
+        ];
+        for compression in [BI_RGB, BI_BITFIELDS] {
+            let (_, _, _, decoded) =
+                decode_png(&dib_to_png(&dib_32(&pixels, compression, ARGB)).unwrap());
+            assert_eq!(
+                decoded,
+                [10, 20, 30, 255, 40, 50, 60, 255],
+                "compression {compression}"
+            );
+        }
+    }
+
+    /// Real alpha is kept: only an image with no nonzero alpha byte at all is
+    /// taken for XRGB.
+    #[test]
+    fn a_partly_transparent_dib_keeps_its_alpha() {
+        #[rustfmt::skip]
+        let pixels = [
+            10, 20, 30, 0,
+            40, 50, 60, 128,
+        ];
+        let (_, _, _, decoded) =
+            decode_png(&dib_to_png(&dib_32(&pixels, BI_BITFIELDS, ARGB)).unwrap());
+        assert_eq!(decoded, pixels);
+    }
+
+    /// `BI_BITFIELDS` masks say which byte holds which channel; a DIB whose
+    /// masks swap red and blue decodes with them swapped back.
+    #[test]
+    fn bitfields_masks_choose_the_channel_bytes() {
+        #[rustfmt::skip]
+        let pixels = [
+            10, 20, 30, 255,
+            40, 50, 60, 255,
+        ];
+        // Stored as BGRA; masks naming byte 0 red and byte 2 blue read it as RGBA.
+        let abgr = [0x0000_00FF, 0x0000_FF00, 0x00FF_0000, 0xFF00_0000];
+        let (_, _, _, decoded) =
+            decode_png(&dib_to_png(&dib_32(&pixels, BI_BITFIELDS, abgr)).unwrap());
+        assert_eq!(decoded, [30, 20, 10, 255, 60, 50, 40, 255]);
+    }
+
+    #[test]
+    fn unsupported_dib_compression_and_masks_are_errors() {
+        const BI_JPEG: u32 = 4;
+        assert!(dib_to_png(&dib_32(&[0; 8], BI_JPEG, ARGB)).is_err());
+        let split = [0x00F0_0F00, 0x0000_FF00, 0x0000_00FF, 0xFF00_0000];
+        assert!(dib_to_png(&dib_32(&[0; 8], BI_BITFIELDS, split)).is_err());
     }
 
     #[test]

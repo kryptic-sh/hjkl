@@ -31,6 +31,12 @@ pub mod x11_backend;
 pub(crate) mod x11_thread;
 
 use crate::{BackendKind, Capabilities, ClipboardError, MimeType, Selection};
+
+/// Cap on one clipboard read, on every backend, so a hostile or buggy owner
+/// cannot push unbounded data into memory. Generous — large images
+/// legitimately reach tens of MiB.
+#[cfg(any(target_os = "linux", target_os = "windows"))]
+pub(crate) const MAX_READ_BYTES: usize = 256 * 1024 * 1024;
 use async_trait::async_trait;
 
 /// Trait implemented by every clipboard backend.
