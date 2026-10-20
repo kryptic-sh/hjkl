@@ -10,6 +10,10 @@ patch bumps.
 
 ### Fixed
 
+- `i"` / `a"` (and `'`, `` ` ``) with the cursor between two quoted strings take
+  the text between them, as in vim: `di"` on the `.` of `"ab"."cd"` deletes the
+  `.`, where hjkl emptied `"cd"`. vim pairs the quotes from the line start only
+  when the cursor is on one.
 - Visual `J` / `gJ` with nothing to join (a one-row selection on the last line)
   leave the cursor where the selection starts, as in vim, where hjkl moved it to
   column 0.

@@ -34,6 +34,10 @@ and this project adheres to
 
 ### Fixed
 
+- `quote_text_object` follows vim's `current_quote`: off a quote, the nearest
+  quote before the cursor (else the first after it) opens and the next one
+  closes, instead of pairing every quote from the line start and jumping to the
+  next pair.
 - `visual_join` puts the cursor on the selection's start column when no join
   happens, instead of leaving it at `(top, 0)` where it parks before joining.
 - `toggle_case_at_cursor_bridge` (`~`) resets the curswant through

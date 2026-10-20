@@ -1578,25 +1578,27 @@ pub fn quote_text_object<H: hjkl_engine::types::Host>(
     if positions.len() < 2 {
         return None;
     }
-    let mut open_idx: Option<usize> = None;
-    let mut close_idx: Option<usize> = None;
-    for pair in positions.chunks(2) {
-        if pair.len() < 2 {
-            break;
-        }
-        if col >= pair[0] && col <= pair[1] {
-            open_idx = Some(pair[0]);
-            close_idx = Some(pair[1]);
-            break;
-        }
-        if col < pair[0] {
-            open_idx = Some(pair[0]);
-            close_idx = Some(pair[1]);
-            break;
-        }
-    }
-    let open = open_idx?;
-    let close = close_idx?;
+    // vim's `current_quote`: on a quote, the quotes pair up from the start of
+    // the line; anywhere else the nearest quote before the cursor opens (the
+    // first one after it when there is none) and the next quote closes, so
+    // the `.` in `"ab"."cd"` sits inside `"."`.
+    let (open, close) = if chars.get(col) == Some(&q) {
+        let &[open, close] = positions
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .find(|[open, close]| (*open..=*close).contains(&col))?;
+        (open, close)
+    } else {
+        let open = positions
+            .iter()
+            .rev()
+            .find(|&&p| p < col)
+            .or_else(|| positions.iter().find(|&&p| p > col))
+            .copied()?;
+        let close = positions.iter().find(|&&p| p > open).copied()?;
+        (open, close)
+    };
     // End columns are *exclusive* — one past the last character to act on.
     if inner && count >= 2 {
         Some(((row, open), (row, close + 1)))
