@@ -979,6 +979,18 @@ expected_buffer = "日本語x\nabcdef\n"
 expected_cursor = [1, 5]
 expected_mode = "normal"
 
+# vim's `s` substitutes the character and `S` the line; hjkl's
+# `motion_sneak` (on by default) would treat them as a two-character jump, so
+# the driver turns it off.
+[[cases]]
+name = "s_and_uppercase_s_substitute"
+initial_buffer = "abc\ndef"
+initial_cursor = [0, 1]
+keys = "sZ<Esc>jSq<Esc>"
+expected_buffer = "aZc\nq"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+
 # vim types brackets and quotes as they are; hjkl's `autopair` (on by
 # default) would close each one, so the driver turns it off.
 [[cases]]

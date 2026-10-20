@@ -78,6 +78,9 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     editor.settings_mut().smartcase = false;
     // vim has no autopair, which hjkl defaults on: `i[` would type `[]`.
     editor.settings_mut().autopair = false;
+    // Nor vim-sneak, also on by default: `s` / `S` would wait for two target
+    // characters instead of substituting.
+    editor.settings_mut().motion_sneak = false;
 
     // 2b. Apply per-case indent settings so `>>` / `<<` match nvim's output.
     if let Some(sw) = case.shiftwidth {
