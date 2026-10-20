@@ -420,3 +420,147 @@ keys = "dap"
 expected_buffer = "foo\n\nbaz\n"
 expected_cursor = [2, 0]
 expected_register = ['"', "bar\n\n"]
+
+[[cases]]
+name = "change_left_at_column_0_still_inserts"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 0]
+keys = "chX<Esc>"
+expected_buffer = "X  ab cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_to_line_start_at_column_0_still_inserts"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 0]
+keys = "c0X<Esc>"
+expected_buffer = "X  ab cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_to_first_non_blank_on_it_still_inserts"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 2]
+keys = "c^X<Esc>"
+expected_buffer = "  Xab cd"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_to_column_1_at_column_0_still_inserts"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 0]
+keys = "c|X<Esc>"
+expected_buffer = "X  ab cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_sentence_back_at_buffer_start_still_inserts"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 0]
+keys = "c(X<Esc>"
+expected_buffer = "X  ab cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_left_in_place_repeats_with_dot"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 0]
+keys = "chX<Esc>j."
+expected_buffer = "XX  ab cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_word_on_an_empty_line_inserts"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [1, 0]
+keys = "cwX<Esc>"
+expected_buffer = "ab\nX\ncd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_to_line_end_on_an_empty_buffer_inserts"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "c$X<Esc>"
+expected_buffer = "X"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_word_back_at_buffer_start_still_cancels"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 0]
+keys = "cbX<Esc>"
+expected_buffer = "  ab cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_up_on_the_first_line_still_cancels"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 2]
+keys = "ckX<Esc>"
+expected_buffer = " ab cd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_change_sentence_back_at_buffer_start_cancels"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 0]
+keys = "2c(X<Esc>"
+expected_buffer = "  ab cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_change_left_at_column_0_still_inserts"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 0]
+keys = "2chX<Esc>"
+expected_buffer = "X  ab cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

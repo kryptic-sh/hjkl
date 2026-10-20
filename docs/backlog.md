@@ -265,6 +265,23 @@ Every entry below was reproduced through
 0.12.4 and left unfixed on purpose. Preserve each fixed case in the tier-2
 compatibility corpus and verify it against nvim before changing expectations.
 
+Found while fixing `c` over an in-place motion (2026-10-20, nvim 0.12.5), not
+fixed:
+
+- **`dd` on a lone empty line writes no register.** On the empty buffer `""`,
+  `dd` / `"add` leave the register empty in hjkl; nvim stores a linewise `"\n`.
+  `dd` on any non-empty line and on an empty line with others around it already
+  match.
+- **`c)` / `c}` on an empty buffer do not enter Insert.** nvim's `c)X<Esc>` and
+  `c}X<Esc>` on `""` give `"X"`. They are left out of `change_survives_in_place`
+  (`op_motion.rs`) because on a non-empty buffer the same motions take a
+  different path, and `c)` at the end of `"ab cd"` @ (0,4) already diverges on
+  its own: hjkl changes the `c` (`"ab d"`), nvim the `d` (`"ab cX"`).
+- **`cg0` / `cg^` at column 0.** `cg0X<Esc>` on `"  ab cd"` @ (0,0) inserts `X`
+  in nvim; `cg^X<Esc>` changes the leading blanks (`"Xab cd"`, register `"  "`).
+  hjkl leaves the line alone for both. Not checked whether the display-line
+  motions are parsed under an operator at all.
+
 ### 1.5b Left open by the motion- and blockwise-parity passes
 
 **A text object in blockwise visual collapses the block (2026-08-04).**

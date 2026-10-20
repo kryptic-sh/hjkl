@@ -89,8 +89,49 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
         end = (end.0, end.1 + 1);
         kind = RangeKind::Exclusive;
     }
+    // `c` over a motion that stayed put without cancelling the operator: the
+    // empty range still starts Insert at the cursor (`run_operator_over_range`
+    // does that for an empty exclusive range), where every other operator has
+    // nothing to act on.
+    if op == Operator::Change
+        && start == end
+        && kind != RangeKind::Linewise
+        && change_survives_in_place(motion, count)
+    {
+        run_operator_over_range(ed, op, start, end, RangeKind::Exclusive);
+        return;
+    }
     let word_fwd = matches!(motion, Motion::WordFwd | Motion::BigWordFwd);
     operate_over_motion_range(ed, op, start, end, kind, word_fwd);
+}
+
+/// The motions that leave a pending operator in place when they cannot move,
+/// measured with `c` against nvim 0.12.5: `h` / `<BS>` at column 0, `l` on an
+/// empty line, `0`, `^`, `|`, `(` and `{` at the buffer start, and `w` / `W`
+/// / `e` / `E` / `$` on an empty line (vim clears the operator only for a
+/// failed `w` or `e` without one). A count does not change that, except for
+/// `$`, `(` and `{`, which a count they cannot satisfy fails (`2C` on the last
+/// line, `2c(` at the buffer start). `b`, `ge`, `j`, `k`, a missed `f` / `t`,
+/// a `%` with no bracket and the line motions do cancel it.
+fn change_survives_in_place(motion: &Motion, count: usize) -> bool {
+    match motion {
+        Motion::SentencePrev | Motion::ParagraphPrev | Motion::LineEnd => count <= 1,
+        _ => matches!(
+            motion,
+            Motion::Left
+                | Motion::Right
+                | Motion::BackspaceBack
+                | Motion::SpaceFwd
+                | Motion::LineStart
+                | Motion::FirstNonBlank
+                | Motion::GotoColumn
+                | Motion::WordFwd
+                | Motion::BigWordFwd
+                | Motion::WordEnd
+                | Motion::BigWordEnd
+                | Motion::ChangeWordEnd { .. }
+        ),
+    }
 }
 
 /// Whether `motion`, having left the cursor where it was, succeeded rather

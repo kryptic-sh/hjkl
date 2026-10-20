@@ -10,6 +10,11 @@ patch bumps.
 
 ### Fixed
 
+- `c` over a motion that cannot move but does not cancel the operator enters
+  Insert at the cursor, as in vim: `ch` / `c0` / `c|` at column 0, `c^` on the
+  first non-blank, `c(` / `c{` at the buffer start, and `cw` / `ce` / `c$` /
+  `cl` on an empty line. hjkl dropped the change and ran the inserted text as
+  Normal-mode commands. `.` repeats it.
 - `i"` / `a"` (and `'`, `` ` ``) with the cursor between two quoted strings take
   the text between them, as in vim: `di"` on the `.` of `"ab"."cd"` deletes the
   `.`, where hjkl emptied `"cd"`. vim pairs the quotes from the line start only

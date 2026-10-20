@@ -34,6 +34,10 @@ and this project adheres to
 
 ### Fixed
 
+- `apply_op_with_motion` runs `Operator::Change` over the empty range a
+  non-cancelling motion leaves in place (`h`, `l`, `0`, `^`, `|`, `(`, `{`, and
+  the word / `$` motions on an empty line), so Insert starts at the cursor
+  instead of the operator being dropped.
 - `quote_text_object` follows vim's `current_quote`: off a quote, the nearest
   quote before the cursor (else the first after it) opens and the next one
   closes, instead of pairing every quote from the line start and jumping to the
