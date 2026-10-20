@@ -287,10 +287,34 @@ fixed:
   left alone. Two walks of one motion can drift apart; moving the cursor motion
   onto `findsent` (with vim's `adjust_cursor` for Normal mode, and the NUL kept
   in Visual) would leave one.
-- **`cg0` / `cg^` at column 0.** `cg0X<Esc>` on `"  ab cd"` @ (0,0) inserts `X`
-  in nvim; `cg^X<Esc>` changes the leading blanks (`"Xab cd"`, register `"  "`).
-  hjkl leaves the line alone for both. Not checked whether the display-line
-  motions are parsed under an operator at all.
+- **`(` after a blank line lands on column 0.** On the buffer `\n  ab cd` (a
+  blank line, then `  ab cd`) @ (1,5) nvim's `(` goes to (1,2), the first
+  non-blank, and from (1,2) to (0,0); hjkl lands on (1,0) for both, and `d(`
+  there deletes the leading blanks too. The Normal-mode walk
+  (`Motion::SentencePrev` in `motion.rs`, via `sentence_boundary` in
+  `text_object.rs`) is the cause. Tried on 2026-10-20: replacing that arm with
+  the `findsent` port backward (a `sentence_backward` helper calling
+  `VimBuf::findsent(cursor, false, count)`, `None` leaving the cursor put)
+  matched nvim in 31 of 32 probes — every shape above, counted `2(` / `3(` /
+  `4(`, `d(` / `y(` / `c(` / `v(d`, closing `)` runs, empty buffer — and missed
+  only `(` on the all-blank buffer `\n\n` @ (1,0), where nvim goes to (0,0) and
+  the port stays. Set aside unverified (no corpus, oracle or fuzz run) when the
+  session wrapped up, and reverted. Finishing it: fix that all-blank case, then
+  delete `sentence_boundary` and its comparison tests
+  (`sentence_boundary_matches_full_scan_across_paragraph_break` and the
+  `old_sentence_boundary` equivalence test), which the switch leaves dead.
+- **`g0` / `g^` / `g$` are not implemented at all**, in Normal, Visual or after
+  an operator: `op_g_motion` (`operator.rs`) has no `0` / `^` / `$` and there is
+  no `Motion` variant for them, so `cg0X<Esc>` on `"  ab cd"` @ (0,0) types
+  nothing (nvim inserts `X`), `cg^X<Esc>` leaves the blanks (nvim changes them,
+  register `"  "`), and `g0` / `g^` / `g$` in Normal mode do not move. Adding
+  them means new `Motion` variants (an exhaustive public enum in
+  `hjkl-vim-types`, so a breaking change) and a screen-line rule: the wrap
+  segment holding the cursor (`hjkl_buffer::wrap_segments`, as `gj` / `gk` use
+  through `move_screen_vertical`) under wrap, the visible columns from
+  `Viewport::top_col` without it. `g$` is inclusive, the other two exclusive.
+  `gm` (`Motion::ScreenLineMiddle`) takes half the viewport width and ignores
+  both wrap and horizontal scroll, so it has the same gap.
 
 ### 1.5b Left open by the motion- and blockwise-parity passes
 
