@@ -8,6 +8,13 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- `(` after a blank line goes to the first non-blank of the sentence, as in vim:
+  on `"\n  ab cd"` from `cd`, `(` lands on `ab`, where hjkl went to column 0,
+  and `d(` there no longer deletes the indent. On a buffer of only blank lines a
+  count of `(` (`2(`) goes to the top, where hjkl stayed put.
+
 ## [0.43.2] - 2026-10-20
 
 ### Fixed

@@ -16,6 +16,16 @@ pub fn with_vim_buf<H: hjkl_engine::types::Host, T>(
     if rope.chars().all(|c| c == '\n') {
         return None;
     }
+    Some(walk_vim_buf(ed, f))
+}
+
+/// [`with_vim_buf`] without its guard: a buffer of blank lines is walked
+/// too, as vim's motions (unlike its text objects) do.
+pub fn walk_vim_buf<H: hjkl_engine::types::Host, T>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    f: impl FnOnce(&VimBuf<'_>, Pos) -> T,
+) -> T {
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let line_chars = |r: usize| -> Vec<char> {
         let start = rope.line_to_byte(r);
         rope.byte_slice(start..start + hjkl_buffer::rope_line_bytes(&rope, r))
@@ -25,7 +35,7 @@ pub fn with_vim_buf<H: hjkl_engine::types::Host, T>(
     let buf = VimBuf::new(rope.len_lines(), &line_chars);
     let row = ed.cursor().0.min(buf.n_lines - 1);
     let cursor = (row, ed.cursor().1.min(buf.len(row)));
-    Some(f(&buf, cursor))
+    f(&buf, cursor)
 }
 
 /// vim `ascii_iswhite`.

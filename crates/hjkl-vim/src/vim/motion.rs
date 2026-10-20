@@ -871,15 +871,8 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         // possible is what made `2)` on a single sentence-less line land on
         // the last char instead of staying put.
         Motion::SentencePrev => {
-            let start = ed.cursor();
-            for _ in 0..count.max(1) {
-                match sentence_boundary(ed, false) {
-                    Some((row, col)) => ed.jump_cursor(row, col),
-                    None => {
-                        ed.jump_cursor(start.0, start.1);
-                        break;
-                    }
-                }
+            if let Some((row, col)) = crate::vim::text_object::sentence_backward(ed, count) {
+                ed.jump_cursor(row, col);
             }
         }
         Motion::SentenceNext => {

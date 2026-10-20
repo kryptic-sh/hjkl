@@ -287,28 +287,6 @@ fixed:
   left alone. Two walks of one motion can drift apart; moving the cursor motion
   onto `findsent` (with vim's `adjust_cursor` for Normal mode, and the NUL kept
   in Visual) would leave one.
-- **`(` after a blank line lands on column 0.** On the buffer `\n  ab cd` (a
-  blank line, then `  ab cd`) @ (1,5) nvim's `(` goes to (1,2), the first
-  non-blank, and from (1,2) to (0,0); hjkl lands on (1,0) for both, and `d(`
-  there deletes the leading blanks too. The Normal-mode walk
-  (`Motion::SentencePrev` in `motion.rs`, via `sentence_boundary` in
-  `text_object.rs`) is the cause. Tried on 2026-10-20: replacing that arm with
-  the `findsent` port backward (a `sentence_backward` helper calling
-  `VimBuf::findsent(cursor, false, count)`, `None` leaving the cursor put)
-  matched nvim in 31 of 32 probes — every shape above, counted `2(` / `3(` /
-  `4(`, `d(` / `y(` / `c(` / `v(d`, closing `)` runs, empty buffer — and missed
-  only `(` on the all-blank buffer `\n\n` @ (1,0), where nvim goes to (0,0) and
-  the port stays. That miss is `with_vim_buf` (`vim_buf.rs`) refusing a buffer
-  with no characters, a guard the text objects need; splitting the walk out into
-  a `walk_vim_buf` without the guard, used by `sentence_backward`, matched nvim
-  in all 42 probes, blank buffers included (`2(` reaches the top, `9(` fails).
-  Twice set aside unverified (no corpus, oracle or fuzz run) when the session
-  wrapped up, and reverted. Finishing it: redo that change, delete
-  `sentence_boundary` and the tests that only compare it with the old walk
-  (`sentence_boundary_matches_full_scan_across_paragraph_break`,
-  `sentence_boundary_matches_full_scan_on_corpus`, `old_sentence_boundary`), and
-  fix the doc comments that point at it (`first_sentence_boundary_forward`,
-  `scan_row_boundaries`, `sentence_step_forward`, `paragraph_text_object`).
 - **`g0` / `g^` / `g$` are not implemented at all**, in Normal, Visual or after
   an operator: `op_g_motion` (`operator.rs`) has no `0` / `^` / `$` and there is
   no `Motion` variant for them, so `cg0X<Esc>` on `"  ab cd"` @ (0,0) types

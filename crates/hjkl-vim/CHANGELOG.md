@@ -34,6 +34,11 @@ and this project adheres to
 
 ### Fixed
 
+- `Motion::SentencePrev` (`(`, and `d(` / `c(` / `y(` / `v(`) walks vim's
+  `findsent` backward (the `VimBuf` port, through the new unguarded
+  `walk_vim_buf`), replacing the row scan `text_object::sentence_boundary`,
+  which is removed: after a blank line `(` lands on the first non-blank, and
+  `2(` on a buffer of blank lines reaches the top instead of failing.
 - The `:h word` end-of-line clamp for an operator's `w` / `W` ends the range on
   the NUL of the last word's line, exclusive, as vim's `fwd_word` stops there,
   instead of on the word's last character; the blanks after it are included.
