@@ -239,6 +239,17 @@ pub enum Motion {
     /// `gm` — cursor to the middle of the *screen* line: column
     /// `min(viewport_width / 2, last_col)`. Differs from `gM` (char-middle).
     ScreenLineMiddle,
+    /// `g0` — first character of the *screen* line: the start of the wrap
+    /// segment holding the cursor under wrap, the first visible column
+    /// without it.
+    ScreenLineStart,
+    /// `g^` — first non-blank character from the screen line's start on
+    /// (the line's last character when only blanks follow).
+    ScreenLineFirstNonBlank,
+    /// `g$` — last character of the screen line; inclusive under an
+    /// operator, and the NUL past the line's end in Visual when the line
+    /// ends on that screen line.
+    ScreenLineEnd,
     /// `{` — previous paragraph (preceding blank line, or top).
     ParagraphPrev,
     /// `}` — next paragraph (following blank line, or bottom).

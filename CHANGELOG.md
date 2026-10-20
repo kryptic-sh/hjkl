@@ -8,8 +8,18 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- `g0` / `g^` / `g$`, in Normal, Visual and after an operator: the start, the
+  first non-blank and the end of the screen line (the wrapped segment under
+  `:set wrap`, the visible columns without it). `g$` is inclusive under an
+  operator and takes the line break in Visual, as `$` does; `cg0` / `cg^` /
+  `cg$` that cannot move still enter Insert.
+
 ### Fixed
 
+- A digit after `g` is the command, not a count: `g0` used to turn into a count
+  of 10 and leave the `g` pending, so the next key was lost.
 - `(` after a blank line goes to the first non-blank of the sentence, as in vim:
   on `"\n  ab cd"` from `cd`, `(` lands on `ab`, where hjkl went to column 0,
   and `d(` there no longer deletes the indent. On a buffer of only blank lines a

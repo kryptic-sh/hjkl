@@ -1241,3 +1241,220 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+# ─── g0 / g^ / g$ : screen-line start, first non-blank, end ──────────────────
+[[cases]]
+name = "g0_goes_to_screen_line_start"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 5]
+keys = "g0"
+expected_buffer = "  ab cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "g_caret_goes_to_first_non_blank"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 5]
+keys = "g^"
+expected_buffer = "  ab cd"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "g_caret_on_blank_line_stops_on_last_char"
+initial_buffer = "   "
+initial_cursor = [0, 0]
+keys = "g^"
+expected_buffer = "   "
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "g_dollar_goes_to_last_char"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 0]
+keys = "g$"
+expected_buffer = "  ab cd"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_g_dollar_goes_down_a_line"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 0]
+keys = "2g$"
+expected_buffer = "ab\ncd"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "g_dollar_sets_curswant_to_landing"
+initial_buffer = "abc\nabcdef"
+initial_cursor = [0, 0]
+keys = "g$j"
+expected_buffer = "abc\nabcdef"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "g0_sets_curswant_to_landing"
+initial_buffer = "abcdef\nab\nabcdef"
+initial_cursor = [0, 3]
+keys = "g0jj"
+expected_buffer = "abcdef\nab\nabcdef"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_g0_at_column_zero_inserts"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 0]
+keys = "cg0X<Esc>"
+expected_buffer = "X  ab cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_g_caret_takes_leading_blanks"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 0]
+keys = "cg^X<Esc>"
+expected_buffer = "Xab cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_g_dollar_on_empty_buffer_inserts"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "cg$X<Esc>"
+expected_buffer = "X"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_g_dollar_is_inclusive"
+initial_buffer = "ab cd"
+initial_cursor = [0, 1]
+keys = "dg$"
+expected_buffer = "a"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_g0_is_exclusive"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 4]
+keys = "dg0"
+expected_buffer = " cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_g_caret_backward_from_line_end"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 6]
+keys = "dg^"
+expected_buffer = "  d"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_g_dollar_takes_line_break"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 0]
+keys = "vg$d"
+expected_buffer = "cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_g0_extends_to_line_start"
+initial_buffer = "  ab"
+initial_cursor = [0, 3]
+keys = "vg0d"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_g_caret_extends_to_first_non_blank"
+initial_buffer = "  ab"
+initial_cursor = [0, 0]
+keys = "vg^d"
+expected_buffer = "b"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_g_dollar_takes_each_line_end"
+initial_buffer = "abc\nab"
+initial_cursor = [0, 0]
+keys = "<C-v>jg$d"
+expected_buffer = "\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "digit_after_g_is_not_a_count"
+initial_buffer = "  ab cd"
+initial_cursor = [0, 5]
+keys = "g5x"
+expected_buffer = "  ab d"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

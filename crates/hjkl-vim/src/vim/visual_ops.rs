@@ -408,6 +408,9 @@ pub fn update_block_vcol<H: hjkl_engine::types::Host>(
         | Motion::LastNonBlank
         | Motion::LineMiddle
         | Motion::ScreenLineMiddle
+        | Motion::ScreenLineStart
+        | Motion::ScreenLineFirstNonBlank
+        | Motion::ScreenLineEnd
         | Motion::WordAtCursor { .. }
         | Motion::Find { .. }
         | Motion::FindRepeat { .. }

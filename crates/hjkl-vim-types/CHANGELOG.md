@@ -10,6 +10,9 @@ and this project adheres to
 
 ### Added
 
+- `Motion::ScreenLineStart`, `Motion::ScreenLineFirstNonBlank` and
+  `Motion::ScreenLineEnd`, for `g0` / `g^` / `g$`. More variants on the
+  exhaustive `Motion` enum: an external `match` over it breaks.
 - `LastChange::OpenLine` carries the `count` of a `[count]o` / `[count]O`, so
   `.` repeats it; constructing or destructuring the variant must add the field.
 - `InsertEntry::GShiftI`, for `gI` (insert at column 0) and its dot-repeat.

@@ -46,6 +46,10 @@ pub fn step_normal<H: Host>(
                 | SneakSecond { .. }
                 | OpSneakFirst { .. }
                 | OpSneakSecond { .. }
+                // A digit after `g` is the command (`g0`), never a count;
+                // the `g` arm stashes the count, so `0` would extend it.
+                | Pending::G
+                | Pending::OpG { .. }
         )
         && (d != '0' || ed.count() > 0)
     {
@@ -1161,7 +1165,9 @@ fn handle_after_g<H: Host>(
                 // `gJ` — join the selected lines without a space.
                 'J' => ed.visual_join(false),
                 // Extend-the-selection motions go through the shared body.
-                'g' | 'e' | 'E' | '_' | 'j' | 'k' | 'M' | 'm' | '*' | '#' => ed.after_g(c, count),
+                'g' | 'e' | 'E' | '_' | 'j' | 'k' | 'M' | 'm' | '0' | '^' | '$' | '*' | '#' => {
+                    ed.after_g(c, count)
+                }
                 // Other g-commands have no visual meaning here — swallow.
                 _ => {}
             }

@@ -482,6 +482,9 @@ fn motion_class(motion: &Motion) -> MotionClass {
         | Motion::LastNonBlank
         | Motion::LineMiddle
         | Motion::ScreenLineMiddle
+        | Motion::ScreenLineStart
+        | Motion::ScreenLineFirstNonBlank
+        | Motion::ScreenLineEnd
         | Motion::GotoColumn => Horizontal,
         // No Motion variant classifies Raw — see the enum docs.
     }
@@ -505,7 +508,7 @@ pub fn foldopen_cursor<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer:
 /// `moved` stands in for the handler's success test, which is why a failed
 /// `l` at the end of a line opens nothing. Measured against nvim 0.12.5:
 /// `ge`/`gE`, `g_`, `gm`/`gM`, `|`, `H`/`M`/`L`, `+`/`-`/`_`, `gg`/`G` and
-/// `j`/`k` leave the fold closed.
+/// `j`/`k` leave the fold closed, and so do `g0` / `g^` / `g$`.
 fn motion_opens_fold(motion: &Motion, count: usize, moved: bool) -> bool {
     match motion {
         // `hor`: `nv_beginline()` succeeds without moving, and so does
@@ -555,12 +558,48 @@ fn motion_opens_fold(motion: &Motion, count: usize, moved: bool) -> bool {
         | Motion::LastNonBlank
         | Motion::LineMiddle
         | Motion::ScreenLineMiddle
+        | Motion::ScreenLineStart
+        | Motion::ScreenLineFirstNonBlank
+        | Motion::ScreenLineEnd
         | Motion::FirstNonBlankNextLine
         | Motion::FirstNonBlankPrevLine
         | Motion::FirstNonBlankLine
         | Motion::GotoColumn => false,
     }
 }
+/// The text area's width in cells, `0` before a host has published one.
+fn screen_text_width<H: hjkl_engine::types::Host>(ed: &Editor<hjkl_buffer::View, H>) -> u16 {
+    let v = ed.host().viewport();
+    if v.text_width > 0 {
+        v.text_width
+    } else {
+        v.width
+    }
+}
+
+/// The screen line holding the cursor as `[start, end)` char columns of its
+/// row, for `g0` / `g^` / `g$`: the wrap segment under wrap, and without it
+/// the columns from `Viewport::top_col` on that fit the text width. Cells are
+/// measured as `wrap_segments` measures them, as `gj` / `gk` do.
+fn screen_line_span<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+) -> (usize, usize) {
+    use hjkl_buffer::{Wrap, wrap_segments};
+    let (row, col) = ed.cursor();
+    let line = buf_line(ed.buffer(), row).unwrap_or_default();
+    let v = *ed.host().viewport();
+    if !matches!(v.wrap, Wrap::None) && v.text_width > 0 {
+        let segs = wrap_segments(&line, v.text_width, v.wrap);
+        return segs[hjkl_buffer::wrap::segment_for_col(&segs, col)];
+    }
+    let start = v.top_col.min(line.chars().count());
+    let rest: String = line.chars().skip(start).collect();
+    (
+        start,
+        start + wrap_segments(&rest, screen_text_width(ed), Wrap::Char)[0].1,
+    )
+}
+
 /// The `cursor_down(count - 1)` that vim's `nv_dollar` and `g_` run before
 /// moving along the line; false when it fails, which aborts the command.
 /// It fails only on the last line: a count that overshoots the buffer still
@@ -858,6 +897,43 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             let last = buf_line_chars(ed.buffer(), row).saturating_sub(1);
             let target = (width / 2).min(last);
             ed.jump_cursor(row, target);
+        }
+        Motion::ScreenLineStart => {
+            let row = ed.cursor().0;
+            ed.jump_cursor(row, screen_line_span(ed).0);
+        }
+        Motion::ScreenLineFirstNonBlank => {
+            // vim steps right over blanks with `oneright`, which never goes
+            // past the line's last character.
+            let row = ed.cursor().0;
+            let line: Vec<char> = buf_line(ed.buffer(), row)
+                .unwrap_or_default()
+                .chars()
+                .collect();
+            let start = screen_line_span(ed).0;
+            let target = (start..line.len())
+                .find(|&c| !matches!(line[c], ' ' | '\t'))
+                .unwrap_or_else(|| line.len().saturating_sub(1));
+            ed.jump_cursor(row, target);
+        }
+        Motion::ScreenLineEnd => {
+            // `[count]g$`: count-1 screen lines down first; unlike `$`,
+            // running out of lines still moves along the last one.
+            if count > 1 {
+                apply_motion_cursor_ctx(ed, &Motion::ScreenDown, count - 1, as_operator);
+            }
+            let row = ed.cursor().0;
+            let len = buf_line_chars(ed.buffer(), row);
+            let (start, end) = screen_line_span(ed);
+            let width = usize::from(screen_text_width(ed));
+            // vim aims at the screen line's last cell; past the line's end
+            // that is the NUL in Visual, as `v$` takes it.
+            let past_end = end == len && (width == 0 || end - start < width);
+            if past_end && vim(ed).is_visual() && !as_operator {
+                buf_set_cursor_rc(ed.buffer_mut(), row, len);
+            } else {
+                ed.jump_cursor(row, end.saturating_sub(1).max(start));
+            }
         }
         Motion::ParagraphPrev => {
             hjkl_engine::motions::move_paragraph_prev(ed.buffer_mut(), count);

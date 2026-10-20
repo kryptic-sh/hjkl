@@ -264,6 +264,9 @@ pub fn op_g_motion(ch: char) -> Option<Motion> {
         '_' => Motion::LastNonBlank,
         'M' => Motion::LineMiddle,
         'm' => Motion::ScreenLineMiddle,
+        '0' => Motion::ScreenLineStart,
+        '^' => Motion::ScreenLineFirstNonBlank,
+        '$' => Motion::ScreenLineEnd,
         _ => return None,
     })
 }
@@ -364,6 +367,10 @@ pub fn apply_after_g<H: hjkl_engine::types::Host>(
         'M' => execute_motion_with_block_vcol(ed, Motion::LineMiddle, count),
         // `gm` — middle of the screen line (viewport_width/2, clamped to EOL).
         'm' => execute_motion_with_block_vcol(ed, Motion::ScreenLineMiddle, count),
+        // `g0` / `g^` / `g$` — start, first non-blank and end of the screen line.
+        '0' => execute_motion_with_block_vcol(ed, Motion::ScreenLineStart, count),
+        '^' => execute_motion_with_block_vcol(ed, Motion::ScreenLineFirstNonBlank, count),
+        '$' => execute_motion_with_block_vcol(ed, Motion::ScreenLineEnd, count),
         // `gv` — re-enter the last visual selection. Calls the bridge in this
         // module directly; routing back out through the `Editor` wrapper was
         // pure indirection, and that wrapper now lives on

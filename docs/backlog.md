@@ -279,18 +279,27 @@ fixed:
   emptied case. Recording `"\n"` from the lone empty line (tried in
   `cut_vim_range_inner`, 2026-10-20) broke those three cases and was reverted.
   The fuzz cases starting from `""` with a linewise delete will keep diverging.
-- **`g0` / `g^` / `g$` are not implemented at all**, in Normal, Visual or after
-  an operator: `op_g_motion` (`operator.rs`) has no `0` / `^` / `$` and there is
-  no `Motion` variant for them, so `cg0X<Esc>` on `"  ab cd"` @ (0,0) types
-  nothing (nvim inserts `X`), `cg^X<Esc>` leaves the blanks (nvim changes them,
-  register `"  "`), and `g0` / `g^` / `g$` in Normal mode do not move. Adding
-  them means new `Motion` variants (an exhaustive public enum in
-  `hjkl-vim-types`, so a breaking change) and a screen-line rule: the wrap
-  segment holding the cursor (`hjkl_buffer::wrap_segments`, as `gj` / `gk` use
-  through `move_screen_vertical`) under wrap, the visible columns from
-  `Viewport::top_col` without it. `g$` is inclusive, the other two exclusive.
-  `gm` (`Motion::ScreenLineMiddle`) takes half the viewport width and ignores
-  both wrap and horizontal scroll, so it has the same gap.
+- **`gm` ignores wrap and horizontal scroll.** `Motion::ScreenLineMiddle`
+  (`motion.rs`) lands on half the viewport width from column 0. vim's
+  `nv_g_home_m_cmd` adds that half to the screen line's start, the same start
+  `g0` uses, so on a wrapped line's second segment, or with `top_col > 0`, hjkl
+  lands too far left. The fix is to start from `screen_line_span(ed).0`, the
+  helper `g0` / `g^` / `g$` use. Not done with them because the oracle cannot
+  check it (see the next entry).
+- **The screen-line motions are verified only on lines shorter than the
+  window.** The oracle's nvim wraps at 80 columns while its hjkl host
+  (`DefaultHost::DEFAULT_VIEWPORT`) is 80 wide with `Wrap::None`, so `gj` / `gk`
+  / `gm` / `g0` / `g^` / `g$` on a line of 80 columns or more measure two
+  different layouts. Per segment, nvim's `g$` gives (0,79) and `g0` gives (0,80)
+  on a 100-character line; hjkl's results there were not compared. A corpus case
+  would need the hjkl driver to publish `Wrap::Char` with `text_width: 80`. Tabs
+  and double-width characters are counted the way `wrap_segments` counts them (a
+  tab is one cell), not by `'tabstop'`, which is also unverified.
+- **The next release is a minor bump.** `Motion::ScreenLineStart`,
+  `ScreenLineFirstNonBlank` and `ScreenLineEnd` are new variants on the
+  exhaustive `Motion` enum in `hjkl-vim-types`, which breaks an external
+  `match`. Below 1.0 that is a minor bump, and the internal `"0.43"` pins move
+  with it.
 
 ### 1.5b Left open by the motion- and blockwise-parity passes
 

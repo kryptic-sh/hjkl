@@ -126,20 +126,21 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
 
 /// The motions that leave a pending operator in place when they cannot move,
 /// measured with `c` against nvim 0.12.5: `h` / `<BS>` at column 0, `l` on an
-/// empty line, `0`, `^`, `|`, `(` and `{` at the buffer start, and `w` / `W`
-/// / `e` / `E` / `$` / `)` / `}` on an empty last line (vim clears the
-/// operator only for a failed `w` or `e` without one). A count does not change
-/// that, except for `$` and the sentence and paragraph motions, which a count
-/// they cannot satisfy fails (`2C` on the last line, `2c(` at the buffer
-/// start). `b`, `ge`, `j`, `k`, a missed `f` / `t`,
-/// a `%` with no bracket and the line motions do cancel it.
+/// empty line, `0`, `^`, `g0`, `g^`, `|`, `(` and `{` at the buffer start,
+/// and `w` / `W` / `e` / `E` / `$` / `g$` / `)` / `}` on an empty last line
+/// (vim clears the operator only for a failed `w` or `e` without one). A
+/// count does not change that, except for `$` / `g$` and the sentence and
+/// paragraph motions, which a count they cannot satisfy fails (`2C` on the
+/// last line, `2c(` at the buffer start). `b`, `ge`, `j`, `k`, a missed `f` /
+/// `t`, a `%` with no bracket and the line motions do cancel it.
 fn change_survives_in_place(motion: &Motion, count: usize) -> bool {
     match motion {
         Motion::SentencePrev
         | Motion::ParagraphPrev
         | Motion::SentenceNext
         | Motion::ParagraphNext
-        | Motion::LineEnd => count <= 1,
+        | Motion::LineEnd
+        | Motion::ScreenLineEnd => count <= 1,
         _ => matches!(
             motion,
             Motion::Left
@@ -148,6 +149,8 @@ fn change_survives_in_place(motion: &Motion, count: usize) -> bool {
                 | Motion::SpaceFwd
                 | Motion::LineStart
                 | Motion::FirstNonBlank
+                | Motion::ScreenLineStart
+                | Motion::ScreenLineFirstNonBlank
                 | Motion::GotoColumn
                 | Motion::WordFwd
                 | Motion::BigWordFwd
@@ -160,7 +163,7 @@ fn change_survives_in_place(motion: &Motion, count: usize) -> bool {
 
 /// Whether `motion`, having left the cursor where it was, succeeded rather
 /// than failed — the motion layer reports no status, so each case reads it
-/// back from the buffer. Measured against nvim 0.12.5: `$` and `g_` succeed
+/// back from the buffer. Measured against nvim 0.12.5: `$`, `g$` and `g_` succeed
 /// unless a count runs them off the last line (`2d$` there is a no-op), and
 /// in place they stand on the line's last (non-blank) character; `e` / `E` at the
 /// end of the buffer succeed, counted or not; `t` / `T` succeed in place only
@@ -175,7 +178,9 @@ fn succeeds_in_place<H: hjkl_engine::types::Host>(
     find_repeat: bool,
 ) -> bool {
     match *motion {
-        Motion::LineEnd | Motion::LastNonBlank | Motion::MatchBracket => count <= 1,
+        Motion::LineEnd | Motion::LastNonBlank | Motion::ScreenLineEnd | Motion::MatchBracket => {
+            count <= 1
+        }
         Motion::WordEnd | Motion::BigWordEnd | Motion::ChangeWordEnd { .. } => true,
         Motion::Find {
             ch,
@@ -568,8 +573,8 @@ pub fn motion_kind(motion: &Motion) -> RangeKind {
         Motion::UnmatchedBracket { .. } => RangeKind::Exclusive,
         // `$` now lands on the last char — operator ranges include it.
         Motion::LineEnd => RangeKind::Inclusive,
-        // `g_` too (`:h g_`, "inclusive").
-        Motion::LastNonBlank => RangeKind::Inclusive,
+        // `g_` and `g$` too (`:h g_`, `:h g$`, "inclusive").
+        Motion::LastNonBlank | Motion::ScreenLineEnd => RangeKind::Inclusive,
         // Linewise motions: +/-/_ land on the first non-blank of a line.
         Motion::FirstNonBlankNextLine
         | Motion::FirstNonBlankPrevLine

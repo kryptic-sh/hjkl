@@ -17,6 +17,12 @@ and this project adheres to
 
 ### Added
 
+- `g0` / `g^` / `g$` (`Motion::ScreenLineStart` / `ScreenLineFirstNonBlank` /
+  `ScreenLineEnd`) through `apply_after_g`, `op_g_motion` and the Visual `g`
+  arm. The screen line is the `wrap_segments` segment holding the cursor under
+  wrap, and the columns from `Viewport::top_col` that fit the text width without
+  it. `g$` is inclusive (`motion_kind`); all three set curswant to the landing
+  and leave closed folds alone, as measured against nvim 0.12.5.
 - `hjkl_vim::charwise_visual_range`, for a host that runs the Visual operators
   itself: the range a charwise selection covers, taking the line break when it
   ends on a line's NUL. The hjkl app's Visual `d` / `y` / `c` and its Cut / Copy
@@ -34,6 +40,9 @@ and this project adheres to
 
 ### Fixed
 
+- `step_normal` no longer reads a digit after `g` (`Pending::G` /
+  `Pending::OpG`) as a count: the `g` arm stashes a count of 1, so `0` extended
+  it to 10 instead of reaching `apply_after_g`.
 - `Motion::SentencePrev` (`(`, and `d(` / `c(` / `y(` / `v(`) walks vim's
   `findsent` backward (the `VimBuf` port, through the new unguarded
   `walk_vim_buf`), replacing the row scan `text_object::sentence_boundary`,
