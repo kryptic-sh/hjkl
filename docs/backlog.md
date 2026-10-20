@@ -1066,6 +1066,15 @@ fail on the parent commit, the other 6 are negative guards).
     `w_virtcol` is the indent or the column of the last change, but that is not
     confirmed. A `[count]zF`, once it exists, has the same question (`jzFk`
     lands on (0,0)).
+  - `x` / `dl` / `d$` on the fresh closed fold depend on it too (2026-10-20, on
+    `"ab\ncd\nef"`): `zfjx` / `zfjzcx` @ (0,1) delete just the `b` in nvim (the
+    cursor kept column 1), `zfjx` @ (0,0) and `zfj0x` delete the whole fold, and
+    `zfjjkx` @ (0,1) deletes the whole fold too — nvim's `jk` comes back on
+    column 0 — while hjkl's comes back on column 1. hjkl's `x` takes the whole
+    fold from any column (`do_char_delete`, `command.rs`), so making it
+    column-0-only fixes the first two but breaks `zfjjkx` until the curswant
+    question is settled; tried and reverted. `zfjk` @ (1,1) and `zfjj` / `zfjjk`
+    @ (0,1) also land on column 0 in nvim, column 1 in hjkl.
 - **Older call sites store a char column as the curswant.** `move_vertical`
   (`hjkl-engine` `motions.rs`) reads the sticky column as a display column, but
   several sites set it to `ed.cursor().1` (e.g. in `linewise.rs`, `command.rs`),
