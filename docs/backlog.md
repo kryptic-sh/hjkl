@@ -1177,22 +1177,6 @@ Seen while measuring, not `gq`:
   space (`"c\ng\n "`). The cursor clamps to `"ij"`'s last column on the way; why
   vim's block then starts at column 2 was not worked out. Measured 2026-10-20;
   not looked into.
-- **`.` after a multi-line charwise `vd` replays the wrong range.** `vjd.` @
-  (0,1) on `"abc\nd\n\ncd"`: nvim `""`, hjkl `"acd"` (register `"\n\n"` against
-  nvim's `"a\ncd"`). Present on the parent build too; not looked at.
-- **`v$` does not cover the line break.** `v$y` @ (0,0) on `"ab\ncd"`: nvim
-  yanks `"ab\n"`, hjkl `"ab"`; `v$d` likewise leaves the line unjoined. In vim
-  `$` in Visual puts the selection end on the line's NUL, which
-  `charwise_visual_range` (`visual_ops.rs`) would already cover if the cursor
-  stood there; hjkl stops it on the last character. Not looked into further. The
-  same shows after `j`: `$` now stores vim's MAXCOL curswant, and in Visual that
-  want parks on the NUL too — `v$j` / `V$j` @ (0,0) on `"ab\nxxxxxxxx\nabc"` put
-  nvim's cursor on (1,8), hjkl's on (1,7), and `v$jd` leaves hjkl an empty first
-  line where nvim joins (measured 2026-10-19). The Visual vertical motions
-  (`Move::Vertical`) clamp to the last character in every mode. `l` is the same
-  gap: in Visual it moves onto the NUL in vim, so `vld` / `vly` @ (0,1) on
-  `"ab\ncd"` take `"b\n"` there and `"b"` in hjkl (measured 2026-10-20, on the
-  parent build too).
 - **Text-object operators skip vim's column-0 exclusive adjustment.** vim's
   `do_pending_operator` pulls an exclusive end in column 0 of a later line back
   onto the previous line's end, turning the motion inclusive or, with the start

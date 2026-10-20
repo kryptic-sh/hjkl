@@ -402,3 +402,100 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "visual_dollar_yanks_the_line_break"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 0]
+keys = "v$y"
+expected_buffer = "ab\ncd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "ab\n"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_dollar_delete_joins"
+initial_buffer = "abcd\nef\nghij"
+initial_cursor = [0, 3]
+keys = "v$d"
+expected_buffer = "abcef\nghij"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_l_steps_onto_the_line_break"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 1]
+keys = "vld"
+expected_buffer = "acd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_j_onto_a_short_line_takes_its_break"
+initial_buffer = "abc\nd\n\ncd"
+initial_cursor = [0, 1]
+keys = "vjd"
+expected_buffer = "a\ncd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_j_delete_repeat"
+initial_buffer = "abc\nd\n\ncd"
+initial_cursor = [0, 1]
+keys = "vjd."
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_dollar_then_j_delete"
+initial_buffer = "ab\nxxxxxxxx\nabc"
+initial_cursor = [0, 0]
+keys = "v$jd"
+expected_buffer = "abc"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_dollar_then_esc_clamps"
+initial_buffer = "abcd\nef\nghij"
+initial_cursor = [0, 3]
+keys = "v$<Esc>"
+expected_buffer = "abcd\nef\nghij"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_dollar_cursor_on_the_nul"
+initial_buffer = "abcd\nef\nghij"
+initial_cursor = [0, 3]
+keys = "V$<Esc>"
+expected_buffer = "abcd\nef\nghij"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

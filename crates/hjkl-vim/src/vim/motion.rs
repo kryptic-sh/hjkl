@@ -615,9 +615,10 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         }
         Motion::Right => {
             // `l` — operator-motion context (`dl`/`cl`/`yl`) is allowed
-            // one past the last char so the range includes it; cursor
-            // context clamps at the last char.
-            if as_operator {
+            // one past the last char so the range includes it, and so is
+            // Visual mode (vim's `nv_right` `past_line`), where the NUL
+            // selects the line break; Normal mode clamps at the last char.
+            if as_operator || vim(ed).is_visual() {
                 hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), count);
             } else {
                 hjkl_engine::motions::move_right_in_line(ed.buffer_mut(), count);
@@ -742,9 +743,16 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         }
         Motion::LineEnd => {
             // `[count]$`: move count-1 lines down, then to line end.
-            // Vim normal-mode `$` lands on the last char, not one past it.
+            // Vim normal-mode `$` lands on the last char, not one past it;
+            // Visual mode lands on the NUL, so `v$` takes the line break.
             if count_lines_down(ed, count) {
-                hjkl_engine::motions::move_line_end(ed.buffer_mut());
+                if vim(ed).is_visual() && !as_operator {
+                    let row = ed.cursor().0;
+                    let len = buf_line_chars(ed.buffer(), row);
+                    buf_set_cursor_rc(ed.buffer_mut(), row, len);
+                } else {
+                    hjkl_engine::motions::move_line_end(ed.buffer_mut());
+                }
             }
         }
         Motion::FileTop => {

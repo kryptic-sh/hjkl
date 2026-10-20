@@ -17,6 +17,10 @@ patch bumps.
   a stray surrogate still pastes.** A bitmap whose alpha bytes are all zero (a
   PrintScreen capture) pasted as a fully transparent image, and one unpaired
   surrogate in copied text refused the whole paste.
+- In Visual mode the cursor can stand one past a line's last character, as in
+  vim: `v$`, `l` at the line's end and `j` / `k` onto a shorter line put it on
+  the line break, so `v$y` yanks `"ab\n"` and `vjd` / `v$d` join the lines where
+  hjkl left them apart; `.` after such a delete repeats the same range.
 - In Visual-block mode, `gg` and `G` move the block's column to where they land,
   as in vim: `<C-v>Gd` deletes from column 0 to the starting column on every
   line, where hjkl kept only the starting column.

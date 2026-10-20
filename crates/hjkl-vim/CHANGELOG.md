@@ -34,6 +34,9 @@ and this project adheres to
 
 ### Fixed
 
+- In the Visual modes `Motion::Right` (`l`) may step onto the line's NUL and
+  `Motion::LineEnd` (`$`) lands on it, as vim's `nv_right` / `nv_dollar` do with
+  the default `'selection'`; `charwise_visual_range` then takes the line break.
 - `update_block_vcol` moves `block_vcol` (and clears the ragged-`$` flag) for
   `Motion::FileTop` and `FileBottom`, which reset vim's curswant.
 - `quote_text_object` takes the count: with 2 or more, `i<q>` covers the quotes

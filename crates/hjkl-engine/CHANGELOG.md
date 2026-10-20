@@ -17,6 +17,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `Move::Vertical` lets a selecting cursor (`CoarseMode::Select` / `SelectLine`
+  / `SelectBlock`) land on a line's NUL, one past the last character, as vim's
+  `coladvance` does in Visual mode; Normal mode still clamps to the last
+  character.
 - The sticky column (vim's `curswant`) for a cursor on a tab is the tab's last
   cell outside Insert mode, as in vim, so `j` off a tab aims where the cursor is
   drawn: `jump_cursor`, the `Move::Vertical` bootstrap and the `move_vertical` /

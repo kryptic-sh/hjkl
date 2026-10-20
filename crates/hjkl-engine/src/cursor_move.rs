@@ -96,9 +96,22 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
                 self.set_sticky_col(Some(want));
                 // Clamp to the last char on non-empty rows — vim normal mode
                 // never parks one past end of line; empty rows collapse to 0.
+                // Visual mode (with the default 'selection') may stand on the
+                // line's NUL, one past it (vim's `coladvance` `one_more`).
                 let line = buf_line(&self.buffer, row).unwrap_or_default();
                 let char_col = visual_col_to_char_col(&line, want, self.settings().tabstop);
-                let max_col = buf_line_chars(&self.buffer, row).saturating_sub(1);
+                let len = buf_line_chars(&self.buffer, row);
+                let selecting = matches!(
+                    self.coarse_mode(),
+                    crate::CoarseMode::Select
+                        | crate::CoarseMode::SelectLine
+                        | crate::CoarseMode::SelectBlock
+                );
+                let max_col = if selecting {
+                    len
+                } else {
+                    len.saturating_sub(1)
+                };
                 // Quiet write: `jump_cursor` would overwrite the want stored
                 // above with the clamped column.
                 self.set_cursor_quiet(row, char_col.min(max_col));
