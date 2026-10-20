@@ -514,6 +514,12 @@ impl View {
             .undo_step(rope, cursor, marks)
     }
 
+    /// Where the change that the next redo reapplies started (vim's
+    /// `uh_cursor`): the cursor saved in the current undo node.
+    pub fn redo_change_start(&self) -> (usize, usize) {
+        self.content.lock().unwrap().undo.current_cursor()
+    }
+
     /// One redo move. Symmetric to [`Self::undo_step`]; returns the child
     /// snapshot to restore, or `None` when there is no forward branch.
     pub fn redo_step(

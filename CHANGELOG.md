@@ -17,6 +17,10 @@ patch bumps.
   a stray surrogate still pastes.** A bitmap whose alpha bytes are all zero (a
   PrintScreen capture) pasted as a fully transparent image, and one unpaired
   surrogate in copied text refused the whole paste.
+- `<C-r>` puts the cursor where vim does: where the redone change started
+  (`Vj>u<C-r>` back on column 0, `>ju<C-r>` on the starting column, `ddpu<C-r>`
+  on the line above the put), and still after moving the cursor between undo and
+  redo, where hjkl went to the first changed character.
 - Visual-line `ip` selects the whole paragraph from any of its lines, as in vim:
   `Vip` on a paragraph's last line took only that line (and a following blank
   line), so `Vipd` there left the rest behind.

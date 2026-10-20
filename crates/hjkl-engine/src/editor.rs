@@ -4641,16 +4641,35 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             let (cur_rope, cur_cursor) = self.snapshot();
             let cur_marks = self.snapshot_marks();
             let before = cur_rope.clone();
+            let start = self.buffer.redo_change_start();
             if let Some(entry) = self.buffer.redo_step(cur_rope, cur_cursor, cur_marks) {
                 self.cap_undo();
                 self.restore_rope(&entry.rope, entry.cursor);
                 self.restore_marks(&entry.marks);
-                // Park the cursor at the START of the reapplied change rather
-                // than the end-of-insert position stored in the redo snapshot
-                // (vim parity). Recompute from the first differing character.
+                // vim's `u_undoredo` cursor: the first changed line — or the
+                // line above it when that is where the change started (the
+                // `o` / `p` case) — at the change's starting column when the
+                // change started on it, else at its first non-blank. `start`
+                // is where the change started, read before the step.
                 let after = crate::types::Query::rope(&self.buffer);
-                if let Some((row, col)) = first_diff_pos(&before, &after) {
-                    buf_set_cursor_rc(&mut self.buffer, row, col);
+                if let Some((first_row, _)) = first_diff_pos(&before, &after) {
+                    let row = if start.0 + 1 == first_row {
+                        start.0
+                    } else {
+                        first_row
+                    };
+                    let last_row = self.buffer.last_content_row();
+                    if row > last_row {
+                        // The change removed the buffer's last line(s): vim
+                        // ends on the new last line's first non-blank.
+                        buf_set_cursor_rc(&mut self.buffer, last_row, 0);
+                        crate::motions::move_first_non_blank(&mut self.buffer);
+                    } else if row == start.0 {
+                        buf_set_cursor_rc(&mut self.buffer, row, start.1);
+                    } else {
+                        buf_set_cursor_rc(&mut self.buffer, row, 0);
+                        crate::motions::move_first_non_blank(&mut self.buffer);
+                    }
                 }
             }
         }

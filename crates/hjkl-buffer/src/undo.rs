@@ -794,6 +794,27 @@ impl UndoTree {
         self.touch_warm(child);
     }
 
+    /// The cursor stored in the current node — for a node with a forward
+    /// branch, where the change that `<C-r>` would redo started (vim's
+    /// `uh_cursor`).
+    pub(crate) fn current_cursor(&self) -> (usize, usize) {
+        self.get(self.current).cursor
+    }
+
+    /// The cursor to store in `node` as `u` / `<C-r>` leaves it. A node with a
+    /// child keeps the cursor `push` saved there before that change — vim's
+    /// `uh_cursor`, fixed per change, which a later redo returns to and an undo
+    /// back into the node restores — rather than wherever the cursor wandered
+    /// since. A tip, which no change has left yet, takes the live cursor.
+    fn departed_cursor(&self, node: NodeId, live: (usize, usize)) -> (usize, usize) {
+        let n = self.get(node);
+        if n.children.is_empty() {
+            live
+        } else {
+            n.cursor
+        }
+    }
+
     /// One undo step. `live` is the current buffer state (the node being left);
     /// it is written into that node but INHERITS the destination (parent)
     /// timestamp — byte-parity with the old dance, where the pushed redo entry
@@ -808,6 +829,7 @@ impl UndoTree {
         let cur = self.current;
         let par = self.get(cur).parent?;
         let dest_ts = self.get(par).timestamp;
+        let cursor = self.departed_cursor(cur, cursor);
         self.set_node_state(cur, rope, cursor, dest_ts, Arc::new(marks));
         // Redo from the parent must return to the node we just left.
         self.get_mut(par).last_child = Some(cur);
@@ -843,6 +865,7 @@ impl UndoTree {
         let cur = self.current;
         let child = self.get(cur).last_child?;
         let dest_ts = self.get(child).timestamp;
+        let cursor = self.departed_cursor(cur, cursor);
         self.set_node_state(cur, rope, cursor, dest_ts, Arc::new(marks));
         // The path extends by one onto `child`; `cur.last_child` already names
         // it (it is what we followed), so the ancestor chain stays correct.

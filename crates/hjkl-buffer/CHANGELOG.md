@@ -14,6 +14,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - `View::open_folds_containing(row)` opens every closed fold containing `row`,
   its first line included — vim's `foldOpenCursor()`. `reveal_row` still opens
   only the folds that hide the row.
+- `View::redo_change_start()`: where the change the next redo reapplies started
+  (vim's `uh_cursor`), the cursor saved in the current undo node.
+
+### Fixed
+
+- `undo_step` / `redo_step` keep the cursor a node saved before its change
+  instead of overwriting it with the live cursor when the node has a child, so a
+  change's start survives undo / redo round trips with cursor moves between
+  them, as vim's per-change `uh_cursor` does. A tip node still takes the live
+  cursor.
 
 ## [0.41.0] - 2026-08-04
 

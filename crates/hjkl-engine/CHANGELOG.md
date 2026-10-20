@@ -17,6 +17,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `Editor::redo` places the cursor by vim's `u_undoredo` rule — the first
+  changed line (or the line above, for an `o` / `p` change), at the change's
+  starting column when it started there, else at the first non-blank — instead
+  of on the first changed character.
 - `Move::Vertical` lets a selecting cursor (`CoarseMode::Select` / `SelectLine`
   / `SelectBlock`) land on a line's NUL, one past the last character, as vim's
   `coladvance` does in Visual mode; Normal mode still clamps to the last

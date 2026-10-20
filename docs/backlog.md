@@ -1144,10 +1144,6 @@ Seen while measuring, not `gq`:
   Visual-line only while the selection is one row; a taller `V` selection, and
   Visual-block, still take hjkl's own paths. Unmeasured how far those differ
   from vim.
-- **Redo after a Visual-line operator lands on the first non-blank.**
-  `Vj>u<C-r>` @ (0,4) on `"  abc\n  def\nx"`: nvim (0,0), hjkl (0,2) — on the
-  parent of the undo-cursor fix too. `>>u<C-r>` and `ddu<C-r>` agree; not looked
-  into.
 - **`d%` with no bracket on the line deletes the cursor's character in nvim.**
   `d%` @ (0,0) on `"ab"`: nvim `"b"`, register `"a"`; hjkl does nothing. Odd for
   a `%` that finds no match, so it wants reading `nv_percent` / `findmatch`
