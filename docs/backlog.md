@@ -953,8 +953,10 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    (2026-10-18, Windows 11):** with another thread, and with a separate
    PowerShell process, holding `OpenClipboard(NULL)`, hjkl's own
    `OpenClipboard(NULL)` still succeeded and a full write/read round trip
-   passed. A holder that opens it with a real window handle was not tried; a
-   retry is only worth adding once something is shown to fail.
+   passed. A holder that opens it with a real window handle was not tried.
+   hrdr's own probe the same day did see every read fail while another process
+   held the clipboard, so `ClipboardOpen::new` now retries briefly
+   (`OPEN_ATTEMPTS`, 2026-10-20); the CRLF decision above is still open.
 5. **Atomic save fails while another process holds the file — confirmed
    2026-10-18, NEEDS A DECISION.** `write_atomic_with` (`hjkl-fs` `atomic.rs`)
    falls back to a non-atomic write only on `CrossesDevices`. Measured on
