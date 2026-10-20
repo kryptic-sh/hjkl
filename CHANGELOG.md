@@ -14,6 +14,11 @@ patch bumps.
   where they went back to the column it started on; an operator over a `j` that
   cannot move after `~` (`~dj` on the last line) no longer drags the cursor back
   either.
+- **The Homebrew formula loads on Homebrew 7.** Homebrew now loads every formula
+  in a tap for each OS and architecture when it taps it, and this one only had
+  its URLs under `on_macos`, so `brew tap kryptic-sh/tap` failed with "invalid
+  syntax in tap" and no kryptic-sh tool could be installed. The URLs moved out
+  of `on_macos` and `depends_on :macos` keeps the formula macOS-only.
 - `f`, `F`, `t` and `T` work in Visual, Visual-line and Visual-block mode,
   moving the selection's end, as in vim: `vfdy` yanks through the `d`, where
   hjkl ignored the find and ran the next key on the one-character selection
