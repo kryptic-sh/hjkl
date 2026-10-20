@@ -17,6 +17,9 @@ patch bumps.
   a stray surrogate still pastes.** A bitmap whose alpha bytes are all zero (a
   PrintScreen capture) pasted as a fully transparent image, and one unpaired
   surrogate in copied text refused the whole paste.
+- Visual-line `p` with an empty register deletes the selected lines, as in vim,
+  where hjkl left an empty line in their place; pasting over every line of the
+  buffer no longer adds a blank line after the pasted ones.
 - In Visual mode the cursor can stand one past a line's last character, as in
   vim: `v$`, `l` at the line's end and `j` / `k` onto a shorter line put it on
   the line break, so `v$y` yanks `"ab\n"` and `vjd` / `v$d` join the lines where

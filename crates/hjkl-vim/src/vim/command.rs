@@ -1068,12 +1068,31 @@ pub fn visual_paste<H: hjkl_engine::types::Host>(
             let cursor_row = buf_cursor_pos(ed.buffer()).row;
             let top = cursor_row.min(vim(ed).visual_line_anchor);
             let bot = cursor_row.max(vim(ed).visual_line_anchor);
+            // Measured before the cut, while the rows are still there. A
+            // trailing newline shows as an empty row past the last content
+            // row.
+            let deleted_through_last = bot >= last_content_row(ed);
+            let ends_in_newline = buf_row_count(ed.buffer()) > last_content_row(ed) + 1;
             // Delete the selected lines into the unnamed register.
             cut_vim_range(ed, (top, 0), (bot, 0), RangeKind::Linewise);
             // Insert the register as fresh line(s) where the selection was.
             let text = linewise_payload(&reg_text).to_string();
             let line_count = buf_row_count(ed.buffer());
-            if top >= line_count {
+            if reg_text.is_empty() {
+                // Nothing to put back: vim's `Vp` with an empty register is
+                // `Vd`, and lands the cursor the same way.
+                land_after_linewise_delete(ed, top, deleted_through_last);
+            } else if top == 0 && deleted_through_last {
+                // The selection was the whole buffer, which the cut left as one
+                // empty row: the register replaces that row instead of going in
+                // above it, and the buffer keeps whether it ended in a newline.
+                let newline = if ends_in_newline { "\n" } else { "" };
+                ed.mutate_edit(Edit::InsertStr {
+                    at: Position::new(0, 0),
+                    text: format!("{text}{newline}"),
+                });
+                buf_set_cursor_rc(ed.buffer_mut(), 0, 0);
+            } else if top >= line_count {
                 // Selection reached the end of the buffer: append below the
                 // (new) last line.
                 let last = line_count.saturating_sub(1);

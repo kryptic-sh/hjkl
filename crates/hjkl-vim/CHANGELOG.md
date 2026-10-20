@@ -34,6 +34,9 @@ and this project adheres to
 
 ### Fixed
 
+- `visual_paste` in Visual-line mode lands like a linewise delete when the
+  register is empty, and replaces the empty row a whole-buffer cut leaves
+  instead of inserting above it (keeping whether the buffer ended in a newline).
 - In the Visual modes `Motion::Right` (`l`) may step onto the line's NUL and
   `Motion::LineEnd` (`$`) lands on it, as vim's `nv_right` / `nv_dollar` do with
   the default `'selection'`; `charwise_visual_range` then takes the line break.

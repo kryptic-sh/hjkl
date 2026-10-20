@@ -1187,9 +1187,11 @@ Seen while measuring, not `gq`:
   stopping at a blank line), but the register type of such a delete (charwise in
   hjkl, possibly linewise in vim) was not compared.
 
-- **`Vp` with an EMPTY register over the whole buffer leaves `"\n"`.** nvim
-  leaves `""` (difffuzz `V)p` on `"[xy].[foo]"`, `Vapp` on `""`): with nothing
-  to put back, the deleted lines leave no line at all. Not investigated.
+- **`Vapp` on an empty buffer records nothing; vim records `"\n"`.** Deleting
+  the one empty line of an empty buffer linewise yanks `"\n"` in nvim, while
+  `cut_vim_range_inner` (`command.rs`) returns early when the buffer reports an
+  empty inverse, leaving the register untouched. The buffers already agree (both
+  end up empty). Measured 2026-10-20; not looked into.
 
 - **`.` of an insert still diverges in these shapes** (fixed 2026-10-18: the
   cursor one column right, inserts containing `<CR>` replaying nothing, and `o`

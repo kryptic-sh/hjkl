@@ -499,3 +499,75 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "visual_line_paste_empty_register_deletes_the_lines"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [1, 0]
+keys = "Vp"
+expected_buffer = "ab\nef"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_paste_empty_register_on_the_last_line"
+initial_buffer = "ab\ncd"
+initial_cursor = [1, 0]
+keys = "Vp"
+expected_buffer = "ab"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_paste_empty_register_whole_buffer"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 0]
+keys = "Vjp"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_paste_over_the_whole_buffer"
+initial_buffer = "ab"
+initial_cursor = [0, 0]
+keys = "yyVp"
+expected_buffer = "ab"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_paste_over_the_whole_buffer_keeps_its_newline"
+initial_buffer = "ab\ncd\n"
+initial_cursor = [0, 0]
+keys = "yyVjp"
+expected_buffer = "ab\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_paste_over_a_middle_line"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "yyjVP"
+expected_buffer = "ab\nab\nef"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
