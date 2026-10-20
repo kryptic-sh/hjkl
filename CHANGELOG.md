@@ -10,6 +10,10 @@ patch bumps.
 
 ### Fixed
 
+- `j` / `k` after `~` aim for the column `~` left the cursor in, as in vim,
+  where they went back to the column it started on; an operator over a `j` that
+  cannot move after `~` (`~dj` on the last line) no longer drags the cursor back
+  either.
 - `f`, `F`, `t` and `T` work in Visual, Visual-line and Visual-block mode,
   moving the selection's end, as in vim: `vfdy` yanks through the `d`, where
   hjkl ignored the find and ran the next key on the one-character selection

@@ -34,6 +34,9 @@ and this project adheres to
 
 ### Fixed
 
+- `toggle_case_at_cursor_bridge` (`~`) resets the curswant through
+  `remember_operator_column`, and the `.` replay of `~` now calls that bridge
+  instead of a copy of its loop that also skipped the end-of-line clamp.
 - The `f` / `F` / `t` / `T` entry in `normal.rs` is no longer limited to Normal
   mode: the Visual modes take a find too, and `apply_find_char` runs it through
   `execute_motion_with_block_vcol` so a Visual-block find moves `block_vcol`.

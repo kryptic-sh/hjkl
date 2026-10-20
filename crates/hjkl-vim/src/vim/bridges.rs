@@ -362,6 +362,9 @@ pub fn toggle_case_at_cursor_bridge<H: hjkl_engine::types::Host>(
     if line_chars > 0 && cursor.col >= line_chars {
         buf_set_cursor_rc(ed.buffer_mut(), cursor.row, line_chars - 1);
     }
+    // `~` moves the cursor, so vim resets curswant: `~j` aims for the column
+    // `~` left, not the one it started on.
+    remember_operator_column(ed);
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::ToggleCase {
             count: count.max(1),

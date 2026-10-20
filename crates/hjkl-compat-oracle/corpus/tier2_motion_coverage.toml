@@ -1181,3 +1181,63 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "tilde_then_j_aims_for_the_new_column"
+initial_buffer = "abcdefghij\nabcdefghij"
+initial_cursor = [0, 4]
+keys = "~j"
+expected_buffer = "abcdEfghij\nabcdefghij"
+expected_cursor = [1, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_tilde_then_j"
+initial_buffer = "abcdefghij\nabcdefghij"
+initial_cursor = [0, 4]
+keys = "3~j"
+expected_buffer = "abcdEFGhij\nabcdefghij"
+expected_cursor = [1, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "tilde_repeat_then_j"
+initial_buffer = "abcdefghij\nabcdefghij"
+initial_cursor = [0, 4]
+keys = "~.j"
+expected_buffer = "abcdEFghij\nabcdefghij"
+expected_cursor = [1, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "tilde_then_failed_operator_keeps_the_cursor"
+initial_buffer = "_id  [qux].end.(bar)"
+initial_cursor = [0, 9]
+keys = "~gqj"
+expected_buffer = "_id  [qux].end.(bar)"
+expected_cursor = [0, 10]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "tilde_then_failed_delete_keeps_the_cursor"
+initial_buffer = "_id  [qux].end.(bar)"
+initial_cursor = [0, 9]
+keys = "~dj"
+expected_buffer = "_id  [qux].end.(bar)"
+expected_cursor = [0, 10]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

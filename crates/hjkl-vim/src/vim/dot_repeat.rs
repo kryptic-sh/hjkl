@@ -123,12 +123,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             replace_char(ed, ch, scaled(count));
         }
         LastChange::ToggleCase { count } => {
-            for _ in 0..scaled(count) {
-                ed.push_undo();
-                if !toggle_case_at_cursor(ed) {
-                    break;
-                }
-            }
+            toggle_case_at_cursor_bridge(ed, scaled(count));
         }
         LastChange::JoinLine { count } => {
             for _ in 0..scaled(count) {
