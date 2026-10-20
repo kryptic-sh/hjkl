@@ -569,3 +569,123 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "delete_sentence_in_the_last_sentence_reaches_the_end"
+initial_buffer = "ab cd"
+initial_cursor = [0, 3]
+keys = "d)"
+expected_buffer = "ab "
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_sentence_on_the_last_character_takes_it"
+initial_buffer = "ab cd"
+initial_cursor = [0, 4]
+keys = "d)"
+expected_buffer = "ab c"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_sentence_on_the_last_character_changes_it"
+initial_buffer = "ab cd"
+initial_cursor = [0, 4]
+keys = "c)X<Esc>"
+expected_buffer = "ab cX"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_sentence_takes_the_closing_terminator"
+initial_buffer = "ab cd."
+initial_cursor = [0, 0]
+keys = "d)"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_delete_sentence_reaches_the_end"
+initial_buffer = "ab. cd. e"
+initial_cursor = [0, 0]
+keys = "d3)"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_sentence_across_a_line_break_reaches_the_end"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 1]
+keys = "d)"
+expected_buffer = "a"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_sentence_to_a_start_on_the_last_character_stays_exclusive"
+initial_buffer = "ab. c"
+initial_cursor = [0, 0]
+keys = "d)"
+expected_buffer = "c"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_delete_sentence_past_the_end_fails"
+initial_buffer = "ab cd"
+initial_cursor = [0, 4]
+keys = "2d)"
+expected_buffer = "ab cd"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "closing_terminator_allows_one_more_sentence"
+initial_buffer = "One. Two."
+initial_cursor = [0, 8]
+keys = "d2)"
+expected_buffer = "One. Two"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_sentence_on_an_empty_last_line_inserts"
+initial_buffer = "ab\n\n"
+initial_cursor = [1, 0]
+keys = "c)X<Esc>"
+expected_buffer = "ab\nX\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

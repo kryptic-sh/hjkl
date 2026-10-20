@@ -279,11 +279,14 @@ fixed:
   emptied case. Recording `"\n"` from the lone empty line (tried in
   `cut_vim_range_inner`, 2026-10-20) broke those three cases and was reverted.
   The fuzz cases starting from `""` with a linewise delete will keep diverging.
-- **`c)` / `c}` on an empty buffer do not enter Insert.** nvim's `c)X<Esc>` and
-  `c}X<Esc>` on `""` give `"X"`. They are left out of `change_survives_in_place`
-  (`op_motion.rs`) because on a non-empty buffer the same motions take a
-  different path, and `c)` at the end of `"ab cd"` @ (0,4) already diverges on
-  its own: hjkl changes the `c` (`"ab d"`), nvim the `d` (`"ab cX"`).
+- **Normal and Visual `)` keep their own walk.** An operator's `)` now goes
+  through the `findsent` port (`sentence_forward_for_operator`,
+  `text_object.rs`), which knows when it stopped on the NUL past the end; the
+  cursor motion (`Motion::SentenceNext` in `motion.rs`) still uses
+  `sentence_step_forward`, which matched nvim in every probe tried, so it was
+  left alone. Two walks of one motion can drift apart; moving the cursor motion
+  onto `findsent` (with vim's `adjust_cursor` for Normal mode, and the NUL kept
+  in Visual) would leave one.
 - **`cg0` / `cg^` at column 0.** `cg0X<Esc>` on `"  ab cd"` @ (0,0) inserts `X`
   in nvim; `cg^X<Esc>` changes the leading blanks (`"Xab cd"`, register `"  "`).
   hjkl leaves the line alone for both. Not checked whether the display-line

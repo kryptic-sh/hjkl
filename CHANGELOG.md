@@ -10,6 +10,11 @@ patch bumps.
 
 ### Fixed
 
+- `d)` / `c)` / `y)` in a buffer's last sentence reach its end, as in vim: `d)`
+  takes the last character (and a closing `.`), where hjkl stopped one short,
+  and `d)` / `c)` on the last character act on it instead of doing nothing. A
+  count the remaining sentences cannot use up (`2d)` on the last character) is a
+  no-op.
 - `c` over a motion that cannot move but does not cancel the operator enters
   Insert at the cursor, as in vim: `ch` / `c0` / `c|` at column 0, `c^` on the
   first non-blank, `c(` / `c{` at the buffer start, and `cw` / `ce` / `c$` /

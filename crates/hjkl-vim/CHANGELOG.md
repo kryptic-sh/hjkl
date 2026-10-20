@@ -34,6 +34,9 @@ and this project adheres to
 
 ### Fixed
 
+- `apply_op_with_motion` takes an operator's `)` from vim's `findsent` (the
+  `VimBuf` port) and its `adjust_cursor`: a landing on the NUL past the end
+  makes the range inclusive, and a `FAIL` cancels the operator.
 - `apply_op_with_motion` runs `Operator::Change` over the empty range a
   non-cancelling motion leaves in place (`h`, `l`, `0`, `^`, `|`, `(`, `{`, and
   the word / `$` motions on an empty line), so Insert starts at the cursor

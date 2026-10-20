@@ -23,7 +23,21 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // so `l` on the last char advances past-last (standard vim
     // exclusive-motion endpoint behaviour), enabling `dl` / `cl` /
     // `yl` to cover the final char.
-    apply_motion_cursor_ctx(ed, motion, count, true);
+    // `)` goes through vim's own `findsent`, which knows when it stopped on
+    // the NUL past the end (`sentence_inclusive`) and when it failed; the
+    // Normal-mode `)` cannot report either.
+    let mut sentence_inclusive = false;
+    if matches!(motion, Motion::SentenceNext) {
+        let Some((pos, inclusive)) =
+            crate::vim::text_object::sentence_forward_for_operator(ed, count)
+        else {
+            return;
+        };
+        ed.jump_cursor(pos.0, pos.1);
+        sentence_inclusive = inclusive;
+    } else {
+        apply_motion_cursor_ctx(ed, motion, count, true);
+    }
     let mut end = ed.cursor();
     // Linewise motions normally cover their row even when their endpoint has
     // the same row. `_` is a successful zero-distance motion, but `j`/`k` and
@@ -62,13 +76,18 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // final row for a trailing `\n`, and the motion itself stops on the last
     // real row (the `content_row_count` clamp `hjkl_engine::motions` shares
     // with `G`), so this must use the same row or `d}` never sees the landing.
+    //
+    // `)` has the same tail when vim's `findsent` stops on the NUL past a
+    // line's end (`sentence_inclusive`): `d)` in the last sentence takes its
+    // last character, and so does `d)` already on it.
     let last_row = last_content_row(ed);
-    if matches!(motion, Motion::ParagraphNext)
-        && kind == RangeKind::Exclusive
-        && end.0 == last_row
-        && buf_line_chars(ed.buffer(), last_row) > 0
-        && end.1 + 1 == buf_line_chars(ed.buffer(), last_row)
-    {
+    let last_len = buf_line_chars(ed.buffer(), last_row);
+    let lands_past_the_end = match motion {
+        Motion::ParagraphNext => end.0 == last_row && end.1 + 1 == last_len,
+        Motion::SentenceNext => sentence_inclusive,
+        _ => false,
+    };
+    if lands_past_the_end && kind == RangeKind::Exclusive && last_len > 0 {
         if start == end {
             end = (end.0, end.1 + 1);
         } else {
@@ -108,14 +127,19 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
 /// The motions that leave a pending operator in place when they cannot move,
 /// measured with `c` against nvim 0.12.5: `h` / `<BS>` at column 0, `l` on an
 /// empty line, `0`, `^`, `|`, `(` and `{` at the buffer start, and `w` / `W`
-/// / `e` / `E` / `$` on an empty line (vim clears the operator only for a
-/// failed `w` or `e` without one). A count does not change that, except for
-/// `$`, `(` and `{`, which a count they cannot satisfy fails (`2C` on the last
-/// line, `2c(` at the buffer start). `b`, `ge`, `j`, `k`, a missed `f` / `t`,
+/// / `e` / `E` / `$` / `)` / `}` on an empty last line (vim clears the
+/// operator only for a failed `w` or `e` without one). A count does not change
+/// that, except for `$` and the sentence and paragraph motions, which a count
+/// they cannot satisfy fails (`2C` on the last line, `2c(` at the buffer
+/// start). `b`, `ge`, `j`, `k`, a missed `f` / `t`,
 /// a `%` with no bracket and the line motions do cancel it.
 fn change_survives_in_place(motion: &Motion, count: usize) -> bool {
     match motion {
-        Motion::SentencePrev | Motion::ParagraphPrev | Motion::LineEnd => count <= 1,
+        Motion::SentencePrev
+        | Motion::ParagraphPrev
+        | Motion::SentenceNext
+        | Motion::ParagraphNext
+        | Motion::LineEnd => count <= 1,
         _ => matches!(
             motion,
             Motion::Left

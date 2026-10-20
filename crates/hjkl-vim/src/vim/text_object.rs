@@ -668,6 +668,29 @@ pub fn sentence_step_forward<H: hjkl_engine::types::Host>(
         SentenceStep::EndOfBuffer(end)
     }
 }
+/// `[count])` under an operator: vim's `findsent` forward from the cursor,
+/// then its `adjust_cursor` — a landing on the NUL past a line's last
+/// character steps back onto that character and makes the motion inclusive,
+/// which is how `d)` in a buffer's last sentence reaches its end. The flag
+/// says whether that happened. `None` is vim's `FAIL`, a count the sentences
+/// left cannot use up (`2d)` on the last character).
+pub fn sentence_forward_for_operator<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    count: usize,
+) -> Option<(Pos, bool)> {
+    let found = with_vim_buf(ed, |buf, cursor| {
+        let pos = buf.findsent(cursor, true, count.max(1))?;
+        if pos.1 > 0 && pos.1 == buf.len(pos.0) {
+            Some(((pos.0, pos.1 - 1), true))
+        } else {
+            Some((pos, false))
+        }
+    });
+    // No characters at all: nothing to move over, and `)` stays put without
+    // failing (`c)` on an empty buffer still enters Insert).
+    found.unwrap_or_else(|| Some((ed.cursor(), false)))
+}
+
 /// `is` / `as` — sentence text object: a port of vim's `current_sent`
 /// (`textobject.c`), outside the Visual-extend path. `as` takes the white
 /// space after the sentence, or the white space before it when there is
