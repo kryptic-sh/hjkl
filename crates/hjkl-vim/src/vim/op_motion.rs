@@ -99,8 +99,10 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
 /// unless a count runs them off the last line (`2d$` there is a no-op), and
 /// in place they stand on the line's last (non-blank) character; `e` / `E` at the
 /// end of the buffer succeed, counted or not; `t` / `T` succeed in place only
-/// on an adjacent target with no count and outside a `;` / `,` repeat; `ge`
-/// at the buffer start and every other motion fail.
+/// on an adjacent target with no count and outside a `;` / `,` repeat; a `%`
+/// that finds no match acts on the cursor's character (`d%` on `"ab"` deletes
+/// `a`, even with an unmatched bracket further on); `ge` at the buffer start
+/// and every other motion fail.
 fn succeeds_in_place<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     motion: &Motion,
@@ -108,7 +110,7 @@ fn succeeds_in_place<H: hjkl_engine::types::Host>(
     find_repeat: bool,
 ) -> bool {
     match *motion {
-        Motion::LineEnd | Motion::LastNonBlank => count <= 1,
+        Motion::LineEnd | Motion::LastNonBlank | Motion::MatchBracket => count <= 1,
         Motion::WordEnd | Motion::BigWordEnd | Motion::ChangeWordEnd { .. } => true,
         Motion::Find {
             ch,

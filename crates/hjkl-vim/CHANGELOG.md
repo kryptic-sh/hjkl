@@ -34,6 +34,9 @@ and this project adheres to
 
 ### Fixed
 
+- `succeeds_in_place` counts `Motion::MatchBracket` with no count as a
+  zero-distance success, so an operator over a `%` that finds no match acts on
+  the cursor's character, as measured in nvim 0.12.5 (vim's source not read).
 - `visual_text_obj_extend_counted` grows a one-line Visual-line selection only
   when the line-wise object found is that same line (vim's `current_par` "same
   area" case); otherwise it selects the object afresh, so `Vip` on a paragraph's

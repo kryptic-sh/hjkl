@@ -17,6 +17,8 @@ patch bumps.
   a stray surrogate still pastes.** A bitmap whose alpha bytes are all zero (a
   PrintScreen capture) pasted as a fully transparent image, and one unpaired
   surrogate in copied text refused the whole paste.
+- `d%`, `y%`, `c%` and `<%` act on the cursor's character when `%` finds no
+  match on the line, as nvim does, where hjkl did nothing.
 - `<C-r>` puts the cursor where vim does: where the redone change started
   (`Vj>u<C-r>` back on column 0, `>ju<C-r>` on the starting column, `ddpu<C-r>`
   on the line above the put), and still after moving the cursor between undo and

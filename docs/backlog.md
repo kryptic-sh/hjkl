@@ -1144,13 +1144,6 @@ Seen while measuring, not `gq`:
   Visual-line only while the selection is one row; a taller `V` selection, and
   Visual-block, still take hjkl's own paths. Unmeasured how far those differ
   from vim.
-- **`d%` with no bracket on the line deletes the cursor's character in nvim.**
-  `d%` @ (0,0) on `"ab"`: nvim `"b"`, register `"a"`; hjkl does nothing. Odd for
-  a `%` that finds no match, so it wants reading `nv_percent` / `findmatch`
-  before copying; measured only, not explained. (`succeeds_in_place` in
-  `op_motion.rs` is where a zero-distance success would be added.) `<%` @ (0,21)
-  on `"  'xy'  _id.A-B  'self.x'"` likewise outdents in nvim and does nothing in
-  hjkl.
 - **Visual-block `H` / `M` / `L` keep the block's column; a corpus case pins it.
   Needs a decision.** In nvim 0.12.5, `<C-v>Ld` / `<C-v>Hd` @ (0,3) on
   `"ab cd\nef gh\nij"` take columns 0–3 (register `"ab c\nef g\nij"`), and
