@@ -17,6 +17,9 @@ patch bumps.
   a stray surrogate still pastes.** A bitmap whose alpha bytes are all zero (a
   PrintScreen capture) pasted as a fully transparent image, and one unpaired
   surrogate in copied text refused the whole paste.
+- Visual-line `ip` selects the whole paragraph from any of its lines, as in vim:
+  `Vip` on a paragraph's last line took only that line (and a following blank
+  line), so `Vipd` there left the rest behind.
 - Visual-line `p` with an empty register deletes the selected lines, as in vim,
   where hjkl left an empty line in their place; pasting over every line of the
   buffer no longer adds a blank line after the pasted ones.

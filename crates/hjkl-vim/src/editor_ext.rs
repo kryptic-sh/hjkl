@@ -1919,8 +1919,18 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         // (verified against real nvim: `vipipipd`, three applications,
         // grows a second time too — the anchor-based check breaks that).
         let already_matches = match kind {
+            // From a one-line `V` selection vim selects the object afresh,
+            // unless it is that same one line (vim's `current_par`: "when
+            // doing `Vipipip` … we get the same area", then extends).
+            // `Vip` on the last line of a paragraph takes the whole paragraph.
             RangeKind::Linewise => {
-                crate::vim_state::vim(self).mode == FsmMode::VisualLine && self.cursor().0 == end.0
+                let cursor_row = self.cursor().0;
+                crate::vim_state::vim(self).mode == FsmMode::VisualLine
+                    && if crate::vim_state::vim(self).visual_line_anchor == cursor_row {
+                        start.0 == cursor_row && end.0 == cursor_row
+                    } else {
+                        cursor_row == end.0
+                    }
             }
             // vim extends a charwise selection only once it is bigger than
             // one character: a one-character object on a fresh `v`

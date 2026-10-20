@@ -875,3 +875,80 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "visual_line_ip_from_a_paragraph_last_line"
+initial_buffer = "ab\ncd"
+initial_cursor = [1, 0]
+keys = "Vipy"
+expected_buffer = "ab\ncd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "ab\ncd\n"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_ip_before_a_blank_line"
+initial_buffer = "ab\ncd\n\nef"
+initial_cursor = [1, 0]
+keys = "Vipy"
+expected_buffer = "ab\ncd\n\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "ab\ncd\n"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_ip_delete_from_the_last_line"
+initial_buffer = "(bar)\n\t{foo}, {a}"
+initial_cursor = [1, 7]
+keys = "Vipd"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_ip_on_a_blank_run_second_line"
+initial_buffer = "\n\nab"
+initial_cursor = [1, 0]
+keys = "Vipy"
+expected_buffer = "\n\nab"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "\n\n"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_ip_one_line_paragraph_extends"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [0, 0]
+keys = "Vipy"
+expected_buffer = "ab\n\ncd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "ab\n\n"]
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_ip_at_a_paragraph_start"
+initial_buffer = "ab\ncd\n\nef"
+initial_cursor = [0, 0]
+keys = "Vipy"
+expected_buffer = "ab\ncd\n\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+expected_register = ['"', "ab\ncd\n"]
+shiftwidth = 4
+expandtab = true
+autoindent = false

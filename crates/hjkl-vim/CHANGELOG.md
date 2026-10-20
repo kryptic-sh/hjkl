@@ -34,6 +34,10 @@ and this project adheres to
 
 ### Fixed
 
+- `visual_text_obj_extend_counted` grows a one-line Visual-line selection only
+  when the line-wise object found is that same line (vim's `current_par` "same
+  area" case); otherwise it selects the object afresh, so `Vip` on a paragraph's
+  last line takes the whole paragraph.
 - `visual_paste` in Visual-line mode lands like a linewise delete when the
   register is empty, and replaces the empty row a whole-buffer cut leaves
   instead of inserting above it (keeping whether the buffer ended in a newline).
