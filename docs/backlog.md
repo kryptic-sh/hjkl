@@ -268,10 +268,17 @@ compatibility corpus and verify it against nvim before changing expectations.
 Found while fixing `c` over an in-place motion (2026-10-20, nvim 0.12.5), not
 fixed:
 
-- **`dd` on a lone empty line writes no register.** On the empty buffer `""`,
-  `dd` / `"add` leave the register empty in hjkl; nvim stores a linewise `"\n`.
-  `dd` on any non-empty line and on an empty line with others around it already
-  match.
+- **`dd` on the fuzzer's empty buffer is a harness artifact — declined.** From
+  `initial_buffer = ""`, nvim's `dd` / `Vd` / `dG` store a linewise `"\n"` and
+  hjkl's store nothing. The harness sets that buffer with `nvim_buf_set_lines`,
+  which leaves one real empty line; a buffer emptied by a delete (or a new one)
+  is vim's "no lines in buffer" (`ML_EMPTY`) instead, where a linewise delete
+  does nothing: `dddd` / `ddVd` on `"abc"` keep `"abc\n"` in nvim, as
+  `register_survives_noop_dd` / `_dG` / `_visual_line_delete`
+  (`tier2_registers.toml`) pin. hjkl has no `ML_EMPTY` flag and matches the
+  emptied case. Recording `"\n"` from the lone empty line (tried in
+  `cut_vim_range_inner`, 2026-10-20) broke those three cases and was reverted.
+  The fuzz cases starting from `""` with a linewise delete will keep diverging.
 - **`c)` / `c}` on an empty buffer do not enter Insert.** nvim's `c)X<Esc>` and
   `c}X<Esc>` on `""` give `"X"`. They are left out of `change_survives_in_place`
   (`op_motion.rs`) because on a non-empty buffer the same motions take a
