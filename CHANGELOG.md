@@ -8,6 +8,15 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- `hjkl-bonsai` accepts `cc` 1.2.1 or later on MSVC targets (was 1.4.6). Grammar
+  crates such as `tree-sitter-sequel` pin `cc ~1.2` as a build dependency, and
+  cargo picks one 1.x `cc` for the whole graph, so a project using one of them
+  beside `hjkl-bonsai` failed to resolve at all. Every `cc` API the MSVC grammar
+  compile calls exists in 1.2.x, and both find the compiler through the same
+  `find-msvc-tools` crate. hjkl's own lockfile is unchanged.
+
 ## [0.43.3] - 2026-10-21
 
 ### Added
