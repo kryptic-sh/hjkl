@@ -168,7 +168,7 @@ fn extract_zip_into_staging_finds_bin() {
     let mut archive = zip::ZipArchive::new(cursor).unwrap();
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i).unwrap();
-        let entry_path = std::path::PathBuf::from(entry.name());
+        let entry_path = std::path::PathBuf::from(&*entry.name().unwrap());
         // safe_join
         use std::path::Component;
         let mut out = tmp.path().to_path_buf();

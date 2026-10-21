@@ -414,7 +414,7 @@ fn main() -> anyhow::Result<()> {
         let mut found = None;
         for i in 0..archive.len() {
             let file = archive.by_index(i)?;
-            if file.name() == "registry.json" {
+            if file.name()? == "registry.json" {
                 found = Some(i);
                 break;
             }

@@ -15,6 +15,7 @@
 
 use portable_pty::{Child, CommandBuilder, MasterPty, NativePtySystem, PtySize, PtySystem as _};
 use std::io::{Read as _, Write};
+use std::num::NonZeroU16;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -134,6 +135,13 @@ pub fn poll_contents(path: &Path, want: &str) -> String {
         last = std::fs::read_to_string(path).unwrap_or_default();
     }
     last
+}
+
+/// The screen parser for a pty of `rows` × `cols`, with no scrollback.
+fn screen_parser(rows: u16, cols: u16) -> vt100::Parser {
+    let rows = NonZeroU16::new(rows).expect("pty rows must be non-zero");
+    let cols = NonZeroU16::new(cols).expect("pty cols must be non-zero");
+    vt100::Parser::new(rows, cols, 0)
 }
 
 // ── TerminalSession ───────────────────────────────────────────────────────────
@@ -266,7 +274,7 @@ impl TerminalSession {
 
         let child = pair.slave.spawn_command(cmd).expect("spawn hjkl");
 
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
+        let parser = Arc::new(Mutex::new(screen_parser(rows, cols)));
 
         let bytes_seen = Arc::new(AtomicU64::new(0));
         let parser_clone = Arc::clone(&parser);
@@ -554,7 +562,7 @@ impl TerminalSession {
 
         let child = pair.slave.spawn_command(cmd).expect("spawn hjkl");
 
-        let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
+        let parser = Arc::new(Mutex::new(screen_parser(rows, cols)));
 
         // Spawn a reader thread that pipes pty output into the vt100 parser.
         let bytes_seen = Arc::new(AtomicU64::new(0));

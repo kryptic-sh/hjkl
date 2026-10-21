@@ -860,7 +860,11 @@ fn extract_archive(
                 let mut entry = archive
                     .by_index(i)
                     .map_err(|e| InstallError::Archive(e.to_string()))?;
-                let entry_path = PathBuf::from(entry.name());
+                let entry_path = PathBuf::from(
+                    &*entry
+                        .name()
+                        .map_err(|e| InstallError::Archive(e.to_string()))?,
+                );
                 let out = safe_join(dest_dir, &entry_path)?;
                 if entry.is_dir() {
                     std::fs::create_dir_all(&out)?;

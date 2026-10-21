@@ -16,6 +16,17 @@ patch bumps.
   operator and takes the line break in Visual, as `$` does; `cg0` / `cg^` /
   `cg$` that cannot move still enter Insert.
 
+### Changed
+
+- **Dependency updates.** `hjkl-anvil` bumps `zip` 8 → 9, whose
+  `ZipFile::name()` now returns a `Result`; an entry name that cannot be decoded
+  still fails the extract (zip 8 failed earlier, while reading the archive). The
+  `hjkl` PTY test harness bumps `vt100` 0.16 → 0.18 (tests only). Within
+  existing ranges the lockfile rolls forward `tokio` 1.54.0, `hyper` 1.12.0,
+  `cc` 1.9.0, `serde_json` 1.0.154 and `toml` 1.1.8 among others, 81 packages in
+  all counting these, and `pest` 2.9.4 adds `stacker` and `psm`. No behavior
+  change.
+
 ### Fixed
 
 - A digit after `g` is the command, not a count: `g0` used to turn into a count
@@ -26,6 +37,15 @@ patch bumps.
   count of `(` (`2(`) goes to the top, where hjkl stayed put.
 - Visual `)` in a buffer's last sentence goes past its last character, as in
   vim: `v)hd` on `"ab cd"` deletes the whole line, where hjkl kept the `d`.
+
+### Security
+
+- `rustls` 0.23.45 → 0.23.46 for RUSTSEC-2026-0346 (`Debug` output of client
+  session values exposes TLS secrets), -0347 (buffered data sent to the outer
+  server after an ECH rejection), -0348 (brotli certificate decompression
+  allocates up to 1 GiB before authentication) and -0349 (an unauthenticated
+  ServerHello downgrades later connections to classical key exchange), reached
+  through `reqwest` in `hjkl-anvil`'s tool downloads.
 
 ## [0.43.2] - 2026-10-20
 
