@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.43.3] - 2026-10-21
+
 ### Added
 
 - `g0` / `g^` / `g$`, in Normal, Visual and after an operator: the start, the
@@ -6422,7 +6424,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.43.2...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.43.3...HEAD
+[0.43.3]: https://github.com/kryptic-sh/hjkl/compare/v0.43.2...v0.43.3
 [0.43.2]: https://github.com/kryptic-sh/hjkl/compare/v0.43.1...v0.43.2
 [0.43.1]: https://github.com/kryptic-sh/hjkl/compare/v0.43.0...v0.43.1
 [0.43.0]: https://github.com/kryptic-sh/hjkl/compare/v0.42.2...v0.43.0
