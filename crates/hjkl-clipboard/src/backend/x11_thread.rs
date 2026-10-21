@@ -8,8 +8,10 @@
 //!   2. X server events (SELECTION_REQUEST / SELECTION_CLEAR / PROPERTY_NOTIFY)
 //!      via xcb_poll.
 //!
-//! The event loop uses `recv_timeout(50 ms)` + `xcb_poll_for_event` — no
-//! self-pipe needed. 50 ms is acceptable latency for clipboard semantics.
+//! The event loop waits in poll(2) on the X connection's socket and a wake
+//! pipe, with no timeout unless an INCR send has a deadline coming. Each
+//! queued request writes a byte to the wake pipe, so the thread sleeps until
+//! there is something to do: a held selection costs no wakeups.
 //!
 //! For Get operations the handler drives an inner poll loop (bounded by
 //! timeout) that dispatches SELECTION_REQUEST events while waiting for
@@ -17,12 +19,13 @@
 //! reading.
 
 use std::collections::HashMap;
-use std::ffi::c_void;
+use std::ffi::{c_int, c_void};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::{ClipboardError, MimeType, Selection};
 
+use super::wake::{self, WakeReader, Waker};
 use super::x11::{Atoms, X11Connection};
 
 // ---------------------------------------------------------------------------
@@ -56,8 +59,6 @@ const XCB_REQUEST_HEADER_OVERHEAD: usize = 24;
 // Timeout constants (all internal — not exposed as config)
 // ---------------------------------------------------------------------------
 
-/// Event loop tick interval in milliseconds. Drives INCR periodic prune.
-const EVENT_LOOP_TICK_MS: u64 = 50;
 /// SELECTION_NOTIFY wait for do_get: how long to wait for the owner to reply.
 const SELECTION_NOTIFY_TIMEOUT_SECS: u64 = 5;
 /// INCR receive: per-chunk timeout. Sender must write the next chunk within
@@ -263,6 +264,8 @@ impl std::future::Future for X11Future {
 /// Handle to the singleton X11 bg thread.
 pub struct X11Thread {
     tx: mpsc::Sender<X11Request>,
+    /// A byte after each request ends the bg thread's poll(2).
+    wake: Waker,
     /// Pre-interned atoms — stable for process lifetime.
     pub(crate) atoms: Atoms,
 }
@@ -276,6 +279,7 @@ impl X11Thread {
         let atoms = *conn.atoms();
 
         let (tx, rx) = mpsc::channel::<X11Request>();
+        let (wake, wake_read) = wake::pipe()?;
 
         std::thread::Builder::new()
             .name("hjkl-clipboard-x11".into())
@@ -300,11 +304,11 @@ impl X11Thread {
                     incr_sends: Vec::new(),
                     custom_atoms: HashMap::new(),
                 };
-                run_loop(&mut state, rx);
+                run_loop(&mut state, rx, &wake_read);
             })
             .expect("failed to spawn X11 bg thread");
 
-        Ok(Self { tx, atoms })
+        Ok(Self { tx, wake, atoms })
     }
 
     /// Enqueue an op and return a `Future` that resolves when the bg thread replies.
@@ -316,6 +320,8 @@ impl X11Thread {
             // Bg thread is gone — resolve the future with an error instead of
             // panicking the caller.
             fail_request(req);
+        } else {
+            self.wake.wake("x11");
         }
 
         X11Future { oneshot }
@@ -329,6 +335,7 @@ impl X11Thread {
         self.tx
             .send(X11Request { op, reply })
             .map_err(|_| ClipboardError::io_other("x11 thread inbox closed"))?;
+        self.wake.wake("x11");
 
         let (lock, cvar) = &*pair;
         let mut guard = lock.lock().unwrap();
@@ -419,21 +426,60 @@ fn fail_request(req: X11Request) {
     req.reply.resolve(result);
 }
 
-fn run_loop(state: &mut X11State, rx: mpsc::Receiver<X11Request>) {
+fn run_loop(state: &mut X11State, rx: mpsc::Receiver<X11Request>, wake: &WakeReader) {
     loop {
-        // Prune expired INCR sends at the top of every tick. If a requestor
-        // dies mid-transfer, PROPERTY_DELETE events never arrive and the entry
-        // would otherwise live forever in state.incr_sends. Pruning here caps
-        // the growth to at most one 50 ms tick beyond the 30 s deadline.
+        // Drop INCR sends past their deadline: a requestor that died
+        // mid-transfer never sends the PROPERTY_DELETE that would finish one.
         prune_expired_incr_sends(state);
 
-        // Drain any pending X events before blocking on the inbox.
-        drain_events(state, DrainGoal::AnyEvent);
+        loop {
+            match rx.try_recv() {
+                Ok(req) => handle_op(state, req),
+                Err(mpsc::TryRecvError::Empty) => break,
+                Err(mpsc::TryRecvError::Disconnected) => return,
+            }
+        }
 
-        match rx.recv_timeout(Duration::from_millis(EVENT_LOOP_TICK_MS)) {
-            Ok(req) => handle_op(state, req),
-            Err(mpsc::RecvTimeoutError::Timeout) => {}
-            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        // An op's own wait reads events off the socket into xcb's queue,
+        // where poll(2) cannot see them, so drain the queue just before it.
+        drain_events(state, DrainGoal::AnyEvent);
+        let fns = state.conn.fns();
+        let raw = state.conn.raw();
+        // SAFETY: raw is the live connection this thread owns.
+        unsafe { (fns.xcb_flush)(raw) };
+
+        let timeout_ms = state
+            .incr_sends
+            .iter()
+            .filter(|x| !x.done)
+            .map(|x| x.deadline.saturating_duration_since(Instant::now()))
+            .min()
+            .map_or(-1, |d| {
+                c_int::try_from(d.as_millis() + 1).unwrap_or(c_int::MAX)
+            });
+        // A broken connection's socket reports hangup forever; wait on the
+        // wake pipe alone then, and let each op report the error.
+        // SAFETY: raw is the live connection this thread owns.
+        let broken = unsafe { (fns.xcb_connection_has_error)(raw) } != 0;
+        // SAFETY: as above; the fd lives as long as the connection.
+        let x_fd = unsafe { (fns.xcb_get_file_descriptor)(raw) };
+        let mut pfds = [
+            libc::pollfd {
+                fd: wake.fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            },
+            libc::pollfd {
+                fd: x_fd,
+                events: libc::POLLIN,
+                revents: 0,
+            },
+        ];
+        let nfds = if broken { 1 } else { 2 };
+        // SAFETY: pfds is a live array of at least nfds entries.
+        let ret = unsafe { libc::poll(pfds.as_mut_ptr(), nfds, timeout_ms) };
+        if ret > 0 && (pfds[0].revents & libc::POLLIN) != 0 {
+            wake.drain();
         }
     }
 }
