@@ -8,6 +8,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Linux, Wayland: holding a selection no longer wakes the process 20 times a
+  second. The background thread polled the compositor socket with a 50 ms
+  timeout to check its request inbox; each request now wakes it through a pipe,
+  and it waits with no timeout otherwise (only a pending write's deadline bounds
+  the wait), so an idle program that owns the clipboard sleeps.
 - Windows: `OpenClipboard` is retried briefly instead of failing at once, so
   another process holding the clipboard for a moment (a clipboard-history tool,
   an RDP sync) no longer fails a read or write. A failure that outlasts the

@@ -11,11 +11,15 @@
 //! No libwayland-client — all wire protocol is hand-rolled via wayland_wire.rs
 //! and wayland_socket.rs from phase 6a.
 //!
-//! Event loop: poll(2) on the socket fd (50 ms timeout) + non-blocking drain of
-//! the mpsc inbox each iteration. Same latency trade-off as x11_thread.rs.
+//! Event loop: poll(2) on the socket fd and a wake pipe, with no timeout unless
+//! a pending write has a deadline, + non-blocking drain of the mpsc inbox each
+//! iteration. Each queued request writes a byte to the wake pipe, so the
+//! thread sleeps until there is something to do rather than polling: a held
+//! selection costs no wakeups.
 
 use std::collections::HashMap;
 use std::ffi::c_int;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
@@ -232,6 +236,21 @@ impl std::future::Future for WaylandFuture {
 
 pub struct WaylandThread {
     tx: mpsc::Sender<WaylandRequest>,
+    /// The wake pipe's write end: a byte after each request ends the bg
+    /// thread's poll(2).
+    wake: OwnedFd,
+}
+
+/// A non-blocking pipe, read end first, for waking the bg thread.
+fn wake_pipe() -> Result<(OwnedFd, OwnedFd), ClipboardError> {
+    let mut fds = [0i32; 2];
+    // SAFETY: pipe2 is safe to call with a valid [i32;2] and valid flags.
+    let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC | libc::O_NONBLOCK) };
+    if rc != 0 {
+        return Err(ClipboardError::io(std::io::Error::last_os_error()));
+    }
+    // SAFETY: pipe2 just opened both fds, and nothing else owns them.
+    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
 }
 
 impl WaylandThread {
@@ -251,6 +270,7 @@ impl WaylandThread {
         }
 
         let (tx, rx) = mpsc::channel::<WaylandRequest>();
+        let (wake_read, wake) = wake_pipe()?;
 
         std::thread::Builder::new()
             .name("hjkl-clipboard-wayland".into())
@@ -266,11 +286,25 @@ impl WaylandThread {
                         return;
                     }
                 };
-                run_loop(&mut state, rx);
+                run_loop(&mut state, rx, &wake_read);
             })
             .expect("failed to spawn Wayland bg thread");
 
-        Ok(Self { tx })
+        Ok(Self { tx, wake })
+    }
+
+    /// Wake the bg thread for a request just queued. A full pipe already
+    /// holds a wakeup the thread has yet to read, so EAGAIN needs nothing
+    /// more; the pipe's read end lives as long as the thread.
+    fn wake(&self) {
+        // SAFETY: writes one byte from a live buffer to an fd this owns.
+        let rc = unsafe { libc::write(self.wake.as_raw_fd(), [1u8].as_ptr().cast(), 1) };
+        if rc < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::WouldBlock {
+                eprintln!("hjkl-clipboard wayland: wake failed: {e}");
+            }
+        }
     }
 
     /// Enqueue an op and return a `Future` that resolves when the bg thread replies.
@@ -282,6 +316,8 @@ impl WaylandThread {
             // Bg thread is gone (compositor connection lost) — resolve the
             // future with an error instead of panicking the caller.
             fail_request(req);
+        } else {
+            self.wake();
         }
 
         WaylandFuture { oneshot }
@@ -295,6 +331,7 @@ impl WaylandThread {
         self.tx
             .send(WaylandRequest { op, reply })
             .map_err(|_| ClipboardError::io_other("wayland thread inbox closed"))?;
+        self.wake();
 
         let (lock, cvar) = &*pair;
         let mut guard = lock.lock().unwrap();
@@ -646,11 +683,20 @@ impl WaylandState {
 // Main event loop
 // ---------------------------------------------------------------------------
 
-fn run_loop(state: &mut WaylandState, rx: mpsc::Receiver<WaylandRequest>) {
+fn run_loop(state: &mut WaylandState, rx: mpsc::Receiver<WaylandRequest>, wake: &OwnedFd) {
     loop {
-        // Build the poll set: Wayland socket (POLLIN) + all pending-write fds
-        // (POLLOUT).
-        let (socket_readable, writable_fds) = poll_fds(state, 50);
+        // Build the poll set: Wayland socket and wake pipe (POLLIN) + all
+        // pending-write fds (POLLOUT). Wait for one of them, or for the
+        // soonest pending write's deadline, with no timeout otherwise.
+        let timeout_ms = state
+            .pending_writes
+            .iter()
+            .map(|pw| pw.deadline.saturating_duration_since(Instant::now()))
+            .min()
+            .map_or(-1, |d| {
+                c_int::try_from(d.as_millis() + 1).unwrap_or(c_int::MAX)
+            });
+        let (socket_readable, writable_fds) = poll_fds(state, wake, timeout_ms);
 
         // Expire any pending writes whose deadline has passed.
         let now = Instant::now();
@@ -721,15 +767,21 @@ fn serve_inbox_with_errors(rx: mpsc::Receiver<WaylandRequest>) {
     }
 }
 
-/// Call poll(2) on the Wayland socket plus any pending-write fds.
+/// Call poll(2) on the Wayland socket, the wake pipe and any pending-write
+/// fds, emptying the wake pipe when it fired (the inbox is drained after).
 ///
 /// Returns `(socket_readable, Vec<fd>)` where `Vec<fd>` is the subset of
 /// pending-write fds that are now writable (POLLOUT fired).
-fn poll_fds(state: &WaylandState, timeout_ms: i32) -> (bool, Vec<c_int>) {
-    // Slot 0 is always the Wayland socket (POLLIN).
-    let mut pfds: Vec<libc::pollfd> = Vec::with_capacity(1 + state.pending_writes.len());
+fn poll_fds(state: &WaylandState, wake: &OwnedFd, timeout_ms: i32) -> (bool, Vec<c_int>) {
+    // Slot 0 is always the Wayland socket and slot 1 the wake pipe (POLLIN).
+    let mut pfds: Vec<libc::pollfd> = Vec::with_capacity(2 + state.pending_writes.len());
     pfds.push(libc::pollfd {
         fd: state.socket.raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    });
+    pfds.push(libc::pollfd {
+        fd: wake.as_raw_fd(),
         events: libc::POLLIN,
         revents: 0,
     });
@@ -750,7 +802,13 @@ fn poll_fds(state: &WaylandState, timeout_ms: i32) -> (bool, Vec<c_int>) {
     }
 
     let socket_readable = (pfds[0].revents & libc::POLLIN) != 0;
-    let writable: Vec<c_int> = pfds[1..]
+    if (pfds[1].revents & libc::POLLIN) != 0 {
+        let mut buf = [0u8; 64];
+        // SAFETY: reads into a live buffer of the given length from an fd the
+        // caller owns; non-blocking, so it stops at EAGAIN once empty.
+        while unsafe { libc::read(wake.as_raw_fd(), buf.as_mut_ptr().cast(), buf.len()) } > 0 {}
+    }
+    let writable: Vec<c_int> = pfds[2..]
         .iter()
         .filter(|p| (p.revents & libc::POLLOUT) != 0)
         .map(|p| p.fd)
@@ -3125,7 +3183,9 @@ mod tests {
             Selection::Clipboard,
             vec!["text/html".to_owned()],
             payloads,
-            |m| m.contains(&MimeType::Html),
+            // This offer, not an earlier test's that also offered Text,
+            // which a request answered at once can still see.
+            |m| m.contains(&MimeType::Html) && !m.contains(&MimeType::Text),
         );
 
         // Text is not in the offer, so get(Text) should fail.
