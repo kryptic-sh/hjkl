@@ -12,6 +12,8 @@ pub mod mock;
 pub(crate) mod osc52;
 pub mod ssh_aware;
 #[cfg(target_os = "linux")]
+pub(crate) mod wake;
+#[cfg(target_os = "linux")]
 pub(crate) mod wayland;
 #[cfg(target_os = "linux")]
 pub mod wayland_backend;

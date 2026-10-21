@@ -183,6 +183,9 @@ pub struct XcbFns {
     #[allow(dead_code)]
     pub xcb_wait_for_event: unsafe extern "C" fn(c: *mut XcbConnection) -> *mut XcbGenericEvent,
     pub xcb_poll_for_event: unsafe extern "C" fn(c: *mut XcbConnection) -> *mut XcbGenericEvent,
+    /// The connection's socket, polled for events beside the bg thread's
+    /// wake pipe.
+    pub xcb_get_file_descriptor: unsafe extern "C" fn(c: *mut XcbConnection) -> c_int,
     // xcb_request_check loaded for completeness; not yet called in this version.
     #[allow(dead_code)]
     pub xcb_request_check:
@@ -303,6 +306,7 @@ fn try_load_xcb() -> Option<XcbFns> {
         xcb_send_event: sym!(handle, "xcb_send_event"),
         xcb_wait_for_event: sym!(handle, "xcb_wait_for_event"),
         xcb_poll_for_event: sym!(handle, "xcb_poll_for_event"),
+        xcb_get_file_descriptor: sym!(handle, "xcb_get_file_descriptor"),
         xcb_request_check: sym!(handle, "xcb_request_check"),
         xcb_convert_selection: sym!(handle, "xcb_convert_selection"),
         xcb_get_property: sym!(handle, "xcb_get_property"),
