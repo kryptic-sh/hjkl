@@ -3821,31 +3821,3 @@ gutter `.position`/`.find` linear scans if those collections ever scale past the
 viewport; completion ranking and directory-completion I/O (previously flagged,
 still unmeasured — see the 2026-08-22 perf review, which names them). No new
 measurements were taken this pass.
-
-### 1.17 The X11 clipboard thread wakes 20 times a second (2026-10-21)
-
-- **Fix parked on branch `clipboard-x11-idle`, not merged.** `run_loop` in
-  `x11_thread.rs` polls its inbox with `recv_timeout(EVENT_LOOP_TICK_MS)`, so a
-  process holding an X11 selection wakes about 20.2 times a second (measured on
-  Xwayland `:0` as the process's context switches over 5 s, with
-  `HJKL_CLIPBOARD=x11`). The branch makes it wait in poll(2) on
-  `xcb_get_file_descriptor` and a wake pipe (`backend::wake`, now shared with
-  the Wayland thread), timing out only for an INCR send's deadline: 0.2 a
-  second.
-- **Why it is parked:** through Hyprland 0.56.2's XWayland bridge, `wl-paste`
-  read only 2,098,048 bytes of an 8 MiB INCR transfer from the branch, where the
-  old loop (whose tick paces one chunk per 50 ms) delivered all 8,388,608 bytes
-  in 1.76 s, twice. Not a sender bug as far as tested: a second hjkl process
-  reading over X11 got all 8 MiB, three times, in 36–183 ms. After that run the
-  bridge passed no new X11 selection to Wayland at all, for the old code, the
-  new code, or a python-xlib owner, so the comparison could not be repeated.
-  Open question: does Hyprland's bridge drop data when INCR chunks come back to
-  back (as `xclip` sends them), or did it wedge for another reason (it may only
-  sync an X selection while an X window has focus)? Settling it needs a fresh
-  Hyprland session and an unpaced third-party sender such as `xclip`, then
-  either merge the branch or keep a pace for INCR sends only.
-- **Coverage gap:** the X11 unit tests need `/usr/bin/Xvfb` and skip silently
-  without it (they report as passed). A headless sway with Xwayland
-  (`WLR_BACKENDS=headless`) did not work as a second bridge to test with: no X11
-  selection reached `wl-paste`, and the mapped X window never appeared in sway's
-  tree.

@@ -13,6 +13,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
   timeout to check its request inbox; each request now wakes it through a pipe,
   and it waits with no timeout otherwise (only a pending write's deadline bounds
   the wait), so an idle program that owns the clipboard sleeps.
+- Linux, X11: the same for an X11 selection (20.2 wakeups a second idle, now
+  0.2): the X11 thread waits in poll(2) on the X connection and a wake pipe,
+  with a timeout only for an INCR send's deadline. INCR chunks now go out 2 ms
+  apart instead of one per 50 ms tick, so an 8 MiB copy is served in about 80 ms
+  instead of 1.75 s; not back to back, as Hyprland 0.56's XWayland bridge loses
+  chunks that come without a pause (hyprwm/Hyprland discussion 16612).
 - Windows: `OpenClipboard` is retried briefly instead of failing at once, so
   another process holding the clipboard for a moment (a clipboard-history tool,
   an RDP sync) no longer fails a read or write. A failure that outlasts the

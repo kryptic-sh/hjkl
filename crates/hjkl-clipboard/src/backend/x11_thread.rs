@@ -78,6 +78,12 @@ const MAX_INCR_TOTAL_BYTES: usize = super::MAX_READ_BYTES;
 const SAVE_TARGETS_TIMEOUT_SECS: u64 = 5;
 /// Per-INCR-transfer timeout (send side): 30 seconds total.
 const INCR_SEND_TOTAL_TIMEOUT_SECS: u64 = 30;
+/// Pause before each INCR chunk written. ICCCM lets the next chunk follow the
+/// requestor's PROPERTY_DELETE at once, but Hyprland 0.56's XWayland bridge
+/// loses chunks that arrive back to back: an 8 MiB copy read from Wayland came
+/// out as 2-3 MB, and whole with this pause
+/// (<https://github.com/hyprwm/Hyprland/discussions/16612>).
+const INCR_CHUNK_PACE: Duration = Duration::from_millis(2);
 
 // ---------------------------------------------------------------------------
 // Wire layouts for events we parse
@@ -887,6 +893,7 @@ fn advance_incr_sends(state: &mut X11State, window: u32, atom: u32) {
             continue;
         }
 
+        std::thread::sleep(INCR_CHUNK_PACE);
         let end = (xfer.offset + xfer.chunk_size).min(xfer.bytes.len());
         let chunk = &xfer.bytes[xfer.offset..end];
 
