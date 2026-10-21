@@ -602,6 +602,20 @@ with ripgrep installed are unaffected.
 
 ### 1.7 Harness, coverage, and hardening
 
+- **`hjkl-mangler`'s two script-shim tests flake under `cargo test`, never under
+  nextest.** `is_tool_installed_finds_script_shims` and
+  `run_formatter_spawns_script_shims` write a script with `write_script_shim`
+  and run it at once. Under `cargo test` the crate's tests share one process,
+  so another test thread can fork while the script's write handle is still open;
+  the child holds it until its own `exec`, and the shim's `exec` fails with
+  `ETXTBSY` (`Os { code: 26, kind: ExecutableFileBusy }`, captured by printing
+  the `probe_status` error on 2026-10-21). Rate here: 2 of 30 runs of
+  `cargo test -p hjkl-mangler --lib`, plus one in a full workspace run; HEAD
+  `45347a58` showed 0 of 30, which that rate does not rule out. CI runs nextest,
+  one process per test, so CI never hits it. Fix options: retry a spawn that
+  fails with `ExecutableFileBusy` in the test (the usual workaround), or write
+  the shim from a child process (`sh -c`) so this process never holds a write
+  handle on it.
 - **`recovery_restores_undo_tree_after_crash` flakes on macOS CI.** The pty e2e
   test (`apps/hjkl/tests/pty_harness/recovery.rs`) failed all three nextest
   tries on `test macos-latest` in CI run 39283039626 (commit `6b0eefa6`, which
