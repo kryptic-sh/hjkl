@@ -8,6 +8,22 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.43.4] - 2026-10-22
+
+### Fixed
+
+- `hjkl-clipboard`, Linux: a program holding the clipboard no longer wakes the
+  CPU about 20 times a second. The Wayland thread polled its socket and the X11
+  thread its request inbox every 50 ms; both now wait in poll(2) on their
+  connection and a wake pipe (shared in `backend::wake`), with a timeout only
+  for a pending write's or an INCR send's deadline: 20.2 wakeups a second
+  measured idle, now 0.2, on Wayland and on Xwayland.
+- `hjkl-clipboard`, X11: INCR chunks go out 2 ms apart rather than one per 50 ms
+  tick, so an 8 MiB copy is served in about 80 ms instead of 1.75 s. Not back to
+  back: Hyprland 0.56's XWayland bridge loses chunks that arrive without a pause
+  (an 8 MiB copy read from Wayland came out as 2-3 MB; reported as
+  hyprwm/Hyprland discussion 16612).
+
 ### Changed
 
 - `hjkl-bonsai` accepts `cc` 1.2.1 or later on MSVC targets (was 1.4.6). Grammar
@@ -6433,7 +6449,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.43.3...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.43.4...HEAD
+[0.43.4]: https://github.com/kryptic-sh/hjkl/compare/v0.43.3...v0.43.4
 [0.43.3]: https://github.com/kryptic-sh/hjkl/compare/v0.43.2...v0.43.3
 [0.43.2]: https://github.com/kryptic-sh/hjkl/compare/v0.43.1...v0.43.2
 [0.43.1]: https://github.com/kryptic-sh/hjkl/compare/v0.43.0...v0.43.1
