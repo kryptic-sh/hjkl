@@ -2,7 +2,7 @@
 //!
 //! [`TerminalSession`] spawns the `hjkl` binary under a real pseudo-terminal,
 //! feeds keystrokes, and lets you query the rendered screen state via the
-//! [`vt100`] parser. This catches the bug class where the engine's internal
+//! [`vt1k`] parser. This catches the bug class where the engine's internal
 //! cursor/viewport state moves but the rendered output visible to the user
 //! doesn't follow.
 //!
@@ -138,10 +138,10 @@ pub fn poll_contents(path: &Path, want: &str) -> String {
 }
 
 /// The screen parser for a pty of `rows` × `cols`, with no scrollback.
-fn screen_parser(rows: u16, cols: u16) -> vt100::Parser {
+fn screen_parser(rows: u16, cols: u16) -> vt1k::Parser {
     let rows = NonZeroU16::new(rows).expect("pty rows must be non-zero");
     let cols = NonZeroU16::new(cols).expect("pty cols must be non-zero");
-    vt100::Parser::new(rows, cols, 0)
+    vt1k::Parser::new(rows, cols, 0)
 }
 
 // ── TerminalSession ───────────────────────────────────────────────────────────
@@ -156,8 +156,8 @@ pub struct TerminalSession {
     writer: Box<dyn Write + Send>,
     /// Child process handle (for kill-on-drop).
     child: Box<dyn Child + Send + Sync>,
-    /// Shared vt100 parser state updated by the reader thread.
-    parser: Arc<Mutex<vt100::Parser>>,
+    /// Shared vt1k parser state updated by the reader thread.
+    parser: Arc<Mutex<vt1k::Parser>>,
     /// Total bytes the reader thread has fed into the parser. Only ever read
     /// for *changes*, which is what lets the settle wait detect that the child
     /// has stopped emitting instead of sleeping a fixed guess.
@@ -564,7 +564,7 @@ impl TerminalSession {
 
         let parser = Arc::new(Mutex::new(screen_parser(rows, cols)));
 
-        // Spawn a reader thread that pipes pty output into the vt100 parser.
+        // Spawn a reader thread that pipes pty output into the vt1k parser.
         let bytes_seen = Arc::new(AtomicU64::new(0));
         let parser_clone = Arc::clone(&parser);
         let bytes_clone = Arc::clone(&bytes_seen);
@@ -684,7 +684,7 @@ impl TerminalSession {
     // ── Screen queries ────────────────────────────────────────────────────────
 
     /// Snapshot the current screen state.
-    pub fn screen(&self) -> vt100::Screen {
+    pub fn screen(&self) -> vt1k::Screen {
         self.parser.lock().unwrap().screen().clone()
     }
 
@@ -761,7 +761,7 @@ impl TerminalSession {
     /// `symbol`. Returns `None` if no such cell is present. Used to assert a
     /// glyph (e.g. a tabline devicon) is painted with a specific color.
     #[allow(dead_code)]
-    pub fn cell_fg_of_symbol(&self, row: u16, symbol: &str) -> Option<vt100::Color> {
+    pub fn cell_fg_of_symbol(&self, row: u16, symbol: &str) -> Option<vt1k::Color> {
         let screen = self.screen();
         for col in 0..self.cols {
             if let Some(cell) = screen.cell(row, col)
@@ -781,7 +781,7 @@ impl TerminalSession {
         row: u16,
         symbol: &str,
         timeout_ms: u64,
-    ) -> Option<vt100::Color> {
+    ) -> Option<vt1k::Color> {
         let steps = (timeout_ms / 20).max(1);
         for _ in 0..steps {
             if let Some(c) = self.cell_fg_of_symbol(row, symbol) {

@@ -54,3 +54,5 @@ highlight = "all"
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# vt1k, kryptic-sh's terminal emulator, for the e2e PTY harness only.
+allow-git = ["https://github.com/kryptic-sh/vt1k"]

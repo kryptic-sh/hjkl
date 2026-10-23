@@ -50,12 +50,12 @@ fn tabline_icons_use_per_filetype_devicon_color() {
 
     assert_eq!(
         rs_fg,
-        vt100::Color::Rgb(rs_color.0, rs_color.1, rs_color.2),
+        vt1k::Color::Rgb(rs_color.0, rs_color.1, rs_color.2),
         "rust tab icon must use the rust devicon color"
     );
     assert_eq!(
         md_fg,
-        vt100::Color::Rgb(md_color.0, md_color.1, md_color.2),
+        vt1k::Color::Rgb(md_color.0, md_color.1, md_color.2),
         "markdown tab icon must use the markdown devicon color"
     );
     // And the two icons are colored differently (the pre-fix monochrome bug

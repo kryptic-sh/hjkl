@@ -98,7 +98,9 @@ nvim-rs = { version = "0.9", features = ["use_tokio"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util"] }
 async-trait = "0.1"
 portable-pty = "0.9"
-vt100 = "0.18"
+# kryptic-sh's terminal emulator, for the PTY harness. No version: cargo
+# publish drops a git-only dev-dependency.
+vt1k = { git = "https://github.com/kryptic-sh/vt1k", rev = "f73f321c093692914fdc25b9fcf9112d35367080" }
 
 [[example]]
 name = "form_demo"

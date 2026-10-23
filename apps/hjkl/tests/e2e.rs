@@ -1,7 +1,7 @@
 //! End-to-end render-sync regression suite.
 //!
 //! Spawns the `hjkl` binary under a real pty and scrapes the rendered screen
-//! via `vt100` to catch the bug class where engine state moves but the user's
+//! via `vt1k` to catch the bug class where engine state moves but the user's
 //! terminal display doesn't follow.
 //!
 //! Run with:
