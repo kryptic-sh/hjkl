@@ -4559,7 +4559,8 @@ checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 [[package]]
 name = "vt1k"
 version = "0.1.0"
-source = "git+https://github.com/kryptic-sh/vt1k?rev=f73f321c093692914fdc25b9fcf9112d35367080#f73f321c093692914fdc25b9fcf9112d35367080"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77a4729325d35a4b3d49c0f425689f72e3368908a74678c2f8be476d25e00040"
 dependencies = [
  "unicode-width",
  "vte",
