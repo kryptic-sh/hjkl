@@ -8,6 +8,11 @@ patch bumps.
 
 ## [Unreleased]
 
+### Security
+
+- tokio 1.54.0 → 1.54.1 for RUSTSEC-2026-0384, a race in
+  `tokio::time::Interval`; 1.54.0 is also yanked.
+
 ## [0.43.4] - 2026-10-22
 
 ### Fixed
