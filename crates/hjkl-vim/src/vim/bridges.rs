@@ -53,6 +53,7 @@ pub fn open_line_below_bridge<H: hjkl_engine::types::Host>(
     count: usize,
 ) {
     use hjkl_buffer::{Edit, Position};
+    move_to_closed_fold_edge(ed, false);
     ed.push_undo();
     begin_insert_noundo(ed, count.max(1), InsertReason::Open { above: false });
     ed.sync_buffer_content_from_textarea();
@@ -79,6 +80,21 @@ pub fn open_line_below_bridge<H: hjkl_engine::types::Host>(
     });
     restart_insert_snapshot(ed);
 }
+/// vim's `n_opencmd`: on a closed fold `O` opens above the fold's first line
+/// and `o` below its last, so the cursor moves to that line first, keeping its
+/// column, and the undo step saved after it returns there.
+fn move_to_closed_fold_edge<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    first: bool,
+) {
+    let (row, col) = ed.cursor();
+    let (top, bot) = expand_linewise_over_closed_folds(ed.buffer(), row, row);
+    let edge = if first { top } else { bot };
+    if edge != row {
+        let col = col.min(buf_line_chars(ed.buffer(), edge).saturating_sub(1));
+        buf_set_cursor_rc(ed.buffer_mut(), edge, col);
+    }
+}
 /// Restart the insert session's "before" snapshot at the freshly opened line.
 /// The session began before `o` / `O` opened it, so without this the text it
 /// records for `.` would include the opened line break and the indent or
@@ -100,6 +116,7 @@ pub fn open_line_above_bridge<H: hjkl_engine::types::Host>(
     count: usize,
 ) {
     use hjkl_buffer::{Edit, Position};
+    move_to_closed_fold_edge(ed, true);
     ed.push_undo();
     begin_insert_noundo(ed, count.max(1), InsertReason::Open { above: true });
     ed.sync_buffer_content_from_textarea();
@@ -132,13 +149,9 @@ pub fn open_line_above_bridge<H: hjkl_engine::types::Host>(
         at: Position::new(row, 0),
         text: insert_text,
     });
-    let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
-    let mut sticky = ed.sticky_col();
-    let tabstop = ed.settings().tabstop;
-    hjkl_engine::motions::move_up(ed.buffer_mut(), &folds, 1, &mut sticky, tabstop);
-    ed.set_sticky_col(sticky);
-    let new_row = buf_cursor_pos(ed.buffer()).row;
-    buf_set_cursor_rc(ed.buffer_mut(), new_row, new_line_content.chars().count());
+    // The new line is `row` itself; a fold-aware `k` from the line pushed
+    // below it would step over a closed fold that line starts.
+    buf_set_cursor_rc(ed.buffer_mut(), row, new_line_content.chars().count());
     restart_insert_snapshot(ed);
 }
 /// `R` — enter Replace mode (overstrike). `count` stored for replay.

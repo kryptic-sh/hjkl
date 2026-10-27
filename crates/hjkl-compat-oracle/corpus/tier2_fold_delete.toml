@@ -1634,3 +1634,75 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "o_on_fold_opens_below_whole_fold"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 1]
+keys = "zfjoX<Esc>"
+expected_buffer = "ab\ncd\nX\nef\ngh"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_o_on_fold_opens_below_whole_fold"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 1]
+keys = "zfj2oX<Esc>"
+expected_buffer = "ab\ncd\nX\nX\nef\ngh"
+expected_cursor = [3, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "o_on_fold_undo_returns_to_fold_end"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 1]
+keys = "zfjoX<Esc>u"
+expected_buffer = "ab\ncd\nef\ngh"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "o_on_fold_dot_repeats_below_next_line"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 1]
+keys = "zfjoX<Esc>j."
+expected_buffer = "ab\ncd\nX\nef\nX\ngh"
+expected_cursor = [4, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "O_from_hidden_fold_row_opens_above_fold"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 1]
+keys = "jjzfjGOX<Esc>"
+expected_buffer = "ab\ncd\nX\nef\ngh"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "O_on_fold_start_opens_above_it"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 1]
+keys = "jzfkOX<Esc>"
+expected_buffer = "X\nab\ncd\nef\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

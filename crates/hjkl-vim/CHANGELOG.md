@@ -44,6 +44,10 @@ and this project adheres to
 
 ### Fixed
 
+- `open_line_below_bridge` / `open_line_above_bridge` move the cursor to the
+  closed fold's last / first line before opening, as vim's `n_opencmd` does, and
+  `O` puts the cursor on the new line directly instead of through a fold-aware
+  `k`.
 - `substitute_char_bridge` runs `cl` through `apply_op_with_motion` on a closed
   fold, and the charwise change in `run_operator_over_range` saves its undo step
   with the cursor on the range's start.

@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- `o` on a closed fold opens the new line below the whole fold, and `O` above it
+  even from a line hidden inside the fold, as in vim; hjkl opened `o` below the
+  fold's first line.
 - `s` on a closed fold changes the whole fold, as `cl` does in vim, where hjkl
   changed one character; `u` after `s` or `cl` there returns to the fold's first
   column.

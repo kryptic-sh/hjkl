@@ -563,6 +563,13 @@ with ripgrep installed are unaffected.
 
 ### 1.7 Harness, coverage, and hardening
 
+- **The Windows runner once refused to create a temp file.** CI run 40483857405
+  (`3322078e`, 2026-10-27) failed only `headless_unknown_command_sets_exit_1` on
+  `windows-latest`, at its first line: `tempfile::NamedTempFile::new()` returned
+  `PermissionDenied` ("Access is denied") before hjkl ran. The next run
+  (`07689c56`) passed the same test on the same runner image, so it reads as a
+  runner flake; nothing was changed for it. If it recurs, retrying the temp file
+  creation in the test helpers is the cheap fix.
 - **`hjkl-mangler`'s two script-shim tests flake under `cargo test`, never under
   nextest.** `is_tool_installed_finds_script_shims` and
   `run_formatter_spawns_script_shims` write a script with `write_script_shim`
