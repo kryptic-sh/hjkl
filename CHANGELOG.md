@@ -22,6 +22,10 @@ patch bumps.
 
 ### Fixed
 
+- `^`, `_`, `+`, `-`, `I` and the first-non-blank landings after `>>`, `gUU` and
+  similar commands treat only spaces and tabs as blanks, as vim does: on a line
+  starting with an ideographic space (U+3000) or a no-break space (U+00A0), `^`
+  lands on it instead of skipping past it.
 - `ap` / `ip` in line-wise Visual mode extend the selection when vim does: from
   a one-line paragraph, `Vap` takes the blank lines after it and the next
   paragraph, `V2ap` counts units, and a count with too few paragraphs left goes

@@ -1023,7 +1023,7 @@ pub fn move_to_insert_start<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_bu
     move_first_non_whitespace(ed);
     let row = ed.cursor().0;
     let line = buf_line(ed.buffer(), row).unwrap_or_default();
-    if !line.is_empty() && line.chars().all(char::is_whitespace) {
+    if !line.is_empty() && line.chars().all(super::vim_buf::is_vim_white) {
         buf_set_cursor_rc(ed.buffer_mut(), row, line.chars().count());
     }
 }

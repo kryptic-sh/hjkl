@@ -1627,3 +1627,76 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+# ─── A blank is a space or a tab: other Unicode white space is text ─────────
+[[cases]]
+name = "caret_stops_on_ideographic_space"
+initial_buffer = "　ab\nzz"
+initial_cursor = [0, 2]
+keys = "^"
+expected_buffer = "\u3000ab\nzz"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "caret_stops_on_no_break_space"
+initial_buffer = "  ab"
+initial_cursor = [0, 3]
+keys = "^"
+expected_buffer = " \u00A0ab"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "insert_at_bol_before_ideographic_space"
+initial_buffer = "　ab\nzz"
+initial_cursor = [0, 2]
+keys = "Ix<Esc>"
+expected_buffer = "x\u3000ab\nzz"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "insert_at_bol_on_ideographic_space_line"
+initial_buffer = "　"
+initial_cursor = [0, 0]
+keys = "Ix<Esc>"
+expected_buffer = "x\u3000"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "plus_lands_on_ideographic_space"
+initial_buffer = "x\n　ab"
+initial_cursor = [0, 0]
+keys = "+"
+expected_buffer = "x\n\u3000ab"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "shift_right_lands_before_no_break_space"
+initial_buffer = "  ab"
+initial_cursor = [0, 3]
+keys = ">>"
+expected_buffer = "     \u00A0ab"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

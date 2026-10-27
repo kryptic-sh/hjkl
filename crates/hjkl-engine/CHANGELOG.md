@@ -17,6 +17,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `motions::move_first_non_blank` skips only spaces and tabs, as vim's
+  `skipwhite` does; other Unicode white space (U+3000, U+00A0) is text it stops
+  on.
 - `Editor::redo` places the cursor by vim's `u_undoredo` rule — the first
   changed line (or the line above, for an `o` / `p` change), at the change's
   starting column when it started there, else at the first non-blank — instead
