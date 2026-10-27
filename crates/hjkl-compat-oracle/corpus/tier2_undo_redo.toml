@@ -567,3 +567,51 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "linewise_visual_paste_undo_returns_to_top_row"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "yyjVjpu"
+expected_buffer = "ab\ncd\nef"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_paste_undo_returns_to_selection_start"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "ywvjpu"
+expected_buffer = "ab\ncd\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_paste_word_undo_returns_to_selection_start"
+initial_buffer = "ab cd ef"
+initial_cursor = [0, 0]
+keys = "ywwvlpu"
+expected_buffer = "ab cd ef"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_visual_paste_undo_returns_to_block_corner"
+initial_buffer = "ab\ncd"
+initial_cursor = [1, 1]
+keys = "yl<C-v>klpu"
+expected_buffer = "ab\ncd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

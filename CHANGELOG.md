@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- A `[count]r` that cannot run (fewer than `count` characters left, or an empty
+  line) no longer becomes the change `.` repeats, and `u` after a Visual `p`
+  returns the cursor to the selection's start, both as in vim.
 - An operator over a text object that is not there (`ci(` with no parentheses)
   no longer becomes the change `.` repeats, as in vim: `ddci(.` deletes a second
   line.

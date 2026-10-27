@@ -1093,7 +1093,23 @@ pub fn visual_paste<H: hjkl_engine::types::Host>(
     let saved_unnamed = before.then(|| ed.with_registers(|regs| regs.unnamed.clone()));
 
     let mode = vim(ed).mode;
+    // The undo step saves the selection's start, as for the Visual
+    // operators (`u` returns there); the arms below still read the selection
+    // from the cursor, so it goes back afterwards.
+    let cursor = ed.cursor();
+    let start = match mode {
+        Mode::Visual => order(vim(ed).visual_anchor, cursor).0,
+        Mode::VisualLine if cursor.0 < vim(ed).visual_line_anchor => cursor,
+        Mode::VisualLine => (vim(ed).visual_line_anchor, 0),
+        Mode::VisualBlock => {
+            let (top, _, left, _) = block_bounds(ed);
+            (top, left)
+        }
+        _ => cursor,
+    };
+    buf_set_cursor_rc(ed.buffer_mut(), start.0, start.1);
     ed.push_undo();
+    buf_set_cursor_rc(ed.buffer_mut(), cursor.0, cursor.1);
 
     match mode {
         Mode::VisualLine => {

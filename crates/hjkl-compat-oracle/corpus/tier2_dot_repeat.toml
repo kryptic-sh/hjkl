@@ -593,3 +593,27 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "dot_after_failed_count_replace_repeats_earlier_one"
+initial_buffer = "abc"
+initial_cursor = [0, 2]
+keys = "rz3ry0."
+expected_buffer = "zbz"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_after_failed_replace_on_empty_line_repeats_earlier_one"
+initial_buffer = "abc\n\nxyz"
+initial_cursor = [0, 0]
+keys = "rzjrqj."
+expected_buffer = "zbc\n\nzyz"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

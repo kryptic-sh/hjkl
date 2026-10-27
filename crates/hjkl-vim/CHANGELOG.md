@@ -44,6 +44,10 @@ and this project adheres to
 
 ### Fixed
 
+- `step_normal`'s `r` chord records `LastChange::ReplaceChar` only when the
+  count fits the line, and `visual_paste` saves its undo step with the cursor on
+  the selection's start (column 0 of the top row in Visual-line, unless the
+  cursor is above the anchor).
 - `apply_op_text_obj_inner` records `LastChange::OpTextObj` only when
   `text_object_range` finds the object.
 - `bracket_text_object` falls back to `find_next_open` when the cursor's closing

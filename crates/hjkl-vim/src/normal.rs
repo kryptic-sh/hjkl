@@ -1227,8 +1227,12 @@ fn handle_replace<H: Host>(
             ed.visual_replace_char(ch);
             return true;
         }
+        // `[count]r` fails, changing nothing, when fewer than `count`
+        // characters remain on the line; a failed `r` is not a change for `.`.
+        let (row, col) = ed.cursor();
+        let fits = col + count.max(1) <= ed.line(row).map_or(0, |l| l.chars().count());
         ed.replace_char_at(ch, count.max(1));
-        if !ed.is_replaying() {
+        if fits && !ed.is_replaying() {
             ed.set_last_change(Some(LastChange::ReplaceChar {
                 ch,
                 count: count.max(1),
