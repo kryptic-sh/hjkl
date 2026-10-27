@@ -268,17 +268,30 @@ compatibility corpus and verify it against nvim before changing expectations.
 Found while fixing `c` over an in-place motion (2026-10-20, nvim 0.12.5), not
 fixed:
 
+- **A linewise delete that leaves a real empty last line lands one row high —
+  blocked on the buffer model.** `Vipp` (empty register) @ (2,7) on
+  `"baz\n\n\t{foo}, {a}"` leaves `"baz\n"` in both, but nvim's cursor is on
+  (1,0), the empty line it kept, and hjkl's on (0,0). After the delete nvim
+  holds the lines `["baz", ""]`, which the oracle joins as `"baz\n"`, and hjkl's
+  rope holds `"baz\n"` too. hjkl reads an empty row after a final `\n` as the
+  line terminator (the phantom row every motion skips, and
+  `land_after_linewise_delete` in `linewise.rs` steps above), so the rope cannot
+  say whether that row is a real line. Fixing it needs the buffer to record
+  whether its last line is real or only a terminator, like vim's `'eol'` /
+  `'fixeol'` state, which also bears on the next entry. Examined 2026-10-27; not
+  changed.
 - **`dd` on the fuzzer's empty buffer is a harness artifact — declined.** From
-  `initial_buffer = ""`, nvim's `dd` / `Vd` / `dG` store a linewise `"\n"` and
-  hjkl's store nothing. The harness sets that buffer with `nvim_buf_set_lines`,
-  which leaves one real empty line; a buffer emptied by a delete (or a new one)
-  is vim's "no lines in buffer" (`ML_EMPTY`) instead, where a linewise delete
-  does nothing: `dddd` / `ddVd` on `"abc"` keep `"abc\n"` in nvim, as
-  `register_survives_noop_dd` / `_dG` / `_visual_line_delete`
-  (`tier2_registers.toml`) pin. hjkl has no `ML_EMPTY` flag and matches the
-  emptied case. Recording `"\n"` from the lone empty line (tried in
-  `cut_vim_range_inner`, 2026-10-20) broke those three cases and was reverted.
-  The fuzz cases starting from `""` with a linewise delete will keep diverging.
+  `initial_buffer = ""`, nvim's `dd` / `Vd` / `dG` / `Vapp` store a linewise
+  `"\n"` and hjkl's store nothing. The harness sets that buffer with
+  `nvim_buf_set_lines`, which leaves one real empty line; a buffer emptied by a
+  delete (or a new one) is vim's "no lines in buffer" (`ML_EMPTY`) instead,
+  where a linewise delete does nothing: `dddd` / `ddVd` on `"abc"` keep
+  `"abc\n"` in nvim, as `register_survives_noop_dd` / `_dG` /
+  `_visual_line_delete` (`tier2_registers.toml`) pin. hjkl has no `ML_EMPTY`
+  flag and matches the emptied case. Recording `"\n"` from the lone empty line
+  (tried in `cut_vim_range_inner`, 2026-10-20) broke those three cases and was
+  reverted. The fuzz cases starting from `""` with a linewise delete will keep
+  diverging.
 - **`gj` / `gk` curswant follows the whole line, not the screen line (needs a
   decision).** Under wrap, vim's `nv_screengo` keeps curswant relative to the
   screen line: a step inside one line adds or subtracts the window width, and a
@@ -1271,18 +1284,6 @@ Seen while measuring, not `gq`:
   (`delete_goes_linewise`). Buffers already match on the measured cases (`das`
   stopping at a blank line), but the register type of such a delete (charwise in
   hjkl, possibly linewise in vim) was not compared.
-
-- **A linewise delete that leaves a real empty last line lands one row high.**
-  `Vipp` (empty register) @ (2,7) on `"baz\n\n\t{foo}, {a}"` leaves `"baz\n"` in
-  both, but nvim's cursor is on (1,0), the empty line it kept, and hjkl's on
-  (0,0). `land_after_linewise_delete` (`linewise.rs`) reads a final empty row as
-  the phantom row after a trailing newline and steps above it; here it is a real
-  line. Measured 2026-10-20 (difffuzz 2000 424242); not looked into.
-- **`Vapp` on an empty buffer records nothing; vim records `"\n"`.** Deleting
-  the one empty line of an empty buffer linewise yanks `"\n"` in nvim, while
-  `cut_vim_range_inner` (`command.rs`) returns early when the buffer reports an
-  empty inverse, leaving the register untouched. The buffers already agree (both
-  end up empty). Measured 2026-10-20; not looked into.
 
 - **`.` of an insert still diverges in these shapes** (fixed 2026-10-18: the
   cursor one column right, inserts containing `<CR>` replaying nothing, and `o`
