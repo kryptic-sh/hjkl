@@ -974,3 +974,51 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "back_word_on_first_fold_fails_and_keeps_it_closed"
+initial_buffer = "abc def\nghi\njkl"
+initial_cursor = [0, 5]
+keys = "zfjbdd"
+expected_buffer = "jkl"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "back_bigword_on_first_fold_fails_and_keeps_it_closed"
+initial_buffer = "abc def\nghi\njkl"
+initial_cursor = [0, 2]
+keys = "zfjBdd"
+expected_buffer = "jkl"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_back_word_on_first_fold_keeps_it_closed"
+initial_buffer = "abc def\nghi\njkl"
+initial_cursor = [0, 2]
+keys = "zfj2bdd"
+expected_buffer = "jkl"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "back_word_into_first_fold_from_below_keeps_it_closed"
+initial_buffer = "abc def\nghi\njkl"
+initial_cursor = [1, 2]
+keys = "zfkbdd"
+expected_buffer = "jkl"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

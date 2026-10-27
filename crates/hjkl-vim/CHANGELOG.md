@@ -44,6 +44,9 @@ and this project adheres to
 
 ### Fixed
 
+- `execute_motion` counts a `Motion::WordBack` / `BigWordBack` that started
+  inside a closed fold beginning on row 0 as failed for `motion_opens_fold`, as
+  vim's `bck_word` fails there after its snap to the fold's first line.
 - `visual_text_obj_extend` sends Visual-line and Visual-block `ip` / `ap`
   through `paragraph_extend_landing`, vim's `current_par` extend walk, when the
   selection is taller than one line or (Visual-line) the fresh object starts on

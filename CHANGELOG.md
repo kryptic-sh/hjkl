@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- `b` / `B` on a closed fold that starts the buffer leave the fold closed, as in
+  vim, where the word motion fails after stepping to the fold's first line:
+  `zfjbdd` deletes the whole fold, where hjkl opened it and deleted one line.
 - `^`, `_`, `+`, `-`, `I` and the first-non-blank landings after `>>`, `gUU` and
   similar commands treat only spaces and tabs as blanks, as vim does: on a line
   starting with an ideographic space (U+3000) or a no-break space (U+00A0), `^`

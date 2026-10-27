@@ -1128,12 +1128,11 @@ fail on the parent commit, the other 6 are negative guards).
   a `parse_motion` change alone would leave the app unchanged. Either way it
   adds a variant to a public enum (`Motion` or `MotionKind`); deferred
   2026-10-18 as not worth a breaking change on its own.
-- **"Moved" stands in for each handler's success test.** Divergent edges, none
-  measured against nvim: a `b` / `B` whose only movement is the snap to a closed
-  fold's first row at buffer start (vim's `bck_word` then fails and opens
-  nothing; measured — `zfjbdd` at (0,2) leaves the fold closed in nvim, hjkl
-  opens it); a `t` that succeeds without moving, and an `n` whose only match is
-  under the cursor (vim succeeds and opens; hjkl does not move, so does not).
+- **"Moved" stands in for each handler's success test.** Divergent edges, not
+  measured against nvim: a `t` that succeeds without moving, and an `n` whose
+  only match is under the cursor (vim succeeds and opens; hjkl does not move, so
+  does not). The `b` / `B` snap onto a closed fold that starts the buffer is
+  handled (`back_word_failed` in `motion.rs`, 2026-10-27).
 - **Not implemented:** the `quickfix` and `tag` classes. (`undo` now opens the
   fold whose first row it lands on too, 2026-10-18.) Unlike vim, the `undo`
   class is not gated on typed keys: a `u` replayed by `@q` opens folds as well,

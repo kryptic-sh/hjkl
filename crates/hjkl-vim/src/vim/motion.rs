@@ -165,7 +165,12 @@ pub fn execute_motion<H: hjkl_engine::types::Host>(
             }
         }
     }
-    if motion_opens_fold(&motion, count, pre_pos != post_pos) {
+    // vim's `bck_word` starts each repetition by moving onto a closed
+    // fold's first line, column 0; when that fold starts the buffer there is
+    // nothing left to step back over and `b` fails, though the cursor moved.
+    let back_word_failed = matches!(motion, Motion::WordBack | Motion::BigWordBack)
+        && (1..=pre_pos.0.max(1)).all(|row| ed.buffer().is_row_hidden(row));
+    if motion_opens_fold(&motion, count, pre_pos != post_pos && !back_word_failed) {
         foldopen_cursor(ed);
     }
     // Phase 7b: keep the migration buffer's cursor + viewport in
