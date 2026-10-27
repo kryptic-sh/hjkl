@@ -473,3 +473,51 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "repeat_cw_from_blank_onto_word_keeps_the_space"
+initial_buffer = "ab cd ef\nxx"
+initial_cursor = [0, 2]
+keys = "cwzz<Esc>0."
+expected_buffer = "zz ef\nxx"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "repeat_big_cw_from_blank_onto_word_keeps_the_space"
+initial_buffer = "ab cd ef\nxx"
+initial_cursor = [0, 2]
+keys = "cWzz<Esc>0."
+expected_buffer = "zz ef\nxx"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "repeat_cw_from_word_onto_blank_changes_the_blank"
+initial_buffer = "ab cd ef\nxx"
+initial_cursor = [0, 0]
+keys = "cwzz<Esc>l."
+expected_buffer = "zzzzcd ef\nxx"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "repeat_count_cw_from_blank_onto_word"
+initial_buffer = "ab cd ef\nxx"
+initial_cursor = [0, 2]
+keys = "c2wz<Esc>0."
+expected_buffer = "z"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

@@ -44,6 +44,9 @@ and this project adheres to
 
 ### Fixed
 
+- `replay_last_change` maps a recorded `Motion::ChangeWordEnd` back to the typed
+  `w` / `W` and runs `change_word_motion` against the replay's cursor, so the
+  `cw` rewrite follows where `.` starts instead of where the change did.
 - `replay_last_change`'s `LastChange::InsertAt` arm and
   `replay_insert_and_finish` call `remember_cursor_column` after their `<Esc>`
   step-back, as `leave_insert_to_normal_bridge` does for a typed `<Esc>`.

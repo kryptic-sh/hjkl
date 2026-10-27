@@ -1166,11 +1166,6 @@ fail on the parent commit, the other 6 are negative guards).
     column-0-only fixes the first two but breaks `zfjjkx` until the curswant
     question is settled; tried and reverted. `zfjk` @ (1,1) and `zfjj` / `zfjjk`
     @ (0,1) also land on column 0 in nvim, column 1 in hjkl.
-- **`.` of a `cw` begun on a blank also takes the space after a word.** On
-  `"ab cd ef"` @ (0,2) (the space), `cwzz<Esc>` gives `"abzzcd ef"` in both;
-  `0.` then gives `"zzef"` in hjkl and `"zz ef"` in nvim, which runs `cw` afresh
-  from the word under the cursor. Measured 2026-10-27; how `dot_repeat.rs`
-  replays it was not looked into.
 - **Left by the operator + mark work (2026-10-18):**
   - **Undo/redo cursor gaps left after the operator-delete fix.** On
     `"aa bb\n  cc dd\nee ff\ngg hh\n"` @ (0,3), all the same on the parent

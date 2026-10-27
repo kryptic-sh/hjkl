@@ -61,6 +61,19 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
         } => {
             let total = scaled(count.max(1));
             vim_mut(ed).pending_register = register;
+            // `.` re-runs the typed `cw` / `cW`, so whether it changes to the
+            // word's end or, from a blank, like `dw` is decided afresh at
+            // the cursor it now starts from (`:h cw`).
+            let typed = match motion {
+                Motion::ChangeWordEnd { big: false } => Motion::WordFwd,
+                Motion::ChangeWordEnd { big: true } => Motion::BigWordFwd,
+                m => m,
+            };
+            let motion = crate::vim::operator::change_word_motion(
+                typed,
+                op,
+                ed.char_at_cursor().is_some_and(|c| !c.is_whitespace()),
+            );
             apply_op_with_motion(ed, op, &motion, total);
             if let Some(text) = inserted {
                 replay_insert_and_finish(ed, &text);

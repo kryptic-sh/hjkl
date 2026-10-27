@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- `.` of a `cw` / `cW` decides afresh where it starts, as in vim: a `cw` typed
+  on a blank and repeated inside a word changes to the word's end, where hjkl
+  also took the space after it, and the reverse.
 - `.` of an insert or a change sets the column `j` / `k` aim for, as the typed
   `<Esc>` does: `Az<Esc>0.j` lands under the repeated text, where hjkl kept the
   column from before the `.`.
