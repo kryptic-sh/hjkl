@@ -44,6 +44,10 @@ and this project adheres to
 
 ### Fixed
 
+- `visual_text_obj_extend` runs a sentence object from a one-row Visual block
+  through `sentence_visual`, anchored at `block_anchor`; an `Extend` keeps the
+  block and syncs `block_vcol`, a `Select` turns it charwise as vim's
+  `current_sent` does.
 - `visual_text_obj_extend` moves `block_anchor` to a word object's start when
   the block is one cell (anchor on the cursor), as vim selects the object afresh
   there.

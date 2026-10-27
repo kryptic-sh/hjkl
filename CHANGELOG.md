@@ -22,6 +22,11 @@ patch bumps.
 
 ### Fixed
 
+- `is` / `as` from a one-row Visual block follow vim's Visual sentence rules:
+  they extend the block when the sentence starts where the block does (on a
+  blank line, `<C-v>isd` takes the next line's first column too), and otherwise
+  select the sentence as a charwise selection. hjkl always switched to a
+  charwise selection of the sentence.
 - `iw` / `aw` / `iW` / `aW` from a one-cell Visual block select the whole word,
   as in vim: `<C-v>iw~` in the middle of a word toggles all of it, where hjkl
   started at the cursor. A wider block still only extends.

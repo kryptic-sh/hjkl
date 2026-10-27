@@ -873,3 +873,51 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "block_is_on_blank_line_extends_the_block"
+initial_buffer = "\n\t_id"
+initial_cursor = [0, 0]
+keys = "<C-v>isd"
+expected_buffer = "\n_id"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_is_on_blank_line_then_outdent"
+initial_buffer = "\n\t_id"
+initial_cursor = [0, 0]
+keys = "<C-v>is<"
+expected_buffer = "\n_id"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_is_from_one_cell_selects_charwise"
+initial_buffer = "ab. cd\nef. gh"
+initial_cursor = [0, 5]
+keys = "<C-v>is~"
+expected_buffer = "ab. CD\nEF. gh"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_is_from_two_cells_extends"
+initial_buffer = "ab. cd. ef"
+initial_cursor = [0, 5]
+keys = "<C-v>lisd"
+expected_buffer = "ab. cef"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

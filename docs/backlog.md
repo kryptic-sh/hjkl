@@ -1176,8 +1176,10 @@ Seen while measuring, not `gq`:
   `'paragraphs'` / `'sections'` macros (`.PP`, `.SH`, …). And Visual-line keeps
   only its anchor's row (`visual_line_anchor`), where vim keeps a position, so
   `current_sent`'s Visual path (`sentence_visual`) runs for Visual-line only
-  while the selection is one row; a taller `V` selection, and Visual-block,
-  still take hjkl's own paths. Unmeasured how far those differ from vim.
+  while the selection is one row; a taller `V` selection still takes hjkl's own
+  path, and so does a Visual block taller than one row (a one-row block goes
+  through `sentence_visual` since 2026-10-27). Unmeasured how far those differ
+  from vim.
 - **A counted `_` past the end does nothing; a test pins it. Needs a decision.**
   vim's `_` (`nv_lineop`) moves with `cursor_down`, which fails only on the last
   line and otherwise stops there: measured in nvim 0.12.5, `10_` on `"a\nb"` @

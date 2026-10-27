@@ -1842,18 +1842,29 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             }
             _ => None,
         };
-        let ported =
-            match obj {
-                TextObject::Sentence => ported_anchor
-                    .map(|anchor| crate::vim::sentence_visual(self, anchor, inner, count)),
-                TextObject::Word { big } => ported_anchor
-                    .map(|anchor| crate::vim::word_visual(self, anchor, inner, big, count)),
-                _ => None,
-            };
+        // A one-row Visual block takes `current_sent`'s Visual path too: it
+        // extends the block, or selects the sentence afresh as a charwise
+        // selection, as vim's `current_sent` sets `VIsual_mode = 'v'`.
+        let block_row_anchor = (crate::vim_state::vim(self).mode == FsmMode::VisualBlock
+            && crate::vim_state::vim(self).block_anchor.0 == self.cursor().0)
+            .then(|| crate::vim_state::vim(self).block_anchor);
+        let ported = match obj {
+            TextObject::Sentence => ported_anchor
+                .or(block_row_anchor)
+                .map(|anchor| crate::vim::sentence_visual(self, anchor, inner, count)),
+            TextObject::Word { big } => {
+                ported_anchor.map(|anchor| crate::vim::word_visual(self, anchor, inner, big, count))
+            }
+            _ => None,
+        };
         if let Some(picked) = ported {
             match picked {
                 Some(crate::vim::VisualTextObject::Extend((row, col))) => {
                     self.jump_cursor(row, col);
+                    if crate::vim_state::vim(self).mode == FsmMode::VisualBlock {
+                        crate::vim_state::vim_mut(self).block_vcol = col;
+                        crate::vim_state::vim_mut(self).block_to_eol = false;
+                    }
                 }
                 Some(crate::vim::VisualTextObject::Select(start, (row, col))) => {
                     crate::vim_state::vim_mut(self).mode = FsmMode::Visual;
