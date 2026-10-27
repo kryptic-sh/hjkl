@@ -1002,13 +1002,13 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
   `runtime/compile.rs`) builds its compiler through `cc::Build`, and
   `hjkl-bonsai`'s manifest accepts `cc` from 1.2.1 up, so a downstream app's
   lockfile picks the version. sqeel's resolves `cc` 1.2.67 (main, 2026-10-22,
-  with `hjkl-bonsai` 0.43.4) while hjkl's resolves 1.9.0. sqeel's Windows CI
-  compiles `hjkl-bonsai` against 1.2.67, but nothing compiles and loads a
-  grammar with it: the `grammar tests` job runs hjkl's lockfile only. 1.2.67
-  having every method `run_compiler` calls is a code read, not a run. To close
-  it, pin the lockfile with `cargo update -p cc --precise 1.2.67` and run that
-  job's Windows leg once, or raise the manifest floor to the oldest version
-  actually run.
+  with `hjkl-bonsai` 0.43.4) while hjkl's resolves 1.10.0 (1.9.0 until #351,
+  2026-10-27). sqeel's Windows CI compiles `hjkl-bonsai` against 1.2.67, but
+  nothing compiles and loads a grammar with it: the `grammar tests` job runs
+  hjkl's lockfile only. 1.2.67 having every method `run_compiler` calls is a
+  code read, not a run. To close it, pin the lockfile with
+  `cargo update -p cc --precise 1.2.67` and run that job's Windows leg once, or
+  raise the manifest floor to the oldest version actually run.
 
 **Recorded behaviour, not bugs.**
 
