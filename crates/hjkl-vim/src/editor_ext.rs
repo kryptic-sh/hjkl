@@ -637,9 +637,9 @@ pub trait VimEditorExt {
     /// sticky column.
     fn execute_motion(&mut self, motion: Motion, count: usize);
 
-    /// Update the VisualBlock virtual column after a motion. Horizontal motions
-    /// sync `block_vcol` to the cursor column; vertical motions leave it alone
-    /// so the intended column survives clamping to shorter rows.
+    /// Update the VisualBlock virtual column after a motion: every motion that
+    /// sets vim's curswant, and `j` / `k`, sync `block_vcol` to the cursor
+    /// column (see `hjkl_vim::vim::update_block_vcol` for the exceptions).
     fn update_block_vcol(&mut self, motion: &Motion);
 
     /// Apply `op` over the current visual selection (char-wise, linewise, or

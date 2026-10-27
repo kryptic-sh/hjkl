@@ -1334,7 +1334,10 @@ fn handle_after_square_bracket_open<H: Host>(
         },
         _ => return true, // unknown second key — cancel silently
     };
-    ed.execute_motion(motion, count);
+    ed.execute_motion(motion.clone(), count);
+    if ed.fsm_mode() == FsmMode::VisualBlock {
+        ed.update_block_vcol(&motion);
+    }
     true
 }
 
@@ -1370,7 +1373,10 @@ fn handle_after_square_bracket_close<H: Host>(
         },
         _ => return true,
     };
-    ed.execute_motion(motion, count);
+    ed.execute_motion(motion.clone(), count);
+    if ed.fsm_mode() == FsmMode::VisualBlock {
+        ed.update_block_vcol(&motion);
+    }
     true
 }
 

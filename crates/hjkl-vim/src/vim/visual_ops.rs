@@ -426,7 +426,23 @@ pub fn update_block_vcol<H: hjkl_engine::types::Host>(
         // `H` / `M` / `L` would too by the same measurement, but a corpus
         // case pins the old column for them (see `docs/backlog.md`).
         | Motion::FileTop
-        | Motion::FileBottom => {
+        | Motion::FileBottom
+        // So do the other jumps that set curswant: `{` `}` `(` `)`, the
+        // section and unmatched-bracket motions, `+` `-` `_`, `|`, `n` `N`.
+        | Motion::ParagraphPrev
+        | Motion::ParagraphNext
+        | Motion::SentencePrev
+        | Motion::SentenceNext
+        | Motion::SectionBackward
+        | Motion::SectionForward
+        | Motion::SectionEndBackward
+        | Motion::SectionEndForward
+        | Motion::UnmatchedBracket { .. }
+        | Motion::FirstNonBlankNextLine
+        | Motion::FirstNonBlankPrevLine
+        | Motion::FirstNonBlankLine
+        | Motion::GotoColumn
+        | Motion::SearchNext { .. } => {
             vim_mut(ed).block_vcol = ed.cursor().1;
             vim_mut(ed).block_to_eol = false;
         }
@@ -437,7 +453,7 @@ pub fn update_block_vcol<H: hjkl_engine::types::Host>(
         Motion::Up | Motion::Down => {
             vim_mut(ed).block_vcol = ed.cursor().1;
         }
-        // Search and the rest — preserve vcol AND the ragged flag.
+        // `gj` / `gk` and `H` / `M` / `L` — preserve vcol AND the ragged flag.
         _ => {}
     }
 }

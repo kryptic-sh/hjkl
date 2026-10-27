@@ -938,3 +938,99 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "block_paragraph_forward_takes_landing_column"
+initial_buffer = "{xy} (A-B), 'n1'"
+initial_cursor = [0, 7]
+keys = "<C-v>}~"
+expected_buffer = "{xy} (A-b), 'N1'"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_paragraph_back_takes_landing_column"
+initial_buffer = "ab cd\n\nef gh"
+initial_cursor = [2, 3]
+keys = "<C-v>{d"
+expected_buffer = "ab cd\n\nh"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_sentence_back_takes_landing_column"
+initial_buffer = "ab. cd ef."
+initial_cursor = [0, 8]
+keys = "<C-v>(d"
+expected_buffer = "ab. ."
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_plus_takes_first_non_blank_column"
+initial_buffer = "  ab\n  cd\n  ef"
+initial_cursor = [0, 3]
+keys = "<C-v>+d"
+expected_buffer = "  \n  \n  ef"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_bar_takes_its_column"
+initial_buffer = "abcd\nabcd"
+initial_cursor = [0, 0]
+keys = "<C-v>j3|d"
+expected_buffer = "d\nd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_gg_takes_first_non_blank_column"
+initial_buffer = "(_id)"
+initial_cursor = [0, 1]
+keys = "<C-v>ggd"
+expected_buffer = "id)"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_unmatched_paren_takes_its_column"
+initial_buffer = "(ab\ncd)"
+initial_cursor = [1, 2]
+keys = "<C-v>[(d"
+expected_buffer = "\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_section_back_takes_its_column"
+initial_buffer = "x\n{\nab\n}"
+initial_cursor = [3, 0]
+keys = "<C-v>[[d"
+expected_buffer = "x\n\nb\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

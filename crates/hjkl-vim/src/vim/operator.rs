@@ -356,6 +356,9 @@ pub fn apply_after_g<H: hjkl_engine::types::Host>(
             // Update sticky_col to the first-non-blank column so j/k after
             // gg aim for the correct column per vim semantics.
             remember_cursor_column(ed);
+            if vim(ed).mode == Mode::VisualBlock {
+                update_block_vcol(ed, &Motion::FileTop);
+            }
             if ed.cursor() != pre {
                 ed.push_jump(pre);
             }

@@ -22,6 +22,10 @@ patch bumps.
 
 ### Fixed
 
+- A Visual block follows the cursor's column after `{` / `}` / `(` / `)`, `[[`
+  and the other section motions, `[(` / `[{`, `+` / `-` / `_`, `|`, `n` / `N`
+  and `gg`, as in vim: `<C-v>}~` toggles from the anchor to where `}` landed,
+  where hjkl kept the block on its old column.
 - `r<CR>` replaces the character under the cursor with a line break, and
   `[count]r<CR>` replaces `count` characters with one, as in vim, in
   `hjkl_vim::dispatch_input` (the key path behind `--nvim-api`, the headless

@@ -44,6 +44,11 @@ and this project adheres to
 
 ### Fixed
 
+- `update_block_vcol` syncs `block_vcol` for every motion that sets vim's
+  curswant (the paragraph, sentence, section and unmatched-bracket motions,
+  `Motion::FirstNonBlank*Line`, `GotoColumn`, `SearchNext`), leaving only `gj` /
+  `gk` and `H` / `M` / `L` out; the `[` / `]` chords and `gg` now call it in
+  Visual-block mode.
 - `step_normal`'s `r` chord takes `<Enter>` as `'\n'` in Normal mode, and
   `replace_char` turns a `'\n'` into vim's `nv_replace` line break: it deletes
   the `count` characters and runs `insert_newline_bridge` (so `'autoindent'`
