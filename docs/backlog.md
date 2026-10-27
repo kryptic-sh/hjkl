@@ -1316,11 +1316,6 @@ Seen while measuring, not `gq`:
   `operator`, `op_motion`, `visual_ops`, `sneak`, `linewise`), on both the FSM
   and the keymap path, so the gate belongs where the command is dispatched, not
   at each site.
-- **`gq` splits words on any Unicode whitespace; vim only on space and tab.**
-  `greedy_wrap` (`hjkl-vim` `text_object_ops.rs`) tests `char::is_whitespace`,
-  so a U+3000 or U+00A0 inside a paragraph is a break point to hjkl and part of
-  a word to vim. The first-non-blank motions were fixed 2026-10-27; this one was
-  not measured.
 
 ## 2. Blocked on platform access
 
