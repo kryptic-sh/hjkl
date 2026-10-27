@@ -545,3 +545,51 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "dot_after_failed_change_object_repeats_earlier_change"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 0]
+keys = "ddci(."
+expected_buffer = "ef\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_after_failed_delete_object_repeats_earlier_change"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 0]
+keys = "dddi(."
+expected_buffer = "ef\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_after_failed_quote_object_repeats_earlier_change"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 0]
+keys = "ddci\"."
+expected_buffer = "ef\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_after_found_object_repeats_it"
+initial_buffer = "(ab)\n(cd)"
+initial_cursor = [0, 1]
+keys = "di(j."
+expected_buffer = "()\n()"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

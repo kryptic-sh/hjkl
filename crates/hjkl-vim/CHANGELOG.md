@@ -44,6 +44,8 @@ and this project adheres to
 
 ### Fixed
 
+- `apply_op_text_obj_inner` records `LastChange::OpTextObj` only when
+  `text_object_range` finds the object.
 - `bracket_text_object` falls back to `find_next_open` when the cursor's closing
   bracket has no open partner, as it already did off a bracket.
 - `visual_operator_body`'s charwise branch parks the cursor on the selection's

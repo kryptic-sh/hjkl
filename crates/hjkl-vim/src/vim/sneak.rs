@@ -218,8 +218,11 @@ pub fn apply_op_text_obj_inner<H: hjkl_engine::types::Host>(
         return false;
     };
     let register = vim(ed).pending_register;
+    // An object that is not there fails the command, which leaves `.` on the
+    // change before it (`ddci(.` repeats the `dd`).
+    let found = text_object_range(ed, obj, inner, total_count.max(1)).is_some();
     apply_op_with_text_object(ed, op, obj, inner, total_count.max(1));
-    if !vim(ed).replaying && op_is_change(op) {
+    if found && !vim(ed).replaying && op_is_change(op) {
         vim_mut(ed).last_change = Some(LastChange::OpTextObj {
             op,
             obj,

@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- An operator over a text object that is not there (`ci(` with no parentheses)
+  no longer becomes the change `.` repeats, as in vim: `ddci(.` deletes a second
+  line.
 - `i(` / `a(` and the other bracket objects with the cursor on a closing bracket
   that has no partner take the next pair forward, as in vim and as they already
   did from anywhere else outside a pair; they used to do nothing.
