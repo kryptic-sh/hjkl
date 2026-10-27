@@ -295,11 +295,19 @@ fixed:
   would need the hjkl driver to publish `Wrap::Char` with `text_width: 80`. Tabs
   and double-width characters are counted the way `wrap_segments` counts them (a
   tab is one cell), not by `'tabstop'`, which is also unverified.
-- **The next release is a minor bump.** `Motion::ScreenLineStart`,
-  `ScreenLineFirstNonBlank` and `ScreenLineEnd` are new variants on the
-  exhaustive `Motion` enum in `hjkl-vim-types`, which breaks an external
-  `match`. Below 1.0 that is a minor bump, and the internal `"0.43"` pins move
-  with it.
+- **Breaking enum variants shipped in patch releases (needs a decision).**
+  `Motion::ScreenLineStart`, `ScreenLineFirstNonBlank` and `ScreenLineEnd` (for
+  `g0` / `g^` / `g$`) went out in v0.43.3, cut as a patch. They are new variants
+  on the exhaustive `Motion` enum in `hjkl-vim-types`, so an external exhaustive
+  `match` stops compiling on `cargo update`. Below 1.0 that should have been a
+  minor bump. (The earlier additions the same crate's `[Unreleased]` changelog
+  lists, `LastChange::OpenLine { count }`, `InsertEntry::GShiftI` and
+  `Pending::OpMark`, are already in v0.43.0, a minor release; per-crate
+  changelogs are not rolled at release.) Published versions cannot be changed.
+  The options: mark `Motion` (and the other public enums that keep growing)
+  `#[non_exhaustive]` in the next minor release, so new variants stop being
+  breaking; or keep them exhaustive and make the release process check
+  `hjkl-vim-types` for added variants before choosing a patch bump.
 
 ### 1.5b Left open by the motion- and blockwise-parity passes
 
