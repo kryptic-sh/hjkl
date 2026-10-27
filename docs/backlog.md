@@ -338,91 +338,14 @@ fixed:
 
 ### 1.5b Left open by the motion- and blockwise-parity passes
 
-**A text object in blockwise visual collapses the block (2026-08-04).**
-`editor_ext::visual_text_obj_extend` used to send EVERY text object down one
-path — collapse to charwise (or linewise), set `visual_anchor`, move the cursor
-— and never wrote `block_anchor` / `block_vcol`, which are what `block_bounds`
-reads.
-
-**Word objects fixed 2026-08-06 (`2be058b8`).** `iw`/`aw`/`iW`/`aW` now keep
-`FsmMode::VisualBlock` and write `block_vcol` to the landed column (cursor
-already matched nvim; only the mode was wrong), so `<C-v>iw<` reaches the
-blockwise shift arm and `<C-v>jiw~` flips the block instead of the line. Pinned
-by seven corpus cases in `corpus/tier2_block_textobj.toml` measured against
-neovim 0.12.4 (word mode + `~`/`<` consequences, quote no-op).
-
-The 2026-08-04 behaviour table was re-measured against neovim 0.12.4 during that
-work, and two of its rows did not reproduce at the positions probed:
-
-- **Brackets (`ib`/`ab`/`iB`) and tags (`it`) fixed 2026-08-07 (`ddc81797`).**
-  They stayed BLOCKWISE in nvim at every position probed (`(x\ny)`, `(ab\ncd)`,
-  `a(b\nc)d`, `<a>x\ny</a>`, cursors on rows 0 and 1) — and the block is a
-  selection NO-OP: the object is found but mode stays `visual_block` and the
-  cursor keeps the post-motion position (`<C-v>jib~` flips the same cells as
-  `<C-v>j~`). hjkl now returns without touching mode or cursor for
-  `TextObject::Bracket` / `TextObject::XmlTag` in blockwise visual; the NOTE at
-  `visual_text_obj_extend` was corrected (it claimed brackets collapse — that
-  row of the 2026-08-04 table did not reproduce). Four corpus cases pinned
-  against neovim 0.12.4.
-- **Quotes (`i"`) no-op on both sides** at the measured position
-  (`a"hello\nworld"b`, cursor inside the content) — hjkl's `text_object_range`
-  returns no object from that row, so hjkl already matches nvim. Pinned by the
-  `blockwise_quote_obj_noop` corpus case.
-- **`ip`/`is` stay blockwise in nvim but hjkl collapses — fixed 2026-08-12.**
-  The extent is now measured and pinned. In a multi-line `<C-v>` selection both
-  engines take vim's `current_par` / `current_sent` "extend" path: the anchor
-  and blockwise mode stay, and the cursor lands at the extend position — `ip`
-  walks one same-blankness run past the cursor (away from the anchor), `ap`
-  continues with a second run of the opposite blankness, `is`/`as` land at the
-  sentence end (trailing whitespace included for `as`) — so the block spans
-  anchor..landing at the landing's column (`<C-v>jip~` on `"one\n\ntwo"` flips
-  both paragraphs' first char: the block is rows 0-2, col 0). A single-row block
-  takes the normal object path (collapse to linewise / charwise) and a
-  buffer-edge walk FAILs (no-op) — both match nvim. 9 corpus cases pinned in
-  `tier2_block_textobj.toml`.
-
-**`H` / `L` / `gE` in blockwise visual — fixed 2026-08-12.** The `g`-prefixed
-horizontal motions (`gE`/`ge`/`g_`/`gM`/`gm`/`g#`) now sync `block_vcol` like
-the plain forms: `apply_after_g` routed them through raw `execute_motion`, so
-the block never extended past its anchor column — `<C-v>jgE~` flipped one column
-instead of the whole words. `update_block_vcol` gained the
-`LastNonBlank`/`LineMiddle`/`ScreenLineMiddle`/`WordAtCursor` arms to match.
-Pinned by 11 corpus cases in `tier2_block_textobj.toml` measured against neovim
-0.12.4. `H`/`L` agree on non-scrolling buffers — the standing repro `<C-v>H>`
-matches (40 re-runs stable; the earlier "shifts rows 0-1" reading was a
-headless-nvim startup race, not hjkl). The off-screen harness artifact is closed
-too: the driver now pins the real headless window (22 rows — `lines=24` minus
-statusline + cmdline — not 24), pins `scrolloff=0` (hjkl's default 5 vs
-`nvim --clean`'s 0), and scrolls the viewport after seeding the cursor
-(`ensure_cursor_in_scrolloff`), matching nvim's scroll-on-`set_cursor` —
-tall-buffer `H`/`M`/`L` and `<C-v>H>` now agree, pinned by 4 cases in
-`tier2_viewport_bounds.toml`.
-
-**Every edit used to clone its payload for the change log — closed 2026-08-07
-(`1f062fe0`), but not the way the note below proposed.** The `Vec<EngineEdit>`
-built per edit had NO consumer anywhere in hjkl or its checked-out siblings
-(every `take_changes` call site is a test), and the proposed `Arc<str>` in the
-log would not have reduced the paste peak anyway: the payload is freshly built
-per paste, so an `Arc::from` still copies. The log is now opt-in
-(`View::set_change_log_enabled`, default OFF) and `mutate_edit` skips
-`edit_to_editops` entirely when unsubscribed — measured peak RSS 651 MB → 456 MB
-on the paste path, 45 MB → 18 MB on a keystroke burst. The 2026-08-02
-~3.1x/~4.1x peak-RSS multiple is gone. The public API is unchanged.
-
-**Left open by the blockwise-paste rewrite (2026-08-02).**
-
-- **`visual_paste` was examined 2026-08-07 and cleared.** Neither it nor
-  `do_block_paste` (`vim/command.rs`) uses `rope_to_lines_vec` — they build
-  yank-sized `segments`/`chunks`, never a whole-document `Vec<String>`. The §1.7
-  suspicion did not reproduce.
-- **`content()` hides trailing-newline bugs from unit tests.** It appends a
-  newline when the rope lacks one, so a paste that eats the buffer's terminator
-  compares equal through it. That is why the first version of the rewrite passed
-  every hand-written geometry case while the nvim oracle failed on
-  `visual_block_paste_past_eof`, which reads the rope directly. Any assertion
-  about buffer termination must read the rope, as
-  `block_paste_past_eof_preserves_the_trailing_newline` does. Whether other
-  buffer-shape assertions in the suite are blunted the same way was not audited.
+**`content()` hides trailing-newline bugs from unit tests.** It appends a
+newline when the rope lacks one, so a paste that eats the buffer's terminator
+compares equal through it. That is why the first version of the 2026-08-02
+blockwise-paste rewrite passed every hand-written geometry case while the nvim
+oracle failed on `visual_block_paste_past_eof`, which reads the rope directly.
+Any assertion about buffer termination must read the rope, as
+`block_paste_past_eof_preserves_the_trailing_newline` does. Whether other
+buffer-shape assertions in the suite are blunted the same way was not audited.
 
 **The engine message queue is deliberately dumb.** `Editor::push_error` /
 `take_errors` carries vim's `E342` out of `do_paste` and `apps/hjkl` drains it
@@ -430,30 +353,17 @@ in both post-mutation sync paths (`App::drain_engine_errors`). An empty register
 is still silent (vim says nothing there either), and nothing rate-limits the
 queue, so code that pushes per-iteration would flood the toast bar.
 
-**A corpus case could not pin a value when nvim was absent — closed 2026-08-07
-(`6cddabde`).** `run_single` now runs the hjkl driver first and, when nvim is
-missing, compares its outcome against the authored `expected_*` fields — a real
-pass-or-mismatch instead of a wholesale skip (every case carries an
-`expected_buffer`). The corpus tests' nvim early-returns are gone (the five
-author-error tests keep theirs, since they sanity-check nvim itself); verified
-by running the whole corpus with nvim hidden from PATH: 75/75 pass via the
-fallback. The `expected_*` fields now guard hjkl on every machine, CI lanes
-without neovim included.
-
 **The `:s` curswant fix has no oracle case.** It is covered by two unit tests in
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
 keys. A corpus case would need the ex layer driven some other way.
 
-**The differential fuzzer reports 69 distinct divergences at seed 777** (89
-before the 2026-08-02 pass, 84 after it, then 83 with the counted-`$` failure
-rule, 78 with the backward-word-motion rewrite, 77 with the blockwise-shift
-geometry, all 2026-08-04, and 69 after the harness cleared nvim's undo history
-post-seeding and enabled search / fold / `gq` tokens — the `u`/undo noise class
-is gone and the remaining `u` divergences are real post-edit undo parity). The
-bulk are the known-excluded blockwise `<C-v>` non-delete operators plus the
-entries above.
+**The differential fuzzer's standing counts.** At `c24057ca` (2026-10-27)
+`difffuzz 2000 424242` reports 77 distinct divergences and `difffuzz 400 777` 23
+(69 when the seed-777 count was first recorded, 2026-08-04). Each slice compares
+the sorted divergence list before and after rather than the count, since the
+shrinker can list one divergence under a different minimal case.
 `cargo run -p hjkl-compat-oracle --release --example difffuzz -- 400 777`
-reproduces the list; build with `--examples`, not `--example difffuzz`, or the
+reproduces a list; build with `--examples`, not `--example difffuzz`, or the
 other binary goes stale.
 
 ### 1.6 Cursor-move API migration
