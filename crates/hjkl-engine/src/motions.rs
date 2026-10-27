@@ -1147,6 +1147,13 @@ fn move_vertical<B: Cursor + Query>(
     let mut target_row = cursor.row;
     let row_count = content_row_count(buf);
     if delta < 0 {
+        // vim's `cursor_up` starts from the first line of the cursor's closed
+        // fold, so from a hidden row inside one `k` lands above the fold.
+        if folds.is_row_hidden(target_row)
+            && let Some(first) = folds.prev_visible_row(target_row)
+        {
+            target_row = first;
+        }
         for _ in 0..(-delta) as usize {
             match folds.prev_visible_row(target_row) {
                 Some(r) => target_row = r,

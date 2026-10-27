@@ -17,6 +17,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `motions::move_up` (and every `k` built on `move_vertical`) from a row hidden
+  inside a closed fold counts from the fold's first line, as vim's `cursor_up`
+  does, so `k` lands above the fold instead of on it.
 - `motions::move_first_non_blank_next_line` / `move_first_non_blank_prev_line`
   clamp a count that runs past the buffer to the last / first line, as vim's
   `cursor_down` / `cursor_up` do, and do nothing only from that line.

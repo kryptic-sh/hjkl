@@ -1346,3 +1346,51 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "k_from_inside_fold_lands_above_it"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [2, 1]
+keys = "zfjGk"
+expected_buffer = "ab\ncd\nef\ngh"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_k_from_inside_fold_counts_from_its_top"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [2, 1]
+keys = "zfjG2k"
+expected_buffer = "ab\ncd\nef\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dk_from_inside_fold_deletes_from_row_above"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [2, 1]
+keys = "zfjGdk"
+expected_buffer = "ab"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "k_onto_fold_from_below_lands_on_fold"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 1]
+keys = "jzfjGk"
+expected_buffer = "ab\ncd\nef\ngh"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

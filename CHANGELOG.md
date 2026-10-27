@@ -22,6 +22,8 @@ patch bumps.
 
 ### Fixed
 
+- `k` with the cursor inside a closed fold (after `zfjG`, say) moves to the line
+  above the fold, as in vim, where it stopped on the fold itself.
 - A Visual selection that starts or ends on a closed fold takes the whole fold
   when an operator runs, as in vim: `zfjVd` deletes both folded lines, and
   `zfjvd` deletes them with their line breaks, where hjkl acted on the fold's

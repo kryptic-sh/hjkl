@@ -353,15 +353,31 @@ in both post-mutation sync paths (`App::drain_engine_errors`). An empty register
 is still silent (vim says nothing there either), and nothing rate-limits the
 queue, so code that pushes per-iteration would flood the toast bar.
 
+**A block operator after `k` onto a line with a tab uses the wrong column.**
+From the last column of `abcdefghij` below `\tab`, `<C-v>kd` deletes `defghij`
+where nvim deletes `ghij`: hjkl takes the block's right edge from the cursor's
+character column on the tab line, not the display column the block was built at.
+Reproduced on the parent of the Visual-fold change, so not caused by it; not
+looked into further. `<C-v>1MU` on `(hello)` (hjkl does nothing, nvim uppercases
+the line) is a separate open fuzz case.
+
+**`gk` from a hidden row inside a closed fold lands on the fold.** `k` from
+there now starts at the fold's first line, as vim's `cursor_up` does, but `gk`
+goes through the screen-line path in `hjkl-vim` and never reaches that check. On
+a four-line buffer with the cursor on row 2, `zfjG` folds rows 2–3 and leaves
+the cursor on row 3; `gk` then goes to row 2, the fold's first line, where nvim
+goes to row 1.
+
 **The `:s` curswant fix has no oracle case.** It is covered by two unit tests in
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
 keys. A corpus case would need the ex layer driven some other way.
 
-**The differential fuzzer's standing counts.** At `c24057ca` (2026-10-27)
-`difffuzz 2000 424242` reports 77 distinct divergences and `difffuzz 400 777` 23
-(69 when the seed-777 count was first recorded, 2026-08-04). Each slice compares
-the sorted divergence list before and after rather than the count, since the
-shrinker can list one divergence under a different minimal case.
+**The differential fuzzer's standing counts.** At `43fd4dd0` (2026-10-27)
+`difffuzz 2000 424242` reports 49 distinct divergences (77 at `c24057ca`,
+earlier the same day); `difffuzz 400 777` reported 23 at `c24057ca` (69 when the
+seed-777 count was first recorded, 2026-08-04). Each slice compares the sorted
+divergence list before and after rather than the count, since the shrinker can
+list one divergence under a different minimal case.
 `cargo run -p hjkl-compat-oracle --release --example difffuzz -- 400 777`
 reproduces a list; build with `--examples`, not `--example difffuzz`, or the
 other binary goes stale.
