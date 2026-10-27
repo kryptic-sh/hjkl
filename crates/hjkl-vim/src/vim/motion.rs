@@ -111,6 +111,8 @@ pub fn execute_motion<H: hjkl_engine::types::Host>(
         other => other,
     };
     let pre_pos = ed.cursor();
+    // Read before the motion, which consumes it.
+    let find_repeat = vim(ed).find_repeat_skip;
     apply_motion_cursor(ed, &motion, count);
     let post_pos = ed.cursor();
     if is_big_jump(&motion) && pre_pos != post_pos {
@@ -170,7 +172,22 @@ pub fn execute_motion<H: hjkl_engine::types::Host>(
     // nothing left to step back over and `b` fails, though the cursor moved.
     let back_word_failed = matches!(motion, Motion::WordBack | Motion::BigWordBack)
         && (1..=pre_pos.0.max(1)).all(|row| ed.buffer().is_row_hidden(row));
-    if motion_opens_fold(&motion, count, pre_pos != post_pos && !back_word_failed) {
+    // Some motions succeed without moving: a `t` / `T` onto an adjacent
+    // target, and a search whose only match is under the cursor.
+    let succeeded_in_place = pre_pos == post_pos
+        && match motion {
+            Motion::Find {
+                ch,
+                forward,
+                till: true,
+            } => till_succeeds_in_place(ed, ch, forward, count, find_repeat),
+            Motion::WordAtCursor { .. } | Motion::SearchNext { .. } => {
+                ed.settings().wrapscan && search_matches_at_cursor(ed)
+            }
+            _ => false,
+        };
+    let succeeded = (pre_pos != post_pos && !back_word_failed) || succeeded_in_place;
+    if motion_opens_fold(&motion, count, succeeded) {
         foldopen_cursor(ed);
     }
     // Phase 7b: keep the migration buffer's cursor + viewport in
@@ -518,16 +535,17 @@ pub fn foldopen_cursor<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer:
 /// Whether vim's default `'foldopen'` (`block,hor,mark,percent,quickfix,
 /// search,tag,undo`) opens the folds under the cursor once `motion` finishes
 /// as a Normal-mode command. Each arm is the flag vim's own handler checks;
-/// `moved` stands in for the handler's success test, which is why a failed
-/// `l` at the end of a line opens nothing. Measured against nvim 0.12.5:
+/// `succeeded` is the handler's success test, as `execute_motion` reads it
+/// back (mostly "the cursor moved"), which is why a failed `l` at the end of
+/// a line opens nothing. Measured against nvim 0.12.5:
 /// `ge`/`gE`, `g_`, `gm`/`gM`, `|`, `H`/`M`/`L`, `+`/`-`/`_`, `gg`/`G` and
 /// `j`/`k` leave the fold closed, and so do `g0` / `g^` / `g$`.
-fn motion_opens_fold(motion: &Motion, count: usize, moved: bool) -> bool {
+fn motion_opens_fold(motion: &Motion, count: usize, succeeded: bool) -> bool {
     match motion {
         // `hor`: `nv_beginline()` succeeds without moving, and so does
         // `nv_dollar()` unless a count runs it off the end of the buffer.
         Motion::LineStart | Motion::FirstNonBlank => true,
-        Motion::LineEnd => moved || count == 1,
+        Motion::LineEnd => succeeded || count == 1,
         // `hor`.
         Motion::Left
         | Motion::Right
@@ -555,7 +573,7 @@ fn motion_opens_fold(motion: &Motion, count: usize, moved: bool) -> bool {
         | Motion::SectionEndForward
         // `search`.
         | Motion::WordAtCursor { .. }
-        | Motion::SearchNext { .. } => moved,
+        | Motion::SearchNext { .. } => succeeded,
         Motion::Up
         | Motion::Down
         | Motion::ScreenUp
@@ -1031,6 +1049,47 @@ pub fn move_to_insert_start<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_bu
     if !line.is_empty() && line.chars().all(super::vim_buf::is_vim_white) {
         buf_set_cursor_rc(ed.buffer_mut(), row, line.chars().count());
     }
+}
+/// Whether a `t` / `T` that left the cursor in place succeeded: vim's
+/// `searchc` stops before an adjacent target without moving, but only with
+/// no count and outside a `;` / `,` repeat, which skips that target.
+pub fn till_succeeds_in_place<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    ch: char,
+    forward: bool,
+    count: usize,
+    find_repeat: bool,
+) -> bool {
+    if count > 1 || find_repeat {
+        return false;
+    }
+    let (row, col) = ed.cursor();
+    let line: Vec<char> = buf_line(ed.buffer(), row)
+        .unwrap_or_default()
+        .chars()
+        .collect();
+    let adjacent = if forward {
+        line.get(col + 1)
+    } else {
+        col.checked_sub(1).and_then(|c| line.get(c))
+    };
+    adjacent == Some(&ch)
+}
+/// Whether the search pattern matches at the cursor: the one place an `n`
+/// / `N` / `*` / `#` whose only match is under the cursor wraps back to, a
+/// success that does not move.
+fn search_matches_at_cursor<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+) -> bool {
+    let Some(re) = ed.search_state().pattern.as_ref() else {
+        return false;
+    };
+    let (row, col) = ed.cursor();
+    let line = buf_line(ed.buffer(), row).unwrap_or_default();
+    let byte = line.char_indices().nth(col).map_or(line.len(), |(b, _)| b);
+    hjkl_buffer::search_match_ranges(re, &line)
+        .iter()
+        .any(|&(start, _)| start == byte)
 }
 pub fn find_char_on_line<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,

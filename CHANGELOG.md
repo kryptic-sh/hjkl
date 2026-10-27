@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- A `t` / `T` onto an adjacent character, and an `n` / `N` / `*` / `#` whose
+  only match is under the cursor, open the closed fold they start on, as in vim:
+  they succeed without moving, and `'foldopen'` follows success, not movement.
 - `b` / `B` on a closed fold that starts the buffer leave the fold closed, as in
   vim, where the word motion fails after stepping to the fold's first line:
   `zfjbdd` deletes the whole fold, where hjkl opened it and deleted one line.

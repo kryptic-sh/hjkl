@@ -44,6 +44,11 @@ and this project adheres to
 
 ### Fixed
 
+- `execute_motion` passes `motion_opens_fold` whether the motion succeeded, not
+  only whether it moved: a `t` / `T` onto an adjacent target
+  (`till_succeeds_in_place`, now shared with `op_motion`'s `succeeds_in_place`)
+  and an `n` / `N` / `*` / `#` that wraps back to a match at the cursor (with
+  `wrapscan`) succeed in place, as in vim.
 - `execute_motion` counts a `Motion::WordBack` / `BigWordBack` that started
   inside a closed fold beginning on row 0 as failed for `motion_opens_fold`, as
   vim's `bck_word` fails there after its snap to the fold's first line.

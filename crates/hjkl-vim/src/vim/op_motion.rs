@@ -196,19 +196,7 @@ fn succeeds_in_place<H: hjkl_engine::types::Host>(
             ch,
             forward,
             till: true,
-        } if count <= 1 && !find_repeat => {
-            let (row, col) = ed.cursor();
-            let line: Vec<char> = buf_line(ed.buffer(), row)
-                .unwrap_or_default()
-                .chars()
-                .collect();
-            let adjacent = if forward {
-                line.get(col + 1)
-            } else {
-                col.checked_sub(1).and_then(|c| line.get(c))
-            };
-            adjacent == Some(&ch)
-        }
+        } => till_succeeds_in_place(ed, ch, forward, count, find_repeat),
         _ => false,
     }
 }

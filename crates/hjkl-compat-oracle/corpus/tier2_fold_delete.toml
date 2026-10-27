@@ -1022,3 +1022,87 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "till_onto_adjacent_target_opens_fold"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "zfjtbdd"
+expected_buffer = "cd\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "till_back_onto_adjacent_target_opens_fold"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "zfjTadd"
+expected_buffer = "cd\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_till_onto_adjacent_target_keeps_fold_closed"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "zfj2tbdd"
+expected_buffer = "ef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "search_next_onto_only_match_opens_fold"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "/ab<CR>zfjndd"
+expected_buffer = "cd\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "search_next_without_match_keeps_fold_closed"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "/zz<CR>zfjndd"
+expected_buffer = "ef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "star_onto_only_match_opens_fold"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "zfj*dd"
+expected_buffer = "cd\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "star_on_blank_line_keeps_fold_closed"
+initial_buffer = "  \ncd\nef"
+initial_cursor = [0, 0]
+keys = "zfj*dd"
+expected_buffer = "ef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
