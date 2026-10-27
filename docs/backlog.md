@@ -1141,7 +1141,12 @@ fail on the parent commit, the other 6 are negative guards).
   `/ab/e<CR>N` on (0,11) and (0,0), and `/ab/+1<CR>n` on `"ab\ncd\nab\nef"` on
   (1,0) and (0,0). Fixing it means keeping the offset beside the last pattern
   and running `offset_search_match` / `apply_search_offset` from
-  `Motion::SearchNext` too.
+  `Motion::SearchNext` too. Held back 2026-10-27 on the semver question in §1.5
+  ("Breaking enum variants shipped in patch releases"): the natural homes,
+  `hjkl_engine::SearchBank` and `hjkl_vim::VimState`, are public structs with
+  only public fields, so a new field breaks a struct literal outside the
+  workspace; `#[non_exhaustive]` on them, in a minor release, would make the
+  addition safe.
 - **The TUI's Visual `/` / `?` were not checked.** The 2026-10-27 fix wires them
   in `hjkl_vim::dispatch_input` (`step_normal`, `normal.rs`), which the oracle,
   `--nvim-api`, the headless mode and embedding use. The interactive app routes
