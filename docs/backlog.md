@@ -1043,6 +1043,13 @@ fail on the parent commit, the other 6 are negative guards).
   class is not gated on typed keys: a `u` replayed by `@q` opens folds as well,
   because `settle_after_history_jump` lives in the engine, which does not know a
   macro is replaying (by code read; not measured).
+- **`.` after a counted Visual `>` / `<` shifts once.** vim's Visual redo keeps
+  the count: `Vj2>.` and `<C-v>j2>.` on `"ab\ncd"` @ (0,0) indent each line 16
+  columns in nvim 0.12.5 (two shifts of two), 12 in hjkl, because
+  `LastChange::VisualOp` stores no count and the replay (`replay_last_change`'s
+  `VisualOp` arm, `replay_block_visual_op`) shifts one level. Held back
+  2026-10-27 on the semver question in §1.5: `LastChange` is an exhaustive
+  public enum in `hjkl-vim-types`, so a new field is breaking.
 - **`n` / `N` forget the last search's offset.** vim stores the offset with the
   pattern (`spats[0].off`) and `n` re-applies it; hjkl's prompt applies it once
   (`apply_search_offset`, `search_prompt.rs`) and keeps only the pattern

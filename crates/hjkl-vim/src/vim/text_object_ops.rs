@@ -733,7 +733,9 @@ pub fn indent_block<H: hjkl_engine::types::Host>(
     let bot = bot.min(rope.len_lines().saturating_sub(1));
     for r in top..=bot {
         let line = rope_line_to_str(&rope, r);
-        if line.chars().count() < left {
+        // vim's `op_shift` never shifts an empty line, even with the block at
+        // column 0, where the length test alone would let it through.
+        if line.is_empty() || line.chars().count() < left {
             continue;
         }
         let at_col = hjkl_buffer::geom::char_col_to_visual_col(&line, left, tabstop);

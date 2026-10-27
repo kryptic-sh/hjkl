@@ -44,6 +44,10 @@ and this project adheres to
 
 ### Fixed
 
+- `indent_block` skips empty rows, as its doc already said;
+  `replay_block_visual_op` replays `Operator::Indent` / `Outdent`, which it
+  dropped; and `apply_block_operator` puts the cursor on the block's top-left
+  before the operator saves its undo step, as vim's `do_pending_operator` does.
 - `update_block_vcol` syncs `block_vcol` for every motion that sets vim's
   curswant (the paragraph, sentence, section and unmatched-bracket motions,
   `Motion::FirstNonBlank*Line`, `GotoColumn`, `SearchNext`), leaving only `gj` /

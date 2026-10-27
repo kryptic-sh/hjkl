@@ -519,6 +519,10 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
     } else {
         right + 1 - left
     };
+    // vim's `do_pending_operator` puts the cursor on the operator's start
+    // before the operator saves its undo step, so `u` returns to the block's
+    // top-left corner, not to where the selection ended.
+    ed.jump_cursor(top, left);
 
     match op {
         Operator::Yank => {
@@ -910,6 +914,14 @@ pub fn replay_block_visual_op<H: hjkl_engine::types::Host>(
             ed.push_undo();
             transform_block_case(ed, op, top, bot, left, right, to_eol);
             ed.jump_cursor(top, left);
+        }
+        Operator::Indent => {
+            ed.push_undo();
+            indent_block(ed, top, bot, left, 1);
+        }
+        Operator::Outdent => {
+            ed.push_undo();
+            outdent_block(ed, top, bot, left, 1);
         }
         Operator::Change => {
             ed.push_undo();

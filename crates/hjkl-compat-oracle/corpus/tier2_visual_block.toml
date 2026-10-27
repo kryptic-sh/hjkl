@@ -1034,3 +1034,87 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "block_shift_skips_empty_line"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [0, 0]
+keys = "<C-v>jj>"
+expected_buffer = "    ab\n\n    cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_shift_on_empty_buffer_does_nothing"
+initial_buffer = ""
+initial_cursor = [0, 0]
+keys = "<C-v>>"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_shift_repeats_with_dot"
+initial_buffer = "abcd\nabcd"
+initial_cursor = [0, 2]
+keys = "<C-v>j>."
+expected_buffer = "ab        cd\nab        cd"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_shift_undo_returns_to_block_corner"
+initial_buffer = "abcd\nabcd"
+initial_cursor = [0, 2]
+keys = "<C-v>j>u"
+expected_buffer = "abcd\nabcd"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_delete_undo_returns_to_block_corner"
+initial_buffer = "abcd\nabcd"
+initial_cursor = [1, 3]
+keys = "<C-v>khhdu"
+expected_buffer = "abcd\nabcd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_case_undo_returns_to_block_corner"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 0]
+keys = "<C-v>j~u"
+expected_buffer = "ab\ncd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_shift_dot_after_undo"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 0]
+keys = "<C-v>j>u."
+expected_buffer = "    ab\n    cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

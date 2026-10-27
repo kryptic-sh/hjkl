@@ -22,6 +22,10 @@ patch bumps.
 
 ### Fixed
 
+- A Visual-block `>` skips empty lines and repeats with `.`, and `u` after any
+  Visual-block operator returns the cursor to the block's top-left corner, as in
+  vim. The block `>` used to indent empty lines, `.` after it did nothing, and
+  `u` left the cursor on the block's last row.
 - A Visual block follows the cursor's column after `{` / `}` / `(` / `)`, `[[`
   and the other section motions, `[(` / `[{`, `+` / `-` / `_`, `|`, `n` / `N`
   and `gg`, as in vim: `<C-v>}~` toggles from the anchor to where `}` landed,
