@@ -1106,3 +1106,75 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "plus_steps_over_closed_fold"
+initial_buffer = "  a\n  b\n  c\n  d"
+initial_cursor = [0, 0]
+keys = "zfj+"
+expected_buffer = "  a\n  b\n  c\n  d"
+expected_cursor = [2, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "plus_from_fold_at_last_line_fails"
+initial_buffer = "\t_id\n[_id] {a}"
+initial_cursor = [0, 0]
+keys = "zfj+"
+expected_buffer = "\t_id\n[_id] {a}"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_plus_counts_fold_as_one_line"
+initial_buffer = "  a\n  b\n  c\n  d"
+initial_cursor = [0, 0]
+keys = "zfj2+"
+expected_buffer = "  a\n  b\n  c\n  d"
+expected_cursor = [3, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "minus_from_inside_fold_starts_at_its_first_line"
+initial_buffer = "  a\n  b\n  c\n  d"
+initial_cursor = [3, 0]
+keys = "kzfjG-"
+expected_buffer = "  a\n  b\n  c\n  d"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_minus_from_inside_fold"
+initial_buffer = "  a\n  b\n  c\n  d"
+initial_cursor = [3, 0]
+keys = "kzfjGd-"
+expected_buffer = "  a"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "minus_from_fold_at_first_line_fails"
+initial_buffer = "  a\n  b\n  c\n  d"
+initial_cursor = [0, 0]
+keys = "zfGG-"
+expected_buffer = "  a\n  b\n  c\n  d"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

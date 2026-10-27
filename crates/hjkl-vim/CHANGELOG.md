@@ -44,6 +44,11 @@ and this project adheres to
 
 ### Fixed
 
+- `Motion::FirstNonBlankNextLine` / `FirstNonBlankPrevLine` move with the
+  fold-aware `move_down` / `move_up` instead of the engine's row-only
+  `move_first_non_blank_next_line` / `_prev_line`, fail when the fold provider
+  has no visible row past the cursor's fold, and start `-` from the fold's first
+  line, as vim's `cursor_down` / `cursor_up` do.
 - `visual_text_obj_extend` runs a sentence object from a one-row Visual block
   through `sentence_visual`, anchored at `block_anchor`; an `Extend` keeps the
   block and syncs `block_vcol`, a `Select` turns it charwise as vim's

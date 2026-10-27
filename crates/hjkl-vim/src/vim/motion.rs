@@ -1014,11 +1014,53 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         Motion::SectionEndForward => {
             hjkl_engine::motions::move_section_end_forward(ed.buffer_mut(), count);
         }
-        Motion::FirstNonBlankNextLine => {
-            hjkl_engine::motions::move_first_non_blank_next_line(ed.buffer_mut(), count);
-        }
-        Motion::FirstNonBlankPrevLine => {
-            hjkl_engine::motions::move_first_non_blank_prev_line(ed.buffer_mut(), count);
+        // `+` / `<CR>` / `-` move with vim's `cursor_down` / `cursor_up`: a
+        // closed fold counts as one line, a count past the edge stops there,
+        // and the motion fails only when no line is left below / above the
+        // cursor's fold.
+        Motion::FirstNonBlankNextLine | Motion::FirstNonBlankPrevLine => {
+            use hjkl_engine::types::FoldProvider;
+            let down = matches!(motion, Motion::FirstNonBlankNextLine);
+            let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
+            let mut row = ed.cursor().0;
+            // `cursor_up` starts from the first line of the cursor's fold.
+            if !down
+                && folds.is_row_hidden(row)
+                && let Some(first) = folds.prev_visible_row(row)
+            {
+                row = first;
+                let col = ed.cursor().1;
+                buf_set_cursor_rc(ed.buffer_mut(), row, col);
+            }
+            let has_line = if down {
+                folds
+                    .next_visible_row(row, last_content_row(ed) + 1)
+                    .is_some()
+            } else {
+                folds.prev_visible_row(row).is_some()
+            };
+            if has_line {
+                let mut sticky = ed.sticky_col();
+                let tabstop = ed.settings().tabstop;
+                if down {
+                    hjkl_engine::motions::move_down(
+                        ed.buffer_mut(),
+                        &folds,
+                        count,
+                        &mut sticky,
+                        tabstop,
+                    );
+                } else {
+                    hjkl_engine::motions::move_up(
+                        ed.buffer_mut(),
+                        &folds,
+                        count,
+                        &mut sticky,
+                        tabstop,
+                    );
+                }
+                hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
+            }
         }
         Motion::FirstNonBlankLine => {
             hjkl_engine::motions::move_first_non_blank_line(ed.buffer_mut(), count);

@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- `+`, `-` and `<CR>` count a closed fold as one line, as vim does: `+` from
+  inside a fold goes to the line after it, and fails when the fold reaches the
+  last line; `-` from inside a fold starts at the fold's first line.
 - `is` / `as` from a one-row Visual block follow vim's Visual sentence rules:
   they extend the block when the sentence starts where the block does (on a
   blank line, `<C-v>isd` takes the next line's first column too), and otherwise

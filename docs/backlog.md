@@ -1190,7 +1190,11 @@ Seen while measuring, not `gq`:
   `cursor_up` rule on 2026-10-27; `_` did not, because the unit test
   `first_non_blank_line_noop_when_overshooting` (same file) asserts the no-op
   and says "vim no-ops", which nvim contradicts. Changing that test is the
-  user's call.
+  user's call. `_` also ignores closed folds (`zfj2_` on four lines @ (0,0)
+  lands on row 1 in hjkl, row 2 in nvim, which counts the fold as one line); `+`
+  / `-` handle folds in the vim layer (`apply_motion_cursor_ctx`'s
+  `FirstNonBlankNextLine` arm), which `_` could join once the overshoot rule is
+  settled.
 - **A counted `f` / `t` / `;` with too few targets moves; three tests pin it.
   Needs a decision.** vim's `searchc` fails when the line holds fewer than
   `count` targets after the cursor, and the cursor stays: measured in nvim
