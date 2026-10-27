@@ -1044,6 +1044,21 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
 
 ### 1.15 Left open by the `'foldopen'` work (2026-10-18)
 
+- **Needs a decision: an edit inside a closed fold deletes the fold, and tests
+  pin that.** The edit pipeline in `hjkl-engine` `editor.rs` (the `delta == 0`
+  branch after a buffer mutation) sends `FoldOp::Invalidate` for the edited
+  rows, which `invalidate_folds_in_range` turns into dropping every fold there,
+  "approximating vim's opening the fold you just edited inside". nvim 0.12.5
+  does neither for a manual fold. On `"ab cd\nef gh\nij"` @ (0,1) after `zfj`:
+  `rXj`, `~j`, `g~lj` and `<C-a>j` (on `a1 cd`) all reach (2,0), the fold still
+  closed, where hjkl reaches row 1. Insert does open the fold (`iX<Esc>j`
+  agrees), but opens rather than deletes it: `iX<Esc>zcj` reaches (2,1) in nvim
+  and (1,1) in hjkl, and `rXzcj` (2,0) against (1,1). The fuzz case `zfjr e` is
+  this. Pinned by `editing_inside_fold_invalidates_it` and
+  `edit_pipeline_emits_invalidate_fold_op` (`hjkl-vim-tui` `tests/vim_fsm.rs`).
+  Matching nvim means keeping folds through Normal-mode edits and opening (not
+  dropping) the cursor's fold on entering Insert; how syntax-generated folds
+  (`auto_generated`) should react was not looked at.
 - **Needs a decision: closing a fold snaps the cursor to its first line, and
   tests pin that.** `Editor::apply_fold_op` (`hjkl-engine` `editor.rs`, the "BUG
   2 fix" comment) moves a cursor that a `zc` / `za` / `zC` / `zM` just hid to
