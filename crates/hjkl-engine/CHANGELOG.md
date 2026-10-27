@@ -17,6 +17,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `motions::move_first_non_blank_next_line` / `move_first_non_blank_prev_line`
+  clamp a count that runs past the buffer to the last / first line, as vim's
+  `cursor_down` / `cursor_up` do, and do nothing only from that line.
 - `motions::move_first_non_blank` skips only spaces and tabs, as vim's
   `skipwhite` does; other Unicode white space (U+3000, U+00A0) is text it stops
   on.

@@ -423,29 +423,29 @@ pub fn move_section_end_forward<B: Cursor + Query>(buf: &mut B, count: usize) {
 }
 
 /// `+` / `<CR>` — first non-blank of the next line (`count` lines down).
-/// Linewise motion. On the last line, stays on the current line's first non-blank.
+/// Linewise motion. As vim's `cursor_down`, it fails only on the last line:
+/// a count past the end stops on the last line.
 pub fn move_first_non_blank_next_line<B: Cursor + Query>(buf: &mut B, count: usize) {
     let cursor = read_cursor(buf);
     let last = content_row_count(buf).saturating_sub(1);
-    let desired = cursor.row + count.max(1);
-    // Vim: `+` on the last line is a no-op (no next line to move to).
-    if desired > last {
+    if cursor.row >= last {
         return;
     }
+    let desired = cursor.row.saturating_add(count.max(1)).min(last);
     write_cursor(buf, Position::new(desired, 0));
     move_first_non_blank(buf);
 }
 
 /// `-` — first non-blank of the previous line (`count` lines up).
-/// Linewise motion. On the first line, the motion is a no-op (vim behavior).
+/// Linewise motion. As vim's `cursor_up`, it fails only on the first line:
+/// a count past the top stops on the first line.
 pub fn move_first_non_blank_prev_line<B: Cursor + Query>(buf: &mut B, count: usize) {
     let cursor = read_cursor(buf);
-    let steps = count.max(1);
-    // Vim: `-` on the first line is a no-op (no previous line to move to).
-    if cursor.row < steps {
+    if cursor.row == 0 {
         return;
     }
-    write_cursor(buf, Position::new(cursor.row - steps, 0));
+    let desired = cursor.row.saturating_sub(count.max(1));
+    write_cursor(buf, Position::new(desired, 0));
     move_first_non_blank(buf);
 }
 

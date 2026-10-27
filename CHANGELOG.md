@@ -22,6 +22,10 @@ patch bumps.
 
 ### Fixed
 
+- `+`, `-` and `<CR>` with a count past the buffer's edge stop on the first or
+  last line, as in vim, instead of not moving; under an operator (`d5+`) they
+  act on the lines up to that edge. They still do nothing from the edge line
+  itself. `y_` leaves the cursor in its column, as vim's yank does.
 - A search with an `e` / `s` / `b` offset can find the match under the cursor,
   as in vim: `/ab/e` from the `a` of `"ab cd ab"` goes to its `b`, where hjkl
   jumped to the next `ab`. vim starts such a search the offset's distance away

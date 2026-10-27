@@ -39,6 +39,11 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
         apply_motion_cursor_ctx(ed, motion, count, true);
     }
     let mut end = ed.cursor();
+    // vim's `nv_lineop` runs `beginline` for every operator but a yank, so
+    // `y_` keeps the column the cursor had.
+    if op == Operator::Yank && matches!(motion, Motion::FirstNonBlankLine) {
+        end.1 = start.1;
+    }
     // Under wrap vim's `gj` / `gk` are charwise exclusive (`nv_screengo`),
     // so `dgj` takes the text between two screen lines of one row; without
     // wrap they are `j` / `k`.

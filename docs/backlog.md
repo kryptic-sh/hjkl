@@ -1159,6 +1159,17 @@ Seen while measuring, not `gq`:
   `current_sent`'s Visual path (`sentence_visual`) runs for Visual-line only
   while the selection is one row; a taller `V` selection, and Visual-block,
   still take hjkl's own paths. Unmeasured how far those differ from vim.
+- **A counted `_` past the end does nothing; a test pins it. Needs a decision.**
+  vim's `_` (`nv_lineop`) moves with `cursor_down`, which fails only on the last
+  line and otherwise stops there: measured in nvim 0.12.5, `10_` on `"a\nb"` @
+  (0,0) lands on (1,0), `9_` on three lines from row 1 on row 2, and `d10_` @
+  (0,0) deletes both lines. hjkl's `move_first_non_blank_line` (`hjkl-engine`
+  `motions.rs`) returns without moving when the count overshoots, so `d10_`
+  deletes only the cursor's line. `+` / `-` / `<CR>` got the `cursor_down` /
+  `cursor_up` rule on 2026-10-27; `_` did not, because the unit test
+  `first_non_blank_line_noop_when_overshooting` (same file) asserts the no-op
+  and says "vim no-ops", which nvim contradicts. Changing that test is the
+  user's call.
 - **A counted `f` / `t` / `;` with too few targets moves; three tests pin it.
   Needs a decision.** vim's `searchc` fails when the line holds fewer than
   `count` targets after the cursor, and the cursor stays: measured in nvim

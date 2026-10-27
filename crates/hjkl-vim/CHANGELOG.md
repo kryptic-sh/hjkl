@@ -44,6 +44,9 @@ and this project adheres to
 
 ### Fixed
 
+- `apply_op_with_motion` keeps the start column for `Operator::Yank` over
+  `Motion::FirstNonBlankLine`, as vim's `nv_lineop` skips `beginline` for a
+  yank.
 - The search prompt runs an `e` / `s` / `b` offset search through the new
   `offset_search_match` (vim's `do_search` start position and `SEARCH_END`
   test), applies the offset only when a match was found, and ends an operator's
