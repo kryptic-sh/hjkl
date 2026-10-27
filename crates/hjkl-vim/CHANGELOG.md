@@ -44,6 +44,10 @@ and this project adheres to
 
 ### Fixed
 
+- `apply_visual_operator` widens the selection over closed folds before the
+  operator runs (`include_closed_folds_in_selection`): the earlier end moves to
+  its fold's first line, column 0, the later one to its fold's last line past
+  the last character, as vim's `do_pending_operator` does in Visual mode.
 - `step_normal`'s `r` chord records `LastChange::ReplaceChar` only when the
   count fits the line, and `visual_paste` saves its undo step with the cursor on
   the selection's start (column 0 of the top row in Visual-line, unless the

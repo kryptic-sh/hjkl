@@ -1262,3 +1262,87 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "linewise_visual_on_fold_toggles_whole_fold"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 0]
+keys = "zfjV~"
+expected_buffer = "AB\nCD\nef\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_visual_on_fold_deletes_whole_fold"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 0]
+keys = "zfjVd"
+expected_buffer = "ef\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "charwise_visual_on_fold_deletes_whole_lines"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 1]
+keys = "zfjvd"
+expected_buffer = "ef\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "charwise_visual_on_fold_toggles_whole_fold"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 1]
+keys = "zfjv~"
+expected_buffer = "AB\nCD\nef\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_down_onto_fold_takes_whole_fold"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 0]
+keys = "jzfjggvjd"
+expected_buffer = "gh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_visual_on_fold_takes_whole_rows"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 0]
+keys = "zfj<C-v>d"
+expected_buffer = "\n\nef\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "charwise_visual_without_fold_is_unchanged"
+initial_buffer = "ab\ncd\nef\ngh"
+initial_cursor = [0, 1]
+keys = "vjd"
+expected_buffer = "a\nef\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

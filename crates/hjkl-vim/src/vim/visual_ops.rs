@@ -16,8 +16,51 @@ pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
     op: Operator,
     count: usize,
 ) {
+    include_closed_folds_in_selection(ed);
     visual_operator_body(ed, op, count);
     remember_operator_column(ed);
+}
+
+/// vim's `do_pending_operator` in Visual mode: a selection end inside a
+/// closed fold takes the whole fold. The earlier end moves to the fold's first
+/// line, column 0, and the later one to its last line, past the last
+/// character, so `zfjvd` deletes both folded lines with their line breaks.
+fn include_closed_folds_in_selection<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+) {
+    let mode = vim(ed).mode;
+    let anchor = match mode {
+        Mode::Visual => vim(ed).visual_anchor,
+        Mode::VisualLine => (vim(ed).visual_line_anchor, 0),
+        Mode::VisualBlock => vim(ed).block_anchor,
+        _ => return,
+    };
+    let cursor = ed.cursor();
+    let fold_edge = |ed: &Editor<hjkl_buffer::View, H>, pos: (usize, usize), last: bool| {
+        let (first, end) = expand_linewise_over_closed_folds(ed.buffer(), pos.0, pos.0);
+        if first == end {
+            pos
+        } else if last {
+            (end, buf_line_chars(ed.buffer(), end))
+        } else {
+            (first, 0)
+        }
+    };
+    let anchor_first = anchor < cursor;
+    let new_anchor = fold_edge(ed, anchor, !anchor_first);
+    let new_cursor = fold_edge(ed, cursor, anchor_first);
+    if (new_anchor, new_cursor) == (anchor, cursor) {
+        return;
+    }
+    match mode {
+        Mode::Visual => vim_mut(ed).visual_anchor = new_anchor,
+        Mode::VisualLine => vim_mut(ed).visual_line_anchor = new_anchor.0,
+        _ => {
+            vim_mut(ed).block_anchor = new_anchor;
+            vim_mut(ed).block_vcol = new_cursor.1;
+        }
+    }
+    buf_set_cursor_rc(ed.buffer_mut(), new_cursor.0, new_cursor.1);
 }
 
 /// vim sets `'curswant'` from the cursor once an operator is done

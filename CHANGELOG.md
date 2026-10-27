@@ -22,6 +22,10 @@ patch bumps.
 
 ### Fixed
 
+- A Visual selection that starts or ends on a closed fold takes the whole fold
+  when an operator runs, as in vim: `zfjVd` deletes both folded lines, and
+  `zfjvd` deletes them with their line breaks, where hjkl acted on the fold's
+  first line only.
 - A `[count]r` that cannot run (fewer than `count` characters left, or an empty
   line) no longer becomes the change `.` repeats, and `u` after a Visual `p`
   returns the cursor to the selection's start, both as in vim.
