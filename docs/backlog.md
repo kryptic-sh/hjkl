@@ -1044,13 +1044,31 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
 
 ### 1.15 Left open by the `'foldopen'` work (2026-10-18)
 
-`'foldopen'`'s `hor`, `block`, `percent`, `search` and `mark` classes shipped as
-`foldopen_cursor` / `motion_opens_fold` (`hjkl-vim` `vim/motion.rs`), with the
-column-0 proxy `cursor_left_fold_open` deleted. Every class was measured against
-nvim 0.12.5 with `dfcase` and pinned in `tier2_fold_delete.toml` (21 cases; 15
-fail on the parent commit, the other 6 are negative guards).
-`difffuzz 2000 424242`: 277 divergences before, 274 after, none new (the six
-"new" ones reproduce identically on the old binary — they are shrinking noise).
+- **Needs a decision: closing a fold snaps the cursor to its first line, and
+  tests pin that.** `Editor::apply_fold_op` (`hjkl-engine` `editor.rs`, the "BUG
+  2 fix" comment) moves a cursor that a `zc` / `za` / `zC` / `zM` just hid to
+  the outermost fold's first line, column 0, and resets the sticky column to 0,
+  saying vim does so. nvim 0.12.5 does not: on `"ab cd\nef gh\nij"` @ (0,1),
+  `zfjzojlzc` leaves the cursor on the hidden (1,1), where hjkl has (0,0); then
+  `j` reaches (2,1) (hjkl (2,0)), `k` reaches (0,1) (hjkl (0,0)) and `l` (1,2)
+  (hjkl (0,1)). `zM`, `za` and `zC` match `zc`; `zx` and `zv` already agree. The
+  fuzz case `zfGezc` is the same divergence. Pinned by
+  `close_fold_snaps_cursor_to_start_row` and
+  `toggle_fold_closed_snaps_cursor_to_start_row` (`hjkl-vim-tui`
+  `tests/vim_fsm.rs`) and
+  `closing_nested_folds_snaps_past_the_inner_folds_hidden_start_row`
+  (`hjkl-engine` `tests/fold_reveal.rs`), so matching nvim means changing what
+  those tests assert. The cursor can already sit on a hidden row (after `zfjG`,
+  or a `k` into a fold), and `k` / `j` / the operators handle it; the gutter
+  click that also goes through `apply_fold_op` and how the TUI draws a hidden
+  cursor were not checked. `'foldopen'`'s `hor`, `block`, `percent`, `search`
+  and `mark` classes shipped as `foldopen_cursor` / `motion_opens_fold`
+  (`hjkl-vim` `vim/motion.rs`), with the column-0 proxy `cursor_left_fold_open`
+  deleted. Every class was measured against nvim 0.12.5 with `dfcase` and pinned
+  in `tier2_fold_delete.toml` (21 cases; 15 fail on the parent commit, the other
+  6 are negative guards). `difffuzz 2000 424242`: 277 divergences before, 274
+  after, none new (the six "new" ones reproduce identically on the old binary —
+  they are shrinking noise).
 
 - **`<Home>` opens the fold; vim's does not.** `parse_motion` maps `Key::Home`
   to `Motion::LineStart`, the `0` motion. vim's `<Home>` is `nv_home` →
