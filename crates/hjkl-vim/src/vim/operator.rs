@@ -642,13 +642,13 @@ pub fn apply_after_z<H: hjkl_engine::types::Host>(
         'd' => {
             ed.apply_fold_op(hjkl_engine::types::FoldOp::RemoveAt(row));
         }
-        'f' => {
+        'f' | 'F' => {
             if matches!(
                 vim(ed).mode,
                 Mode::Visual | Mode::VisualLine | Mode::VisualBlock
             ) {
-                // `zf` over a Visual selection creates a fold spanning
-                // anchor → cursor.
+                // `zf` (and `zF`, the same in Visual) over a Visual selection
+                // creates a fold spanning anchor → cursor.
                 let anchor_row = match vim(ed).mode {
                     Mode::VisualLine => vim(ed).visual_line_anchor,
                     Mode::VisualBlock => vim(ed).block_anchor.0,
@@ -663,6 +663,19 @@ pub fn apply_after_z<H: hjkl_engine::types::Host>(
                     closed: true,
                 });
                 vim_mut(ed).mode = Mode::Normal;
+            } else if ch == 'F' {
+                // `[count]zF` — vim runs `zf` doubled (`nv_lineop`): a fold
+                // over `count` lines from the cursor, clamped to the last
+                // line, with the cursor on the top row's first non-blank.
+                let bot = (row + count.max(1) - 1).min(last_content_row(ed));
+                ed.apply_fold_op(hjkl_engine::types::FoldOp::Add {
+                    start_row: row,
+                    end_row: bot,
+                    closed: true,
+                });
+                ed.jump_cursor(row, 0);
+                move_first_non_whitespace(ed);
+                ed.set_sticky_col(Some(ed.cursor().1));
             } else {
                 // `zf{motion}` / `zf{textobj}` — route through the
                 // operator pipeline. `Operator::Fold` reuses every

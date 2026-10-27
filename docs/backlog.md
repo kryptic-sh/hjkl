@@ -1130,10 +1130,6 @@ fail on the parent commit, the other 6 are negative guards).
   closed in nvim. But nvim's `v/cc<CR>` DOES open a fold (`normal_search` has no
   Visual check). Not comparable today: the hjkl oracle driver mishandles `/` in
   Visual (`zfjkv/cc<CR><Esc>dd` gives garbage on the old and new binary alike).
-- **`zF` is not implemented.** `apply_after_z` (`hjkl-vim` `operator.rs`) has no
-  `F` arm, so `zF` / `[count]zF` create no fold: `j2zFdd` on
-  `"xx yy\nabc def\nghi\njkl\n"` @ (0,3) deletes one line in hjkl, the two-line
-  fold in nvim.
 - **The curswant after `zf` / on a closed fold is not pinned down.** The other
   operators now reset the curswant to the cursor (`remember_operator_column`);
   `zf{motion}` is left alone, keeping whatever curswant came before, because the
@@ -1148,8 +1144,12 @@ fail on the parent commit, the other 6 are negative guards).
     pending, the next vertical motion takes curswant from `w_virtcol`, which is
     special on a folded line) would explain all of them if the folded-line
     `w_virtcol` is the indent or the column of the last change, but that is not
-    confirmed. A `[count]zF`, once it exists, has the same question (`jzFk`
-    lands on (0,0)).
+    confirmed. `[count]zF` has the same question. hjkl parks it on the top row's
+    first non-blank, which matches nvim on unindented lines (`2zFj` @ (1,2) on
+    `"xx yy\nabc def\nghi\njkl\n"` lands on (3,0), `jzFk` @ (0,3) on (0,0)). On
+    an indented line it does not: on `"  ab\ncd\nef"` @ (0,3), nvim's `2zFx`
+    deletes only the `b` (the cursor kept column 3) and `2zFjk` comes back on
+    (0,0), where hjkl's `x` takes the whole fold and `jk` comes back on (0,2).
   - `x` / `dl` / `d$` on the fresh closed fold depend on it too (2026-10-20, on
     `"ab\ncd\nef"`): `zfjx` / `zfjzcx` @ (0,1) delete just the `b` in nvim (the
     cursor kept column 1), `zfjx` @ (0,0) and `zfj0x` delete the whole fold, and

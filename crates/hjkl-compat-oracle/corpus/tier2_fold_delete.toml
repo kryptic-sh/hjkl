@@ -866,3 +866,111 @@ expected_cursor = [0, 0]
 expected_mode = "normal"
 expected_register = ['"', "aa\nbb cc\nDD\nee\n"]
 
+
+[[cases]]
+name = "count_zf_upper_folds_count_lines"
+initial_buffer = "xx yy\nabc def\nghi\njkl\n"
+initial_cursor = [0, 3]
+keys = "j2zFdd"
+expected_buffer = "xx yy\njkl\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "zf_upper_without_count_folds_one_line"
+initial_buffer = "xx yy\nabc def\nghi\njkl\n"
+initial_cursor = [0, 3]
+keys = "zFdd"
+expected_buffer = "abc def\nghi\njkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_zf_upper_past_the_end_folds_to_last_line"
+initial_buffer = "xx yy\nabc def\nghi\njkl\n"
+initial_cursor = [1, 2]
+keys = "9zFdd"
+expected_buffer = "xx yy\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_zf_upper_on_last_line_folds_it"
+initial_buffer = "xx yy\nabc def\nghi\njkl\n"
+initial_cursor = [3, 1]
+keys = "2zFdd"
+expected_buffer = "xx yy\nabc def\nghi\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "zf_upper_parks_on_first_non_blank_for_j"
+initial_buffer = "xx yy\nabc def\nghi\njkl\n"
+initial_cursor = [1, 2]
+keys = "2zFj"
+expected_buffer = "xx yy\nabc def\nghi\njkl\n"
+expected_cursor = [3, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "zf_upper_fold_is_skipped_by_k"
+initial_buffer = "xx yy\nabc def\nghi\njkl\n"
+initial_cursor = [1, 2]
+keys = "2zFk"
+expected_buffer = "xx yy\nabc def\nghi\njkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "zf_upper_fold_opens_with_zo"
+initial_buffer = "xx yy\nabc def\nghi\njkl\n"
+initial_cursor = [1, 2]
+keys = "2zFzodd"
+expected_buffer = "xx yy\nghi\njkl\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_zf_upper_folds_selection"
+initial_buffer = "xx yy\nabc def\nghi\njkl\n"
+initial_cursor = [0, 3]
+keys = "vjzFdd"
+expected_buffer = "ghi\njkl\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_visual_zf_upper_folds_selection"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 0]
+keys = "VjzFdd"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

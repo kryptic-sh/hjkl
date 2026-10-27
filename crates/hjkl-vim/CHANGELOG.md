@@ -17,6 +17,10 @@ and this project adheres to
 
 ### Added
 
+- `apply_after_z` handles `F`: `[count]zF` adds a closed fold over `count` rows
+  from the cursor (clamped to `last_content_row`) and parks on the top row's
+  first non-blank, setting the curswant there, as vim's `nv_lineop` does for the
+  doubled `zf`. In Visual it takes the `zf` selection path.
 - `g0` / `g^` / `g$` (`Motion::ScreenLineStart` / `ScreenLineFirstNonBlank` /
   `ScreenLineEnd`) through `apply_after_g`, `op_g_motion` and the Visual `g`
   arm. The screen line is the `wrap_segments` segment holding the cursor under

@@ -8,6 +8,13 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- `[count]zF` folds `[count]` lines from the cursor (one without a count),
+  stopping at the last line, and leaves the cursor on the first non-blank of the
+  fold's top line, as in vim. In Visual mode `zF` folds the selection, as `zf`
+  does.
+
 ### Security
 
 - tokio 1.54.0 → 1.54.1 for RUSTSEC-2026-0384, a race in
