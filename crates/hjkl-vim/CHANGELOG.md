@@ -44,6 +44,12 @@ and this project adheres to
 
 ### Fixed
 
+- `apply_op_double` no longer records a `LastChange::LineOp` for
+  `Operator::Yank`.
+- `apply_op_with_text_object` ends the row-wise operators (`Indent`, `Outdent`,
+  `AutoIndent`, `Reflow`, `ReflowKeepCursor`, `Fold`, `Comment`) on the
+  exclusive-adjusted end's row, and `gq` there takes the same
+  `step_past_adjusted_format` cursor step as the motion path.
 - `apply_op_with_motion` keeps the start column for `Operator::Yank` over
   `Motion::FirstNonBlankLine`, as vim's `nv_lineop` skips `beginline` for a
   yank.

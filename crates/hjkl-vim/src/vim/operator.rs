@@ -123,7 +123,8 @@ pub fn apply_op_double<H: hjkl_engine::types::Host>(
     // again, not the unnamed register — `:h redo-register`).
     let register = vim(ed).pending_register;
     execute_line_op(ed, op, total_count);
-    if !vim(ed).replaying {
+    // A yank changes nothing, so `.` keeps repeating the change before `yy`.
+    if !vim(ed).replaying && op != Operator::Yank {
         vim_mut(ed).last_change = Some(LastChange::LineOp {
             op,
             count: total_count,

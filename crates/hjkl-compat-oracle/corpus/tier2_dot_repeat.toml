@@ -521,3 +521,27 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "dot_after_yank_line_repeats_earlier_change"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "xyyG."
+expected_buffer = "b\ncd\nf"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_after_yank_line_alone_does_nothing"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "yyG."
+expected_buffer = "ab\ncd\nef"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

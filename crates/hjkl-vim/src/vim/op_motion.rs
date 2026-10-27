@@ -405,16 +405,18 @@ fn operate_over_motion_range<H: hjkl_engine::types::Host>(
     }
 
     run_operator_over_range(ed, op, start, end, kind);
-
-    // vim's `op_format`: when the adjustment above pulled the range's end back
-    // a line, `gq` leaves the cursor on the line after the formatted text —
-    // `gq}` lands on the blank line the motion stopped at.
     if op == Operator::Reflow && end_adjusted {
-        let row = ed.cursor().0;
-        if row < last_content_row(ed) {
-            buf_set_cursor_rc(ed.buffer_mut(), row + 1, 0);
-            move_first_non_whitespace(ed);
-        }
+        step_past_adjusted_format(ed);
+    }
+}
+/// vim's `op_format`: when the exclusive-motion adjustment pulled the range's
+/// end back a line, `gq` leaves the cursor on the line after the formatted
+/// text — `gq}` lands on the blank line the motion stopped at.
+fn step_past_adjusted_format<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
+    let row = ed.cursor().0;
+    if row < last_content_row(ed) {
+        buf_set_cursor_rc(ed.buffer_mut(), row + 1, 0);
+        move_first_non_whitespace(ed);
     }
 }
 /// Position of the last non-blank char in the half-open range `[start, end)`,
@@ -548,14 +550,31 @@ pub fn apply_op_with_text_object<H: hjkl_engine::types::Host>(
     } else {
         (end, kind)
     };
+    let end_adjusted = judged_end != end;
     if delete_goes_linewise(ed, op, start, judged_end, judged_kind) {
         // The rows are the adjusted range's: the column-0 end's own row is
         // not part of it.
         end = judged_end;
         kind = RangeKind::Linewise;
+    } else if matches!(
+        op,
+        Operator::Indent
+            | Operator::Outdent
+            | Operator::Fold
+            | Operator::Reflow
+            | Operator::ReflowKeepCursor
+            | Operator::AutoIndent
+            | Operator::Comment
+    ) {
+        // The operators that act on whole rows take the adjusted end's row
+        // too: `>is` on a blank line before a sentence shifts nothing below.
+        end = judged_end;
     }
     ed.jump_cursor(start.0, start.1);
     run_operator_over_range(ed, op, start, end, kind);
+    if op == Operator::Reflow && end_adjusted {
+        step_past_adjusted_format(ed);
+    }
 }
 pub fn motion_kind(motion: &Motion) -> RangeKind {
     match motion {

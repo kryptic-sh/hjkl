@@ -1205,11 +1205,14 @@ Seen while measuring, not `gq`:
   `do_pending_operator` pulls an exclusive end in column 0 of a later line back
   onto the previous line's end, turning the motion inclusive or, with the start
   in the indent, linewise (`:h exclusive-linewise`). `apply_op_with_text_object`
-  (`op_motion.rs`) applies that only to inner bracket objects; for the others it
-  only uses the adjusted end to decide `op_delete`'s linewise promotion
-  (`delete_goes_linewise`). Buffers already match on the measured cases (`das`
-  stopping at a blank line), but the register type of such a delete (charwise in
-  hjkl, possibly linewise in vim) was not compared.
+  (`op_motion.rs`) applies it in full only to inner bracket objects. For the
+  others it uses the adjusted end to decide `op_delete`'s linewise promotion
+  (`delete_goes_linewise`) and, since 2026-10-27, as the last row of the
+  row-wise operators (`>` / `<` / `=` / `gq` / `gw` / `zf` / `gc`); a charwise
+  `d` / `c` / `y` still runs to the raw column-0 end. Buffers match on the
+  measured cases (`das` stopping at a blank line, `dis` on one), but the
+  register type of such a delete (charwise in hjkl, possibly linewise in vim)
+  was not compared: the oracle compares register text, not its type.
 
 - **`.` of an insert still diverges in these shapes** (fixed 2026-10-18: the
   cursor one column right, inserts containing `<CR>` replaying nothing, and `o`

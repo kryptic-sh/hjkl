@@ -857,3 +857,52 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "shift_inner_sentence_on_blank_line_stays_on_it"
+initial_buffer = "ab.\n\ncd."
+initial_cursor = [1, 0]
+keys = ">is"
+expected_buffer = "ab.\n\ncd."
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "shift_around_sentence_on_blank_line_stays_on_it"
+initial_buffer = "ab.\n\ncd."
+initial_cursor = [1, 0]
+keys = ">as"
+expected_buffer = "ab.\n\ncd."
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "shift_left_inner_sentence_on_blank_lines"
+initial_buffer = "ab.\n\n\n  cd."
+initial_cursor = [1, 0]
+keys = "<is"
+expected_buffer = "ab.\n\n\n  cd."
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reflow_inner_sentence_on_blank_line_steps_past_it"
+initial_buffer = "ab.\n\ncd."
+initial_cursor = [1, 0]
+keys = "gqis"
+expected_buffer = "ab.\n\ncd."
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 20

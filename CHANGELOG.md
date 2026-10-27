@@ -22,6 +22,12 @@ patch bumps.
 
 ### Fixed
 
+- `.` after `yy` repeats the change before it, as in vim, where `yy` used to
+  become the change `.` repeated.
+- `>`, `<`, `=`, `gq`, `gw`, `zf` and `gc` over a text object that ends at the
+  start of a later line stop on the line before it, as in vim: `>is` on a blank
+  line before a sentence no longer shifts the sentence's line, and `gqis` there
+  leaves the cursor on the next line.
 - `+`, `-` and `<CR>` with a count past the buffer's edge stop on the first or
   last line, as in vim, instead of not moving; under an operator (`d5+`) they
   act on the lines up to that edge. They still do nothing from the edge line
