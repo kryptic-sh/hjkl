@@ -1178,3 +1178,87 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "big_d_on_closed_fold_deletes_the_fold"
+initial_buffer = "ab cd\nef gh\nij"
+initial_cursor = [0, 3]
+keys = "zfjD"
+expected_buffer = "ij"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "big_d_on_fold_over_buffer_empties_it"
+initial_buffer = "ab cd\nef gh\nij"
+initial_cursor = [0, 0]
+keys = "zfGD"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "big_c_on_closed_fold_changes_the_fold"
+initial_buffer = "ab cd\nef gh\nij"
+initial_cursor = [0, 3]
+keys = "zfjCxy<Esc>"
+expected_buffer = "xy\nij"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "big_d_on_open_fold_deletes_to_line_end"
+initial_buffer = "ab cd\nef gh\nij"
+initial_cursor = [0, 3]
+keys = "zfjzoD"
+expected_buffer = "ab \nef gh\nij"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_to_eol_from_last_char_of_fold_takes_one_char"
+initial_buffer = "ab cd\nef gh\nij"
+initial_cursor = [0, 4]
+keys = "zfjd$"
+expected_buffer = "ab c\nef gh\nij"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "big_d_from_last_char_of_fold_takes_one_char"
+initial_buffer = "ab cd\nef gh\nij"
+initial_cursor = [0, 4]
+keys = "zfjD"
+expected_buffer = "ab c\nef gh\nij"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "big_c_from_last_char_of_fold_changes_one_char"
+initial_buffer = "ab\ncd"
+initial_cursor = [0, 1]
+keys = "zfjC<Esc>"
+expected_buffer = "a\ncd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

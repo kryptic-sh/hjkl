@@ -22,6 +22,10 @@ patch bumps.
 
 ### Fixed
 
+- `D` and `C` on a closed fold delete or change the whole fold, as `d$` / `c$`
+  do there and as vim does, instead of only the fold's first line from the
+  cursor. From the fold's first line's last character, `D` / `C` / `d$` / `c$`
+  act on that character alone, as in vim, where `d$` used to take the fold.
 - `+`, `-` and `<CR>` count a closed fold as one line, as vim does: `+` from
   inside a fold goes to the line after it, and fails when the fold reaches the
   last line; `-` from inside a fold starts at the fold's first line.

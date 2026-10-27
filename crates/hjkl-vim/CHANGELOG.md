@@ -44,6 +44,12 @@ and this project adheres to
 
 ### Fixed
 
+- `delete_to_eol_bridge` / `change_to_eol_bridge` take the
+  `apply_op_with_motion` path for a count of one too when the cursor is on a
+  closed fold, so the fold is included whole; the single-line shortcut stays for
+  every other case. `operate_over_motion_range` takes an `include_folds` flag,
+  false for a motion that succeeded in place (`succeeds_in_place`), whose
+  one-character range nvim keeps inside a closed fold.
 - `Motion::FirstNonBlankNextLine` / `FirstNonBlankPrevLine` move with the
   fold-aware `move_down` / `move_up` instead of the engine's row-only
   `move_first_non_blank_next_line` / `_prev_line`, fail when the fold provider

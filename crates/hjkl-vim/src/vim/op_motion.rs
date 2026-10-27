@@ -115,13 +115,17 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // `dtb` with `b` adjacent. Same zero-distance shape as the `}` tail
     // above, and written the same way — a one-char EXCLUSIVE range, because
     // the abort below and `run_operator_over_range` both reject zero-width
-    // charwise ranges.
+    // charwise ranges. Such a range stays on the cursor's character even on a
+    // closed fold: `d$` from a folded line's last character deletes just it
+    // in nvim 0.12.5, where `d$` from earlier in the line takes the fold.
+    let mut in_place = false;
     if start == end
         && end.1 < buf_line_chars(ed.buffer(), end.0)
         && succeeds_in_place(ed, motion, count, find_repeat)
     {
         end = (end.0, end.1 + 1);
         kind = RangeKind::Exclusive;
+        in_place = true;
     }
     // `c` over a motion that stayed put without cancelling the operator: the
     // empty range still starts Insert at the cursor (`run_operator_over_range`
@@ -136,7 +140,7 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
         return;
     }
     let word_fwd = matches!(motion, Motion::WordFwd | Motion::BigWordFwd);
-    operate_over_motion_range(ed, op, start, end, kind, word_fwd);
+    operate_over_motion_range(ed, op, start, end, kind, word_fwd, !in_place);
 }
 
 /// The motions that leave a pending operator in place when they cannot move,
@@ -248,7 +252,7 @@ pub fn apply_op_mark<H: hjkl_engine::types::Host>(
     } else {
         ((row, col), RangeKind::Exclusive)
     };
-    operate_over_motion_range(ed, op, start, end, kind, false);
+    operate_over_motion_range(ed, op, start, end, kind, false, true);
 }
 
 /// The half of [`apply_op_with_motion`] that runs once the motion's endpoint
@@ -256,6 +260,8 @@ pub fn apply_op_mark<H: hjkl_engine::types::Host>(
 /// charwise-delete promotion), then the operator itself. `start` is where the
 /// cursor was; `word_fwd` marks `w` / `W`, whose end-of-line special case
 /// (`:h word`) is the one adjustment that depends on the motion.
+/// `include_folds` is false for a motion that succeeded without moving, whose
+/// range stays on the cursor's character inside a closed fold.
 fn operate_over_motion_range<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
@@ -263,6 +269,7 @@ fn operate_over_motion_range<H: hjkl_engine::types::Host>(
     mut end: (usize, usize),
     mut kind: RangeKind,
     word_fwd: bool,
+    include_folds: bool,
 ) {
     // Where the cursor is parked before the operator runs: vim's operator
     // start, the earlier of the cursor and the motion's end, which is also the
@@ -348,7 +355,7 @@ fn operate_over_motion_range<H: hjkl_engine::types::Host>(
     //
     // `Comment` is dispatched to `toggle_comment_range` below, so it keeps its
     // normal motion-driven path.
-    if op != Operator::Comment {
+    if op != Operator::Comment && include_folds {
         let (top, bot) = order(start, end);
         if kind == RangeKind::Linewise {
             // Linewise: both edges grow to cover every closed fold the row

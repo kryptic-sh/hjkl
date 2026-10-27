@@ -246,6 +246,13 @@ pub fn substitute_line_bridge<H: hjkl_engine::types::Host>(
         });
     }
 }
+/// Whether the cursor sits on a closed fold. `D` / `C` are `d$` / `c$`,
+/// whose operator path takes a closed fold whole; the single-line shortcut
+/// below would cut only the fold's first line.
+fn on_closed_fold<H: hjkl_engine::types::Host>(ed: &Editor<hjkl_buffer::View, H>) -> bool {
+    let row = ed.cursor().0;
+    ed.buffer().is_row_hidden(row) || ed.buffer().is_row_hidden(row + 1)
+}
 /// `D` — delete from the cursor to end-of-line, writing to the `"reg` register
 /// when one was named and the unnamed / `"-` pair otherwise. `[count]D` extends
 /// the deletion down `count-1` lines (equivalent to `d[count]$`). Cursor parks
@@ -256,7 +263,7 @@ pub fn delete_to_eol_bridge<H: hjkl_engine::types::Host>(
 ) {
     // Peeked before the delete consumes it — see `operator::apply_op_double`.
     let register = vim(ed).pending_register;
-    if count <= 1 {
+    if count <= 1 && !on_closed_fold(ed) {
         ed.push_undo();
         delete_to_eol(ed);
         hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
@@ -278,7 +285,7 @@ pub fn change_to_eol_bridge<H: hjkl_engine::types::Host>(
     count: usize,
 ) {
     let count = count.max(1);
-    if count <= 1 {
+    if count <= 1 && !on_closed_fold(ed) {
         // Stash the register before `delete_to_eol` consumes it; the insert-exit
         // handler rebuilds this `LastChange` to add the typed text and carries
         // the register across.
