@@ -1490,3 +1490,75 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "x_on_fold_last_char_deletes_just_it"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "zfjx"
+expected_buffer = "a\ncd\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_x_on_fold_last_char_deletes_just_it"
+initial_buffer = "abcd\ncd\nef"
+initial_cursor = [0, 3]
+keys = "zfj2x"
+expected_buffer = "abc\ncd\nef"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dl_on_fold_last_char_deletes_just_it"
+initial_buffer = "abcd\ncd\nef"
+initial_cursor = [0, 3]
+keys = "zfjdl"
+expected_buffer = "abc\ncd\nef"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "x_on_fold_mid_line_deletes_whole_fold"
+initial_buffer = "abcd\ncd\nef"
+initial_cursor = [0, 1]
+keys = "zfjx"
+expected_buffer = "ef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dl_on_fold_mid_line_deletes_whole_fold"
+initial_buffer = "abcd\ncd\nef"
+initial_cursor = [0, 1]
+keys = "zfjdl"
+expected_buffer = "ef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_zf_x_on_last_char_deletes_just_it"
+initial_buffer = "  ab\ncd\nef"
+initial_cursor = [0, 3]
+keys = "2zFx"
+expected_buffer = "  a\ncd\nef"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

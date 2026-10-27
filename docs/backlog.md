@@ -1098,14 +1098,6 @@ fail on the parent commit, the other 6 are negative guards).
   keys through its own keymap, which binds `/` / `?` (`OpenSearchPrompt`) in
   Normal mode only (`keymap_build.rs`); what Visual `/` does there was not
   tried.
-- **`x` on a fresh closed fold takes the whole fold from any column.** nvim
-  deletes just the character under the cursor unless the cursor is on column 0
-  (2026-10-20, on `"ab\ncd\nef"`): `zfjx` / `zfjzcx` @ (0,1) delete just the
-  `b`, while `zfjx` @ (0,0), `zfj0x` and `zfjjkx` @ (0,1) delete the whole fold.
-  hjkl's `x` takes the whole fold from any column (`do_char_delete`,
-  `command.rs`). Making it column-0-only was tried and reverted while `zfjjkx`
-  came back on column 1; `zf` over a linewise motion now leaves a curswant of 0,
-  so `zfjjkx` lands on column 0 and the column-0 rule can be tried again.
 - **Left by the operator + mark work (2026-10-18):**
   - **Undo/redo cursor gaps left after the operator-delete fix.** On
     `"aa bb\n  cc dd\nee ff\ngg hh\n"` @ (0,3), all the same on the parent

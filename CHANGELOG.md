@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- `x`, `dl`, `yl` and `cl` on a closed fold with the cursor on its line's last
+  character act on just that character, as in vim, where hjkl took the whole
+  fold; from anywhere else on the line they still take the fold.
 - After `zf` over a linewise motion (`zfj`, `zfG`, `zfip`) or `[count]zF`, the
   next `j` / `k` lands on column 0, as in vim; `[count]zF` no longer moves the
   cursor to the first non-blank. A `j` / `k` that cannot move leaves the cursor

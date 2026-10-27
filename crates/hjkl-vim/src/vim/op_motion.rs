@@ -127,6 +127,13 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
         kind = RangeKind::Exclusive;
         in_place = true;
     }
+    // `l` from a line's last character cannot move: vim's `nv_right` keeps the
+    // cursor there and makes the operator inclusive, so `dl` / `x` take just
+    // that character even on a closed fold. The past-the-end landing above
+    // already has the one-char shape; only the fold rule differs.
+    if matches!(motion, Motion::Right) && start.1 + 1 == buf_line_chars(ed.buffer(), start.0) {
+        in_place = true;
+    }
     // `c` over a motion that stayed put without cancelling the operator: the
     // empty range still starts Insert at the cursor (`run_operator_over_range`
     // does that for an empty exclusive range), where every other operator has

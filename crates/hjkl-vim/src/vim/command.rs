@@ -211,14 +211,15 @@ pub fn do_char_delete<H: hjkl_engine::types::Host>(
     count: usize,
 ) {
     use hjkl_buffer::{Edit, MotionKind, Position};
-    // `x` on a CLOSED fold deletes the whole fold linewise, from any column
-    // (vim `:h fold`: a closed fold is included as a whole). An `l` that put
-    // the cursor at column > 0 has already opened the fold (`'foldopen'`
-    // `hor`), so it no longer reaches here. `X` is a *backward* delete and is
-    // never promoted — nvim leaves it charwise (a no-op at column 0), even on
-    // a closed fold.
-    if forward {
-        let cursor_row = ed.cursor().0;
+    // `x` on a CLOSED fold deletes the whole fold linewise (vim `:h fold`: a
+    // closed fold is included as a whole), unless the cursor is on its line's
+    // last character: there the `l` inside `x` cannot move, and vim deletes
+    // just that character, as `dl` does. An `l` that put the cursor at column
+    // > 0 has already opened the fold (`'foldopen'` `hor`), so it no longer
+    // reaches here. `X` is a *backward* delete and is never promoted — nvim
+    // leaves it charwise (a no-op at column 0), even on a closed fold.
+    let (cursor_row, cursor_col) = ed.cursor();
+    if forward && cursor_col + 1 < buf_line_chars(ed.buffer(), cursor_row) {
         let (fold_start, fold_end) =
             expand_linewise_over_closed_folds(ed.buffer(), cursor_row, cursor_row);
         if (fold_start, fold_end) != (cursor_row, cursor_row) {

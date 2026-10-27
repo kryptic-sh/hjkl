@@ -44,6 +44,9 @@ and this project adheres to
 
 ### Fixed
 
+- `do_char_delete` and the `l` operator path in `apply_op_with_motion` do not
+  widen to a closed fold when the cursor is on its line's last character, where
+  vim's `l` cannot move.
 - `run_operator_over_range` sets the sticky column to 0 after `zf` over a
   linewise range, `[count]zF` keeps the cursor where it was with a sticky column
   of 0, and `execute_motion` skips the vertical re-move after a `j` / `k` that
