@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- `iw` / `aw` / `iW` / `aW` from a one-cell Visual block select the whole word,
+  as in vim: `<C-v>iw~` in the middle of a word toggles all of it, where hjkl
+  started at the cursor. A wider block still only extends.
 - A Visual-block `>` skips empty lines and repeats with `.`, and `u` after any
   Visual-block operator returns the cursor to the block's top-left corner, as in
   vim. The block `>` used to indent empty lines, `.` after it did nothing, and

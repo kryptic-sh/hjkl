@@ -813,3 +813,63 @@ keys = "<C-v>k3as"
 expected_buffer = "aaa.\n   \nbbb.\nccc.\nxxx.\n"
 expected_cursor = [0, 0]
 expected_mode = "visual_block"
+
+[[cases]]
+name = "block_iw_from_one_cell_selects_whole_word"
+initial_buffer = "abc def ghi"
+initial_cursor = [0, 5]
+keys = "<C-v>iw~"
+expected_buffer = "abc DEF ghi"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_aw_from_one_cell_selects_whole_word"
+initial_buffer = "abc def ghi"
+initial_cursor = [0, 5]
+keys = "<C-v>aw~"
+expected_buffer = "abc DEF ghi"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_iW_from_one_cell_selects_whole_WORD"
+initial_buffer = "abc def ghi"
+initial_cursor = [0, 5]
+keys = "<C-v>iW~"
+expected_buffer = "abc DEF ghi"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_count_iw_from_one_cell"
+initial_buffer = "abc def ghi"
+initial_cursor = [0, 5]
+keys = "<C-v>2iw~"
+expected_buffer = "abc DEF ghi"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_iw_from_wider_block_only_extends"
+initial_buffer = "abc def ghi"
+initial_cursor = [0, 5]
+keys = "<C-v>liw~"
+expected_buffer = "abc dEF ghi"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

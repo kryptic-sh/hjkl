@@ -44,6 +44,9 @@ and this project adheres to
 
 ### Fixed
 
+- `visual_text_obj_extend` moves `block_anchor` to a word object's start when
+  the block is one cell (anchor on the cursor), as vim selects the object afresh
+  there.
 - `indent_block` skips empty rows, as its doc already said;
   `replay_block_visual_op` replays `Operator::Indent` / `Outdent`, which it
   dropped; and `apply_block_operator` puts the cursor on the block's top-left

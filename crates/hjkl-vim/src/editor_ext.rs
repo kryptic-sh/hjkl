@@ -2013,6 +2013,11 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             // Word objects keep the selection blockwise: the block spans
             // anchor-column..object-end-column, matching nvim.
             if let TextObject::Word { .. } = obj {
+                // From a one-cell block vim selects the object afresh, so
+                // the anchor moves to its start too.
+                if crate::vim_state::vim(self).block_anchor == self.cursor() {
+                    crate::vim_state::vim_mut(self).block_anchor = start;
+                }
                 let (er, ec) = crate::vim::retreat_one(self, end);
                 self.jump_cursor(er, ec);
                 crate::vim_state::vim_mut(self).block_vcol = ec;
