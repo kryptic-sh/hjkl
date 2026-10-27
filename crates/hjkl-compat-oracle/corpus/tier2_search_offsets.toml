@@ -46,3 +46,87 @@ keys = "/o/s+1<CR>"
 expected_buffer = "foobar\n"
 expected_cursor = [0, 2]
 expected_mode = "normal"
+
+[[cases]]
+name = "end_offset_finds_match_under_cursor"
+initial_buffer = "ab cd ab"
+initial_cursor = [0, 0]
+keys = "/ab/e<CR>"
+expected_buffer = "ab cd ab"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "end_offset_plus_one_from_match_start"
+initial_buffer = "ab cd ab"
+initial_cursor = [0, 0]
+keys = "/ab/e+1<CR>"
+expected_buffer = "ab cd ab"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "start_offset_plus_one_finds_match_under_cursor"
+initial_buffer = "ab cd ab"
+initial_cursor = [0, 0]
+keys = "/ab/s+1<CR>"
+expected_buffer = "ab cd ab"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_to_end_offset_is_inclusive"
+initial_buffer = "ab cd ab"
+initial_cursor = [0, 0]
+keys = "d/ab/e<CR>"
+expected_buffer = " cd ab"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "yank_to_end_offset_is_inclusive"
+initial_buffer = "ab cd ab"
+initial_cursor = [0, 0]
+keys = "y/ab/e<CR>P"
+expected_buffer = "abab cd ab"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "backward_end_offset_skips_match_ending_at_cursor"
+initial_buffer = "ab cd ab"
+initial_cursor = [0, 7]
+keys = "?ab?e<CR>"
+expected_buffer = "ab cd ab"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "failed_search_ignores_its_offset"
+initial_buffer = "ab cd ab\nxy"
+initial_cursor = [0, 3]
+keys = "/zz/+1<CR>"
+expected_buffer = "ab cd ab\nxy"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

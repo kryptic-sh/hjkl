@@ -1133,22 +1133,21 @@ fail on the parent commit, the other 6 are negative guards).
   class is not gated on typed keys: a `u` replayed by `@q` opens folds as well,
   because `settle_after_history_jump` lives in the engine, which does not know a
   macro is replaying (by code read; not measured).
+- **`n` / `N` forget the last search's offset.** vim stores the offset with the
+  pattern (`spats[0].off`) and `n` re-applies it; hjkl's prompt applies it once
+  (`apply_search_offset`, `search_prompt.rs`) and keeps only the pattern
+  (`set_last_search_pattern_only`). Measured against nvim 0.12.5: `/ab/e<CR>n`
+  on `"ab cd ab xab"` @ (0,0) lands on (0,7) in nvim and (0,6) in hjkl,
+  `/ab/e<CR>N` on (0,11) and (0,0), and `/ab/+1<CR>n` on `"ab\ncd\nab\nef"` on
+  (1,0) and (0,0). Fixing it means keeping the offset beside the last pattern
+  and running `offset_search_match` / `apply_search_offset` from
+  `Motion::SearchNext` too.
 - **The TUI's Visual `/` / `?` were not checked.** The 2026-10-27 fix wires them
   in `hjkl_vim::dispatch_input` (`step_normal`, `normal.rs`), which the oracle,
   `--nvim-api`, the headless mode and embedding use. The interactive app routes
   keys through its own keymap, which binds `/` / `?` (`OpenSearchPrompt`) in
   Normal mode only (`keymap_build.rs`); what Visual `/` does there was not
   tried.
-- **A search with an `s` / `e` / `b` offset skips the match under the cursor.**
-  vim's `do_search` starts an offset search that many columns away from the
-  cursor (back by `+n`, forward by `-n`), and an `e` offset tests a match's last
-  character instead of its first, so `/ab/e` from (0,0) on `"ab cd ab"` lands on
-  (0,1) — the match under the cursor ends after it. hjkl's `search_prompt.rs`
-  always skips the current match and then applies the offset
-  (`apply_search_offset`), landing on (0,7). Measured against nvim 0.12.5:
-  `/ab/e+1` gives (0,2) there (hjkl (0,8)), `/ab/s+1` (0,1) (hjkl (0,7)), and
-  `d/ab/e` leaves `" cd ab"` (hjkl `"b"`); `/ab/e-1` and `/ab/e` from (0,1)
-  already agree. The `?` direction was not measured.
 - **The curswant after `zf` / on a closed fold is not pinned down.** The other
   operators now reset the curswant to the cursor (`remember_operator_column`);
   `zf{motion}` is left alone, keeping whatever curswant came before, because the

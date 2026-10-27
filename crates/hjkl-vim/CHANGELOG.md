@@ -44,6 +44,10 @@ and this project adheres to
 
 ### Fixed
 
+- The search prompt runs an `e` / `s` / `b` offset search through the new
+  `offset_search_match` (vim's `do_search` start position and `SEARCH_END`
+  test), applies the offset only when a match was found, and ends an operator's
+  range one past an `e` landing so it is inclusive.
 - `step_normal` handles `/` / `?` in the Visual modes with `enter_search`; they
   were reachable only from Normal mode (`handle_normal_only`).
 - `replay_last_change` maps a recorded `Motion::ChangeWordEnd` back to the typed

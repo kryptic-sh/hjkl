@@ -57,18 +57,36 @@ pub fn step_search_prompt<H: Host>(
                 if let Some(pattern) = pattern {
                     ed.push_search_pattern(&pattern);
                     let pre = ed.cursor();
-                    let found = if p.forward {
-                        ed.search_advance_forward(true)
-                    } else {
-                        ed.search_advance_backward(true)
+                    let offset = offset.filter(|s| !s.is_empty());
+                    let char_offset = offset.as_deref().and_then(parse_char_offset);
+                    let found = match char_offset {
+                        Some((end, n)) => match offset_search_match(ed, p.forward, end, n) {
+                            Some((row, col)) => {
+                                ed.jump_cursor(row, col);
+                                true
+                            }
+                            None => false,
+                        },
+                        None if p.forward => ed.search_advance_forward(true),
+                        None => ed.search_advance_backward(true),
                     };
-                    if let Some(off) = offset.as_deref().filter(|s| !s.is_empty()) {
+                    if found && let Some(off) = offset.as_deref() {
                         apply_search_offset(ed, off);
                     }
                     // Operator-pending search (`d/pat`, `c/pat`, `y/pat`): apply
                     // the operator over the range to the match instead of just
                     // moving the cursor / pushing a jump.
                     if let Some((op, _count, origin)) = p.operator {
+                        // An `e` offset makes the motion inclusive (`:h
+                        // search-offset`): end the exclusive range one past it.
+                        if found && matches!(char_offset, Some((true, _))) {
+                            let (row, col) = ed.cursor();
+                            hjkl_engine::buf_helpers::buf_set_cursor_rc(
+                                ed.buffer_mut(),
+                                row,
+                                col + 1,
+                            );
+                        }
                         ed.apply_op_search_range(op, origin);
                     } else {
                         if ed.cursor() != pre {
@@ -172,6 +190,100 @@ fn apply_search_offset<H: Host>(ed: &mut hjkl_engine::Editor<hjkl_buffer::View, 
             ed.jump_cursor(new_row, fnb);
         }
     }
+}
+
+/// An `e` / `s` / `b` search offset as `(from_end, n)`; `None` for a line
+/// offset (`+2`, `-1`, `3`).
+fn parse_char_offset(offset: &str) -> Option<(bool, isize)> {
+    let end = match offset.chars().next()? {
+        'e' => true,
+        's' | 'b' => false,
+        _ => return None,
+    };
+    Some((end, offset[1..].parse().unwrap_or(0)))
+}
+
+/// vim's `do_search` for a search with an `e` / `s` / `b` offset of `n`: the
+/// search starts `n` characters before the cursor (after it, for a negative
+/// `n`; before the buffer or after it when that runs off an end), and an `e`
+/// offset compares each match's last character instead of its first. So the
+/// match under the cursor can be the one found, as for `/ab/e` from the `a` of
+/// `"ab"`. Returns the start of the match to land on, wrapping around the
+/// buffer under `'wrapscan'`.
+fn offset_search_match<H: Host>(
+    ed: &hjkl_engine::Editor<hjkl_buffer::View, H>,
+    forward: bool,
+    from_end: bool,
+    n: isize,
+) -> Option<(usize, usize)> {
+    let re = ed.search_state().pattern.as_ref()?;
+    let rope = ed.buffer().rope();
+    let rows = rope.len_lines();
+    let lines: Vec<String> = (0..rows)
+        .map(|r| hjkl_buffer::rope_line_str(&rope, r))
+        .collect();
+    // Each match as (key, start), the key being the position `searchit`
+    // compares: its first character, or its last for an `e` offset.
+    let mut matches: Vec<((isize, isize), (usize, usize))> = Vec::new();
+    for (row, line) in lines.iter().enumerate() {
+        let char_at = |byte: usize| line[..byte].chars().count();
+        for (start, end) in hjkl_buffer::search_match_ranges(re, line) {
+            let first = char_at(start);
+            let last = if end > start { char_at(end) - 1 } else { first };
+            let key = if from_end { last } else { first };
+            matches.push(((row as isize, key as isize), (row, first)));
+        }
+    }
+    // vim's `decl` / `incl`: one character back / forward, across lines,
+    // skipping the end of a non-empty line.
+    let cells = |r: isize| lines[r as usize].chars().count().max(1) as isize;
+    let step = |(r, c): (isize, isize), back: bool| -> Option<(isize, isize)> {
+        if back {
+            if c > 0 {
+                Some((r, c - 1))
+            } else if r > 0 {
+                Some((r - 1, cells(r - 1) - 1))
+            } else {
+                None
+            }
+        } else if c + 1 < cells(r) {
+            Some((r, c + 1))
+        } else if r + 1 < rows as isize {
+            Some((r + 1, 0))
+        } else {
+            None
+        }
+    };
+    let (row, col) = ed.cursor();
+    let mut from = (row as isize, col as isize);
+    let total: usize = (0..rows).map(|r| cells(r as isize) as usize).sum();
+    for _ in 0..n.unsigned_abs().min(total) {
+        match step(from, n > 0) {
+            Some(p) => from = p,
+            None if n > 0 => {
+                from = (-1, isize::MAX);
+                break;
+            }
+            None => {
+                from = (rows as isize, 0);
+                break;
+            }
+        }
+    }
+    let wrap = ed.settings().wrapscan;
+    let found = if forward {
+        matches
+            .iter()
+            .find(|(key, _)| *key > from)
+            .or_else(|| wrap.then(|| matches.first()).flatten())
+    } else {
+        matches
+            .iter()
+            .rev()
+            .find(|(key, _)| *key < from)
+            .or_else(|| wrap.then(|| matches.last()).flatten())
+    };
+    found.map(|&(_, start)| start)
 }
 
 /// Char-length of the regex match that begins at `(row, col)`. Falls back to 1

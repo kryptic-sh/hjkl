@@ -22,6 +22,13 @@ patch bumps.
 
 ### Fixed
 
+- A search with an `e` / `s` / `b` offset can find the match under the cursor,
+  as in vim: `/ab/e` from the `a` of `"ab cd ab"` goes to its `b`, where hjkl
+  jumped to the next `ab`. vim starts such a search the offset's distance away
+  from the cursor and compares a match's last character for `e`. `d/pat/e`
+  deletes through the last character, as an `e` offset makes the motion
+  inclusive. A search that finds nothing no longer moves the cursor by its
+  offset.
 - `/` and `?` in Visual mode open the search prompt and extend the selection to
   the match, as in vim, in `hjkl_vim::dispatch_input` (the key path behind
   `--nvim-api`, the headless mode and embedding). They used to fall through as
