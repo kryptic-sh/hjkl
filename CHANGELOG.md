@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- `.` of an insert or a change sets the column `j` / `k` aim for, as the typed
+  `<Esc>` does: `Az<Esc>0.j` lands under the repeated text, where hjkl kept the
+  column from before the `.`.
 - After `gg`, `J` / `gJ`, `p` / `P`, leaving Insert mode, a mark jump, `zF`,
   `>>` and similar commands on a line with a tab before the cursor, `j` / `k`
   aim for the column the cursor is drawn in, as in vim, instead of its character

@@ -413,3 +413,63 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+
+[[cases]]
+name = "repeat_append_sets_curswant_for_j"
+initial_buffer = "ab cd ef\nxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 2]
+keys = "Az<Esc>0.j"
+expected_buffer = "ab cd efzz\nxxxxxxxxxxxxxxxx"
+expected_cursor = [1, 9]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "repeat_append_after_cursor_sets_curswant_for_j"
+initial_buffer = "ab cd ef\nxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 2]
+keys = "az<Esc>.j"
+expected_buffer = "ab zzcd ef\nxxxxxxxxxxxxxxxx"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_repeat_append_sets_curswant_for_j"
+initial_buffer = "ab cd ef\nxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 2]
+keys = "Az<Esc>3.j"
+expected_buffer = "ab cd efzzzz\nxxxxxxxxxxxxxxxx"
+expected_cursor = [1, 11]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "repeat_change_word_sets_curswant_for_j"
+initial_buffer = "ab cd ef\nxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 3]
+keys = "cwzz<Esc>0.j"
+expected_buffer = "zz zz ef\nxxxxxxxxxxxxxxxx"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "repeat_change_word_from_line_end_sets_curswant"
+initial_buffer = "ab cd ef\nxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 3]
+keys = "cwzz<Esc>$.j"
+expected_buffer = "ab zz ezz\nxxxxxxxxxxxxxxxx"
+expected_cursor = [1, 8]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

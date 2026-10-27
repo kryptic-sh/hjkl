@@ -44,6 +44,9 @@ and this project adheres to
 
 ### Fixed
 
+- `replay_last_change`'s `LastChange::InsertAt` arm and
+  `replay_insert_and_finish` call `remember_cursor_column` after their `<Esc>`
+  step-back, as `leave_insert_to_normal_bridge` does for a typed `<Esc>`.
 - Every sticky-column write that stored the cursor's char column (`gg`, `%`, `J`
   / `gJ`, the paste paths, Visual join / paste / `g<C-a>`, Insert-mode `<Esc>`,
   mark and jumplist jumps, mouse placement, `zF`, the line operators, `gw` and

@@ -28,6 +28,8 @@ pub fn replay_insert_and_finish<H: hjkl_engine::types::Host>(
             hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
         }
         vim_mut(ed).mode = Mode::Normal;
+        // The live `<Esc>` sets the curswant here too.
+        remember_cursor_column(ed);
     }
 }
 pub fn replay_last_change<H: hjkl_engine::types::Host>(
@@ -333,6 +335,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             if ed.cursor().1 > 0 {
                 hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
             }
+            remember_cursor_column(ed);
         }
     }
     vim_mut(ed).replaying = false;

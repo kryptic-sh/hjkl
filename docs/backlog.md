@@ -1166,12 +1166,11 @@ fail on the parent commit, the other 6 are negative guards).
     column-0-only fixes the first two but breaks `zfjjkx` until the curswant
     question is settled; tried and reverted. `zfjk` @ (1,1) and `zfjj` / `zfjjk`
     @ (0,1) also land on column 0 in nvim, column 1 in hjkl.
-- **`.` of an append leaves the curswant one column short.** On
-  `"ab cd\nxxxxxxxxxxxxxxxx"` @ (0,2), `Az<Esc>.j` lands on (1,5) in hjkl and
-  (1,6) in nvim (with a leading tab, (1,9) and (1,10)), on the parent of the
-  2026-10-27 curswant fix too, which moved every hjkl-vim char-column write onto
-  `remember_cursor_column` (`visual_ops.rs`). Where the replay path
-  (`dot_repeat.rs`) loses the column was not looked into.
+- **`.` of a `cw` begun on a blank also takes the space after a word.** On
+  `"ab cd ef"` @ (0,2) (the space), `cwzz<Esc>` gives `"abzzcd ef"` in both;
+  `0.` then gives `"zzef"` in hjkl and `"zz ef"` in nvim, which runs `cw` afresh
+  from the word under the cursor. Measured 2026-10-27; how `dot_repeat.rs`
+  replays it was not looked into.
 - **Left by the operator + mark work (2026-10-18):**
   - **Undo/redo cursor gaps left after the operator-delete fix.** On
     `"aa bb\n  cc dd\nee ff\ngg hh\n"` @ (0,3), all the same on the parent
