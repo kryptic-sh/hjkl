@@ -22,6 +22,10 @@ patch bumps.
 
 ### Fixed
 
+- A Visual block taken by `j` / `k` onto a shorter line narrows to where the
+  cursor lands, as in vim: `<C-v>jd` from the `d` of `"abcd\nab"` deletes `cd`,
+  where hjkl deleted only the `d` and padded the short line. Back on a long
+  enough line the block widens again.
 - `gj` / `gk` inside a wrapped line move between its screen lines, as in vim,
   where hjkl stayed put.
 - `dgj` / `dgk` / `ygj` under `:set wrap` are charwise exclusive, as in vim:

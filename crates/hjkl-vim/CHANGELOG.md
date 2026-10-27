@@ -44,6 +44,10 @@ and this project adheres to
 
 ### Fixed
 
+- `update_block_vcol` syncs `block_vcol` to the cursor after `Motion::Up` /
+  `Down`, as vim's `block_prep` reads the cursor's own column: a block taken
+  onto a shorter line narrows to the cursor (the line's NUL in Visual), where it
+  kept the old column. `block_to_eol` still survives `j` / `k`.
 - `Motion::ScreenUp` / `ScreenDown` that stay on their row under wrap skip the
   `Move::Vertical` re-move after the motion, which put the cursor back on the
   curswant column of that row and so undid the step. `apply_op_with_motion` runs

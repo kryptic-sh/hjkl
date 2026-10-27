@@ -842,3 +842,99 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "block_down_onto_shorter_line_narrows_to_cursor"
+initial_buffer = "ab cd\nef gh\nij"
+initial_cursor = [0, 3]
+keys = "<C-v>jjd"
+expected_buffer = "abd\nefh\nij"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_down_onto_short_last_line"
+initial_buffer = "abcd\nab"
+initial_cursor = [0, 3]
+keys = "<C-v>jd"
+expected_buffer = "ab\nab"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_up_onto_shorter_line_narrows_to_cursor"
+initial_buffer = "ab\nabcd"
+initial_cursor = [1, 3]
+keys = "<C-v>kd"
+expected_buffer = "ab\nab"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_back_onto_long_line_widens_again"
+initial_buffer = "abcd\nab\nabcd"
+initial_cursor = [0, 3]
+keys = "<C-v>jjd"
+expected_buffer = "abc\nab\nabc"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_down_then_up_off_short_line"
+initial_buffer = "abcd\nab\nabcd"
+initial_cursor = [0, 3]
+keys = "<C-v>jjkd"
+expected_buffer = "ab\nab\nabcd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_onto_empty_line_takes_from_column_zero"
+initial_buffer = "abcd\n\nabcd"
+initial_cursor = [0, 3]
+keys = "<C-v>jd"
+expected_buffer = "\n\nabcd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_append_after_short_line"
+initial_buffer = "abcd\nab\nabcd"
+initial_cursor = [0, 3]
+keys = "<C-v>jAX<Esc>"
+expected_buffer = "abcdX\nab  X\nabcd"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_yank_onto_short_line"
+initial_buffer = "abcd\nab"
+initial_cursor = [0, 3]
+keys = "<C-v>jy"
+expected_buffer = "abcd\nab"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

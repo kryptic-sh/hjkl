@@ -358,8 +358,8 @@ fn block_extent(top: usize, bot: usize, left: usize, right: usize, to_eol: bool)
 }
 /// Compute `(top_row, bot_row, left_col, right_col)` for the current
 /// VisualBlock selection. Columns are inclusive on both ends. Uses the
-/// tracked virtual column (updated by h/l, preserved across j/k) so
-/// ragged / empty rows don't collapse the block's width.
+/// tracked virtual column (see [`update_block_vcol`] for when it moves)
+/// rather than reading the cursor directly.
 pub fn block_bounds<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
 ) -> (usize, usize, usize, usize) {
@@ -373,15 +373,14 @@ pub fn block_bounds<H: hjkl_engine::types::Host>(
     (top, bot, left, right)
 }
 /// Update the virtual column after a motion in VisualBlock mode.
-/// Horizontal motions sync `block_vcol` to the new cursor column;
-/// vertical / non-h/l motions leave it alone so the intended column
-/// survives clamping to shorter lines.
+/// Horizontal motions and `j` / `k` sync `block_vcol` to the new cursor
+/// column; search and the other motions leave it alone.
 ///
 /// `$` (`Motion::LineEnd`) additionally marks the block "ragged" (`:h
 /// v_b_$`, [`crate::vim_state::VimState::block_to_eol`]) — every row then
 /// resolves its own right edge to its own EOL until a DIFFERENT
 /// horizontal motion re-establishes a fixed column, at which point the
-/// flag clears. Vertical motions (the `_` arm) preserve it, matching vim.
+/// flag clears. `j` / `k` preserve it, matching vim.
 pub fn update_block_vcol<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     motion: &Motion,
@@ -424,7 +423,14 @@ pub fn update_block_vcol<H: hjkl_engine::types::Host>(
             vim_mut(ed).block_vcol = ed.cursor().1;
             vim_mut(ed).block_to_eol = false;
         }
-        // Up / Down / Search — preserve vcol AND the ragged flag.
+        // `j` / `k` — vim's `block_prep` reads the cursor's own column, which
+        // the curswant puts back once the cursor reaches a long enough line,
+        // so on a shorter line the block narrows to where the cursor landed
+        // (the NUL, in Visual). The ragged flag survives.
+        Motion::Up | Motion::Down => {
+            vim_mut(ed).block_vcol = ed.cursor().1;
+        }
+        // Search and the rest — preserve vcol AND the ragged flag.
         _ => {}
     }
 }

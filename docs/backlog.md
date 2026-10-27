@@ -1262,12 +1262,6 @@ Seen while measuring, not `gq`:
   setup differs from the corpus run; settle which before changing the case or
   the code. The reverse block-sentence probe in `visual_text_obj_extend_counted`
   (`editor_ext.rs`) reads `block_vcol` and documents relying on `H` keeping it.
-- **A Visual block taken down onto a shorter line keeps the wrong columns.**
-  `<C-v>jjd` @ (0,3) on `"ab cd\nef gh\nij"`: nvim deletes columns 2–3 from the
-  first two lines (register `" c\n g\n"`), hjkl columns 3 only plus a stray
-  space (`"c\ng\n "`). The cursor clamps to `"ij"`'s last column on the way; why
-  vim's block then starts at column 2 was not worked out. Measured 2026-10-20;
-  not looked into.
 - **Text-object operators skip vim's column-0 exclusive adjustment.** vim's
   `do_pending_operator` pulls an exclusive end in column 0 of a later line back
   onto the previous line's end, turning the motion inclusive or, with the start
