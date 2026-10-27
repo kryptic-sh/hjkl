@@ -8,7 +8,7 @@
 //!   Enabled by setting `HJKL_ORACLE_NVIM_API=1`.
 
 use crate::{OracleCase, test_host::TestHost};
-use hjkl_engine::{Options, VimMode, decode_macro};
+use hjkl_engine::{Host, Options, VimMode, decode_macro};
 use hjkl_vim::VimEditorExt;
 
 /// State snapshot produced after replaying a case's keystrokes through the
@@ -81,6 +81,11 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     // Nor vim-sneak, also on by default: `s` / `S` would wait for two target
     // characters instead of substituting.
     editor.settings_mut().motion_sneak = false;
+    // nvim's window wraps long lines (`wrap`, no `linebreak`, no number
+    // column), so the screen-line motions (`gj` / `gk` / `gm` / `g0` / `g$`)
+    // walk the same segments only when hjkl's viewport wraps by character too.
+    // A render loop publishes this from `:set wrap`; the driver has none.
+    editor.host_mut().viewport_mut().wrap = hjkl_buffer::Wrap::Char;
 
     // 2b. Apply per-case indent settings so `>>` / `<<` match nvim's output.
     if let Some(sw) = case.shiftwidth {

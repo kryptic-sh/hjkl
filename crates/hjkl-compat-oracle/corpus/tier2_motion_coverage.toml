@@ -1,7 +1,7 @@
 # Motion coverage audit (#254) — motions that exist in the engine but lacked
-# dedicated oracle cases. Validated against neovim. Oracle host is 80x24, no
-# soft-wrap, so `gj`/`gk` behave like `j`/`k` and `gm` clamps to the line end
-# on lines shorter than half the screen width.
+# dedicated oracle cases. Validated against neovim. Oracle host is 80x24 and
+# wraps by character like nvim, so on short lines `gj`/`gk` behave like `j`/`k`
+# and `gm` clamps to the line end on lines shorter than half the screen width.
 
 # ─── g_ : last non-blank of line ─────────────────────────────────────────────
 [[cases]]
@@ -1454,6 +1454,175 @@ initial_cursor = [0, 5]
 keys = "g5x"
 expected_buffer = "  ab d"
 expected_cursor = [0, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+# ─── Screen-line motions on a line wider than the 80-column window ───────────
+[[cases]]
+name = "g_dollar_on_second_screen_line_goes_to_line_end"
+initial_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 85]
+keys = "g$"
+expected_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+expected_cursor = [0, 99]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "g_dollar_on_first_screen_line_stops_at_its_edge"
+initial_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 10]
+keys = "g$"
+expected_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+expected_cursor = [0, 79]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_g_dollar_goes_down_a_screen_line"
+initial_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 10]
+keys = "2g$"
+expected_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+expected_cursor = [0, 99]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "g0_on_second_screen_line_goes_to_its_start"
+initial_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 85]
+keys = "g0"
+expected_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+expected_cursor = [0, 80]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "g_caret_on_second_screen_line_skips_its_blanks"
+initial_buffer = "ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab cd"
+initial_cursor = [0, 85]
+keys = "g^"
+expected_buffer = "ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab ab cd"
+expected_cursor = [0, 81]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "gm_on_second_screen_line_counts_from_its_start"
+initial_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 85]
+keys = "gm"
+expected_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+expected_cursor = [0, 99]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_g0_on_second_screen_line"
+initial_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 85]
+keys = "dg0"
+expected_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+expected_cursor = [0, 80]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_g_dollar_on_second_screen_line"
+initial_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 85]
+keys = "vg$d"
+expected_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+expected_cursor = [0, 84]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "gj_within_a_wrapped_line"
+initial_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+initial_cursor = [0, 10]
+keys = "gj"
+expected_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+expected_cursor = [0, 90]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "gk_within_a_wrapped_line"
+initial_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+initial_cursor = [0, 85]
+keys = "gk"
+expected_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "gj_twice_crosses_to_next_line"
+initial_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+initial_cursor = [0, 10]
+keys = "gjgj"
+expected_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+expected_cursor = [1, 10]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_gj_within_a_wrapped_line_is_charwise"
+initial_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+initial_cursor = [0, 10]
+keys = "dgj"
+expected_buffer = "xxxxxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+expected_cursor = [0, 10]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_gj_across_short_lines_is_charwise"
+initial_buffer = "abc\nabcdef"
+initial_cursor = [0, 2]
+keys = "dgj"
+expected_buffer = "abcdef"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "delete_gk_across_lines_is_charwise"
+initial_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+initial_cursor = [1, 15]
+keys = "dgk"
+expected_buffer = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+expected_cursor = [0, 95]
 expected_mode = "normal"
 shiftwidth = 4
 expandtab = true

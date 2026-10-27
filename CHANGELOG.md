@@ -13,6 +13,17 @@ patch bumps.
 - tokio 1.54.0 → 1.54.1 for RUSTSEC-2026-0384, a race in
   `tokio::time::Interval`; 1.54.0 is also yanked.
 
+### Fixed
+
+- `gj` / `gk` inside a wrapped line move between its screen lines, as in vim,
+  where hjkl stayed put.
+- `dgj` / `dgk` / `ygj` under `:set wrap` are charwise exclusive, as in vim:
+  `dgj` inside a wrapped line deletes one screen line's worth of text, where
+  hjkl deleted nothing or whole lines.
+- `gm` on a wrapped line's later screen lines, or with the view scrolled
+  sideways, counts half the window from the start of that screen line, as in
+  vim, instead of from column 0.
+
 ## [0.43.4] - 2026-10-22
 
 ### Fixed

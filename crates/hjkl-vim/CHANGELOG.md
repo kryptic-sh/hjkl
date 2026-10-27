@@ -40,6 +40,12 @@ and this project adheres to
 
 ### Fixed
 
+- `Motion::ScreenUp` / `ScreenDown` that stay on their row under wrap skip the
+  `Move::Vertical` re-move after the motion, which put the cursor back on the
+  curswant column of that row and so undid the step. `apply_op_with_motion` runs
+  them charwise exclusive under wrap (`screen_wraps`) instead of linewise.
+- `Motion::ScreenLineMiddle` (`gm`) counts half the text width from the screen
+  line's start, the span `g0` uses, instead of from column 0.
 - `step_normal` no longer reads a digit after `g` (`Pending::G` /
   `Pending::OpG`) as a count: the `g` arm stashes a count of 1, so `0` extended
   it to 10 instead of reaching `apply_after_g`.

@@ -122,6 +122,14 @@ pub fn execute_motion<H: hjkl_engine::types::Host>(
     // clamped), and it rewrites `sticky_col` to the class's rule, replacing
     // the old post-hoc `apply_sticky_col` catch-all.
     match motion_class(&motion) {
+        // A `gj` / `gk` between screen lines of one wrapped row is not
+        // re-moved: back on the same row that would undo the step. The sticky
+        // column stays the whole-line column, where vim's curswant follows the
+        // screen line (see `docs/backlog.md`).
+        MotionClass::Vertical
+            if matches!(motion, Motion::ScreenUp | Motion::ScreenDown)
+                && pre_pos.0 == post_pos.0
+                && screen_wraps(ed) => {}
         MotionClass::Vertical => {
             // Re-run the sticky clamp on the landed row. The vertical motion
             // fns already clamped there, so this only confirms the
@@ -577,10 +585,17 @@ fn screen_text_width<H: hjkl_engine::types::Host>(ed: &Editor<hjkl_buffer::View,
     }
 }
 
+/// Whether the viewport soft-wraps, the test `move_screen_vertical` makes
+/// before `gj` / `gk` walk screen lines instead of buffer rows.
+pub fn screen_wraps<H: hjkl_engine::types::Host>(ed: &Editor<hjkl_buffer::View, H>) -> bool {
+    let v = ed.host().viewport();
+    !matches!(v.wrap, hjkl_buffer::Wrap::None) && v.text_width > 0
+}
+
 /// The screen line holding the cursor as `[start, end)` char columns of its
-/// row, for `g0` / `g^` / `g$`: the wrap segment under wrap, and without it
-/// the columns from `Viewport::top_col` on that fit the text width. Cells are
-/// measured as `wrap_segments` measures them, as `gj` / `gk` do.
+/// row, for `gm` / `g0` / `g^` / `g$`: the wrap segment under wrap, and without
+/// it the columns from `Viewport::top_col` on that fit the text width. Cells
+/// are measured as `wrap_segments` measures them, as `gj` / `gk` do.
 fn screen_line_span<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
 ) -> (usize, usize) {
@@ -588,7 +603,7 @@ fn screen_line_span<H: hjkl_engine::types::Host>(
     let (row, col) = ed.cursor();
     let line = buf_line(ed.buffer(), row).unwrap_or_default();
     let v = *ed.host().viewport();
-    if !matches!(v.wrap, Wrap::None) && v.text_width > 0 {
+    if screen_wraps(ed) {
         let segs = wrap_segments(&line, v.text_width, v.wrap);
         return segs[hjkl_buffer::wrap::segment_for_col(&segs, col)];
     }
@@ -890,12 +905,12 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             ed.jump_cursor(row, target);
         }
         Motion::ScreenLineMiddle => {
-            // Vim's `gm`: middle of the *screen* line = column
-            // `viewport_width / 2`, clamped to the last char of the line.
+            // Vim's `gm`: half the text width past the screen line's start
+            // (where `g0` goes), clamped to the last char of the line.
             let row = ed.cursor().0;
-            let width = ed.host().viewport().width as usize;
+            let width = usize::from(screen_text_width(ed));
             let last = buf_line_chars(ed.buffer(), row).saturating_sub(1);
-            let target = (width / 2).min(last);
+            let target = (screen_line_span(ed).0 + width / 2).min(last);
             ed.jump_cursor(row, target);
         }
         Motion::ScreenLineStart => {

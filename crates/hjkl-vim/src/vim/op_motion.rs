@@ -39,10 +39,16 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
         apply_motion_cursor_ctx(ed, motion, count, true);
     }
     let mut end = ed.cursor();
+    // Under wrap vim's `gj` / `gk` are charwise exclusive (`nv_screengo`),
+    // so `dgj` takes the text between two screen lines of one row; without
+    // wrap they are `j` / `k`.
+    let screen_charwise =
+        matches!(motion, Motion::ScreenUp | Motion::ScreenDown) && screen_wraps(ed);
     // Linewise motions normally cover their row even when their endpoint has
     // the same row. `_` is a successful zero-distance motion, but `j`/`k` and
     // `+`/`-` fail at a buffer edge and must not operate on the current row.
     if start.0 == end.0
+        && !screen_charwise
         && matches!(
             motion,
             Motion::Up
@@ -57,7 +63,11 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     }
     // If the motion made no progress, abort the operator (vim behavior).
     // A charwise edge motion that cannot advance leaves the buffer unchanged.
-    let mut kind = motion_kind(motion);
+    let mut kind = if screen_charwise {
+        RangeKind::Exclusive
+    } else {
+        motion_kind(motion)
+    };
     // Vim's `findpar` tail (`:h }`): a `}` that lands on the LAST line of the
     // buffer sits on that line's last character and sets `*pincl`, making the
     // motion inclusive — that is what lets `d}` in the final paragraph reach

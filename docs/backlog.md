@@ -279,22 +279,36 @@ fixed:
   emptied case. Recording `"\n"` from the lone empty line (tried in
   `cut_vim_range_inner`, 2026-10-20) broke those three cases and was reverted.
   The fuzz cases starting from `""` with a linewise delete will keep diverging.
-- **`gm` ignores wrap and horizontal scroll.** `Motion::ScreenLineMiddle`
-  (`motion.rs`) lands on half the viewport width from column 0. vim's
-  `nv_g_home_m_cmd` adds that half to the screen line's start, the same start
-  `g0` uses, so on a wrapped line's second segment, or with `top_col > 0`, hjkl
-  lands too far left. The fix is to start from `screen_line_span(ed).0`, the
-  helper `g0` / `g^` / `g$` use. Not done with them because the oracle cannot
-  check it (see the next entry).
-- **The screen-line motions are verified only on lines shorter than the
-  window.** The oracle's nvim wraps at 80 columns while its hjkl host
-  (`DefaultHost::DEFAULT_VIEWPORT`) is 80 wide with `Wrap::None`, so `gj` / `gk`
-  / `gm` / `g0` / `g^` / `g$` on a line of 80 columns or more measure two
-  different layouts. Per segment, nvim's `g$` gives (0,79) and `g0` gives (0,80)
-  on a 100-character line; hjkl's results there were not compared. A corpus case
-  would need the hjkl driver to publish `Wrap::Char` with `text_width: 80`. Tabs
-  and double-width characters are counted the way `wrap_segments` counts them (a
-  tab is one cell), not by `'tabstop'`, which is also unverified.
+- **`gj` / `gk` curswant follows the whole line, not the screen line (needs a
+  decision).** Under wrap, vim's `nv_screengo` keeps curswant relative to the
+  screen line: a step inside one line adds or subtracts the window width, and a
+  step onto another line takes `curswant % width`. hjkl keeps the sticky column
+  as a whole-line column (`move_screen_vertical` in `hjkl-engine/motions.rs`,
+  and the post-motion `MotionClass::Vertical` arm in `motion.rs`). Measured
+  against nvim 0.12.5 at its 80-column window, on two 100-column lines: `gjj`
+  from (0,10) goes to (1,90) in nvim and (1,10) in hjkl; `gkj` from (0,85) on
+  one line stays on (0,5) in nvim and goes back to (0,85) in hjkl. On a
+  90-column line, an empty line and a 92-column line, `gjgj` from (0,85) lands
+  on (2,5) in nvim and (2,85) in hjkl. The vim model is a small change (shift
+  the sticky column by the screen lines' starts, and land at that offset), but
+  the test `gj_through_empty_line_preserves_want_in_wrap_mode`
+  (`hjkl-vim-tui/tests/vim_fsm.rs`) asserts the whole-line model: sticky column
+  10 kept across rows on an 8-wide wrap, and the next `gj` landing on column 10,
+  where vim's model gives 2. Adopting vim's behaviour means rewriting that test,
+  which is the user's call. Shifting only inside a row was tried and rejected:
+  `gjgj` from (0,10) then landed on (1,90) instead of (1,10).
+- **The screen-line motions are unverified with tabs, wide characters and
+  sideways scroll.** The in-process oracle driver (`hjkl_driver::run_case`) now
+  publishes `Wrap::Char` at the 80-column width nvim's window wraps at, so `gj`
+  / `gk` / `gm` / `g0` / `g^` / `g$` on wrapped lines are pinned in
+  `tier2_motion_coverage.toml`. Not compared:
+  - Tabs and double-width characters. `screen_line_span` (`motion.rs`) counts
+    cells the way `wrap_segments` does (a tab is one cell), where vim counts
+    virtual columns by `'tabstop'`.
+  - The nowrap path, the columns from `Viewport::top_col`. The oracle wraps now,
+    and nvim would need `:set nowrap` and a sideways scroll set up to match.
+  - The subprocess driver (`run_case_via_nvim_api`, `HJKL_ORACLE_NVIM_API=1`),
+    which runs the `hjkl` binary with whatever wrap its options give.
 - **Breaking enum variants shipped in patch releases (needs a decision).**
   `Motion::ScreenLineStart`, `ScreenLineFirstNonBlank` and `ScreenLineEnd` (for
   `g0` / `g^` / `g$`) went out in v0.43.3, cut as a patch. They are new variants
