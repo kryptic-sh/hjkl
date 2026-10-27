@@ -44,6 +44,10 @@ and this project adheres to
 
 ### Fixed
 
+- `operate_over_motion_range` takes the motion (`None` for a mark) instead of a
+  `w` flag: `%` skips the charwise-to-linewise delete promotion and widens to a
+  closed fold even when it did not move. `motion_opens_fold` opens a fold on
+  every `%`, found or not.
 - `open_line_below_bridge` / `open_line_above_bridge` move the cursor to the
   closed fold's last / first line before opening, as vim's `n_opencmd` does, and
   `O` puts the cursor on the new line directly instead of through a fold-aware

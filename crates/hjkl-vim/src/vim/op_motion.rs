@@ -146,8 +146,7 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
         run_operator_over_range(ed, op, start, end, RangeKind::Exclusive);
         return;
     }
-    let word_fwd = matches!(motion, Motion::WordFwd | Motion::BigWordFwd);
-    operate_over_motion_range(ed, op, start, end, kind, word_fwd, !in_place);
+    operate_over_motion_range(ed, op, start, end, kind, Some(motion), !in_place);
 }
 
 /// The motions that leave a pending operator in place when they cannot move,
@@ -259,14 +258,15 @@ pub fn apply_op_mark<H: hjkl_engine::types::Host>(
     } else {
         ((row, col), RangeKind::Exclusive)
     };
-    operate_over_motion_range(ed, op, start, end, kind, false, true);
+    operate_over_motion_range(ed, op, start, end, kind, None, true);
 }
 
 /// The half of [`apply_op_with_motion`] that runs once the motion's endpoint
 /// is known: vim's range adjustments (`:h exclusive`, closed folds, the
 /// charwise-delete promotion), then the operator itself. `start` is where the
-/// cursor was; `word_fwd` marks `w` / `W`, whose end-of-line special case
-/// (`:h word`) is the one adjustment that depends on the motion.
+/// cursor was; `motion` is `None` for a mark. `w` / `W` have an end-of-line
+/// special case (`:h word`), and `%` is never promoted to linewise and takes a
+/// closed fold even when it found nothing.
 /// `include_folds` is false for a motion that succeeded without moving, whose
 /// range stays on the cursor's character inside a closed fold.
 fn operate_over_motion_range<H: hjkl_engine::types::Host>(
@@ -275,9 +275,11 @@ fn operate_over_motion_range<H: hjkl_engine::types::Host>(
     mut start: (usize, usize),
     mut end: (usize, usize),
     mut kind: RangeKind,
-    word_fwd: bool,
+    motion: Option<&Motion>,
     include_folds: bool,
 ) {
+    let word_fwd = matches!(motion, Some(Motion::WordFwd | Motion::BigWordFwd));
+    let percent = matches!(motion, Some(Motion::MatchBracket));
     // Where the cursor is parked before the operator runs: vim's operator
     // start, the earlier of the cursor and the motion's end, which is also the
     // cursor the undo step saves (`<ku` / `cbx<Esc>u` return there). `gq` /
@@ -362,7 +364,7 @@ fn operate_over_motion_range<H: hjkl_engine::types::Host>(
     //
     // `Comment` is dispatched to `toggle_comment_range` below, so it keeps its
     // normal motion-driven path.
-    if op != Operator::Comment && include_folds {
+    if op != Operator::Comment && (include_folds || percent) {
         let (top, bot) = order(start, end);
         if kind == RangeKind::Linewise {
             // Linewise: both edges grow to cover every closed fold the row
@@ -403,7 +405,10 @@ fn operate_over_motion_range<H: hjkl_engine::types::Host>(
     }
     // Delete only; `y}` / `c}` keep their charwise range, which is why this is
     // not folded into the adjustment above.
-    if delete_goes_linewise(ed, op, start, end, kind) {
+    // `d%` across lines stays charwise in nvim 0.12.5 (`d%` on two lines
+    // `(ab` / `cd)` leaves an empty line) where every other motion tried is
+    // promoted.
+    if !percent && delete_goes_linewise(ed, op, start, end, kind) {
         kind = RangeKind::Linewise;
     }
     // Restore cursor before selecting (so Yank leaves cursor at start).

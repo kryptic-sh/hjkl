@@ -22,6 +22,10 @@ patch bumps.
 
 ### Fixed
 
+- `d%` across lines stays a charwise delete, as in vim, where hjkl deleted the
+  whole lines. On a closed fold `%` opens the fold even when it finds no
+  bracket, and `d%` / `c%` there take the fold's text whether or not it found
+  one.
 - `o` on a closed fold opens the new line below the whole fold, and `O` above it
   even from a line hidden inside the fold, as in vim; hjkl opened `o` below the
   fold's first line.

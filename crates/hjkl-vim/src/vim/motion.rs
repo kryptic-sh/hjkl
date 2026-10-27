@@ -550,6 +550,10 @@ fn motion_opens_fold(motion: &Motion, count: usize, succeeded: bool) -> bool {
         // `hor`: `nv_beginline()` succeeds without moving, and so does
         // `nv_dollar()` unless a count runs it off the end of the buffer.
         Motion::LineStart | Motion::FirstNonBlank => true,
+        // `percent`: a `%` that finds no bracket still opens the fold under
+        // the cursor in nvim 0.12.5 (`zfj%j` from a bracket-less line ends
+        // below the fold's first line).
+        Motion::MatchBracket => true,
         Motion::LineEnd => succeeded || count == 1,
         // `hor`.
         Motion::Left
@@ -564,8 +568,6 @@ fn motion_opens_fold(motion: &Motion, count: usize, succeeded: bool) -> bool {
         | Motion::BigWordEnd
         | Motion::Find { .. }
         | Motion::FindRepeat { .. }
-        // `percent`.
-        | Motion::MatchBracket
         // `block`.
         | Motion::UnmatchedBracket { .. }
         | Motion::ParagraphPrev

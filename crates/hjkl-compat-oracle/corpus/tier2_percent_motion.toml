@@ -90,3 +90,27 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "d_percent_across_lines_stays_charwise"
+initial_buffer = "(ab\ncd)\nef"
+initial_cursor = [0, 0]
+keys = "d%"
+expected_buffer = "\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "d_percent_from_indent_stays_charwise"
+initial_buffer = "  (ab\ncd)\nef"
+initial_cursor = [0, 2]
+keys = "d%"
+expected_buffer = "  \nef"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
