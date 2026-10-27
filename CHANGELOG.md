@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- `u` after a charwise Visual operator or a Visual `r` returns the cursor to the
+  selection's start, as in vim, where it went back to the selection's end
+  (`vll~u` from column 0 now lands on column 0).
 - `D` and `C` on a closed fold delete or change the whole fold, as `d$` / `c$`
   do there and as vim does, instead of only the fold's first line from the
   cursor. From the fold's first line's last character, `D` / `C` / `d$` / `c$`

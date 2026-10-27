@@ -191,6 +191,12 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
             let anchor = vim(ed).visual_anchor;
             let cursor = ed.cursor();
             let (top, bot) = order(anchor, cursor);
+            // As in Visual-line: the selection's start is the operator's
+            // start, the cursor the undo step saves (`vll~u` returns to the
+            // first selected character). `gq` / `gw` keep the cursor.
+            if !matches!(op, Operator::Reflow | Operator::ReflowKeepCursor) {
+                buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
+            }
             match op {
                 Operator::Yank => {
                     let (from, to, kind) = charwise_visual_range(ed, top, bot);
@@ -226,19 +232,12 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                 | Operator::Lowercase
                 | Operator::ToggleCase
                 | Operator::Rot13 => {
-                    // Anchor stays where the visual selection started.
-                    let anchor = vim(ed).visual_anchor;
-                    let cursor = ed.cursor();
-                    let (top, bot) = order(anchor, cursor);
                     let (from, to, kind) = charwise_visual_range(ed, top, bot);
                     apply_case_op_to_selection(ed, op, from, to, kind);
                     record_visual_last_change(ed, op, charwise_extent(top, bot), register);
                 }
                 Operator::Indent | Operator::Outdent => {
                     ed.push_undo();
-                    let anchor = vim(ed).visual_anchor;
-                    let cursor = ed.cursor();
-                    let (top, bot) = order(anchor, cursor);
                     if op == Operator::Indent {
                         indent_rows(ed, top.0, bot.0, levels);
                     } else {
@@ -1052,6 +1051,16 @@ pub fn visual_replace_char<H: hjkl_engine::types::Host>(
         };
         vim_mut(ed).last_change = Some(LastChange::VisualReplace { ch, extent });
     }
+    // The undo step saves the selection's start, as for the operators: in
+    // Visual-line that is column 0 unless the cursor is above the anchor.
+    let start = if !linewise {
+        top
+    } else if ed.cursor().0 < vim(ed).visual_line_anchor {
+        ed.cursor()
+    } else {
+        top
+    };
+    buf_set_cursor_rc(ed.buffer_mut(), start.0, start.1);
     replace_range_with_char(ed, linewise, top, bot, ch);
 }
 /// Core of charwise/linewise Visual `r`: replace every character in

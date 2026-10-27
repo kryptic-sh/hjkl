@@ -44,6 +44,11 @@ and this project adheres to
 
 ### Fixed
 
+- `visual_operator_body`'s charwise branch parks the cursor on the selection's
+  start before the operator saves its undo step (except `gq` / `gw`), as the
+  Visual-line branch already did, and its case and shift arms use the bounds
+  computed once instead of re-deriving them from the cursor;
+  `visual_replace_char` parks it the same way.
 - `delete_to_eol_bridge` / `change_to_eol_bridge` take the
   `apply_op_with_motion` path for a count of one too when the cursor is on a
   closed fold, so the fold is included whole; the single-line shortcut stays for

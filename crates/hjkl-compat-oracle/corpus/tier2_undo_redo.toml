@@ -483,3 +483,87 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "visual_toggle_undo_returns_to_selection_start"
+initial_buffer = "abcdef"
+initial_cursor = [0, 0]
+keys = "vll~u"
+expected_buffer = "abcdef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_delete_undo_returns_to_selection_start"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "vjdu"
+expected_buffer = "ab\ncd\nef"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_shift_undo_returns_to_selection_start"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "vj>u"
+expected_buffer = "ab\ncd\nef"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_change_undo_returns_to_selection_start"
+initial_buffer = "abcdef"
+initial_cursor = [0, 1]
+keys = "vllcX<Esc>u"
+expected_buffer = "abcdef"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_replace_undo_returns_to_selection_start"
+initial_buffer = "abcdef"
+initial_cursor = [0, 0]
+keys = "vllrxu"
+expected_buffer = "abcdef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_visual_replace_undo_returns_to_column_zero"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 1]
+keys = "Vjrxu"
+expected_buffer = "ab\ncd\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_toggle_still_takes_whole_selection"
+initial_buffer = "abcdef"
+initial_cursor = [0, 0]
+keys = "vll~"
+expected_buffer = "ABCdef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
