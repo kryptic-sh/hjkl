@@ -1208,7 +1208,14 @@ fn handle_replace<H: Host>(
     // Consume the stashed count up front so a cancelled chord (Esc or any
     // non-char key) doesn't leak it into the next command.
     let count = ed.take_count();
-    if let Key::Char(ch) = input.key {
+    // `r<CR>` replaces with a line break in Normal mode. Visual `r<CR>` is
+    // left out: vim puts a literal carriage return in every selected cell,
+    // which the rope would read as a line break (see `docs/backlog.md`).
+    let key = match input.key {
+        Key::Enter if ed.fsm_mode() == FsmMode::Normal => Key::Char('\n'),
+        key => key,
+    };
+    if let Key::Char(ch) = key {
         if ed.fsm_mode() == FsmMode::VisualBlock {
             ed.replace_block_char(ch);
             return true;

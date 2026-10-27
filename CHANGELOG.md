@@ -22,6 +22,11 @@ patch bumps.
 
 ### Fixed
 
+- `r<CR>` replaces the character under the cursor with a line break, and
+  `[count]r<CR>` replaces `count` characters with one, as in vim, in
+  `hjkl_vim::dispatch_input` (the key path behind `--nvim-api`, the headless
+  mode and embedding); `<CR>` after `r` used to do nothing there. `j` / `k`
+  after `[count]r` aim for the column it leaves the cursor in.
 - `.` after `yy` repeats the change before it, as in vim, where `yy` used to
   become the change `.` repeated.
 - `>`, `<`, `=`, `gq`, `gw`, `zf` and `gc` over a text object that ends at the

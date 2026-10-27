@@ -1057,6 +1057,18 @@ fail on the parent commit, the other 6 are negative guards).
   only public fields, so a new field breaks a struct literal outside the
   workspace; `#[non_exhaustive]` on them, in a minor release, would make the
   addition safe.
+- **Visual `r<CR>` cannot be represented.** vim replaces every selected cell
+  with a literal carriage return (`vr<CR>` on `"abcd"` gives `"\rbcd"` in nvim
+  0.12.5), but the rope reads `\r` as a line break, so the buffer would split
+  instead. `step_normal`'s `r` chord therefore maps `<Enter>` only in Normal
+  mode (2026-10-27); Visual `r<CR>` stays a no-op that keeps Visual mode, which
+  also differs from nvim. Not attempted: a line model that stores `\r` inside a
+  line.
+- **`r<CR>` with `'autoindent'` was not measured.** The
+  `tier2_replace_mode.toml` cases for it set `autoindent = false`;
+  `replace_char` gets the indent from `insert_newline_bridge`, the Insert-mode
+  `<CR>` that vim's `nv_replace` also runs, but no case with `autoindent = true`
+  pins it.
 - **The TUI's Visual `/` / `?` were not checked.** The 2026-10-27 fix wires them
   in `hjkl_vim::dispatch_input` (`step_normal`, `normal.rs`), which the oracle,
   `--nvim-api`, the headless mode and embedding use. The interactive app routes

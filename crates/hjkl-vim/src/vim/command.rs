@@ -450,6 +450,22 @@ pub fn replace_char<H: hjkl_engine::types::Host>(
         return;
     }
     ed.push_undo();
+    // `r<CR>`: vim's `nv_replace` deletes the `count` characters and types one
+    // `<CR>` in Insert mode, so they become a single line break (with
+    // `'autoindent'` as Insert mode applies it), and `<Esc>` steps back.
+    if ch == '\n' {
+        ed.mutate_edit(Edit::DeleteRange {
+            start,
+            end: Position::new(start.row, start.col + count),
+            kind: MotionKind::Char,
+        });
+        crate::vim::insert_newline_bridge(ed);
+        if buf_cursor_pos(ed.buffer()).col > 0 {
+            hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
+        }
+        remember_cursor_column(ed);
+        return;
+    }
     for _ in 0..count {
         let cursor = buf_cursor_pos(ed.buffer());
         let line_chars = buf_line_chars(ed.buffer(), cursor.row);
@@ -465,6 +481,7 @@ pub fn replace_char<H: hjkl_engine::types::Host>(
     }
     // Vim leaves the cursor on the last replaced char.
     hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
+    remember_cursor_column(ed);
 }
 /// Returns `false` when there is no char under the cursor to toggle
 /// (end of line / empty line) so counted loops can stop instead of

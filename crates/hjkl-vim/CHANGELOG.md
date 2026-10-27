@@ -44,6 +44,11 @@ and this project adheres to
 
 ### Fixed
 
+- `step_normal`'s `r` chord takes `<Enter>` as `'\n'` in Normal mode, and
+  `replace_char` turns a `'\n'` into vim's `nv_replace` line break: it deletes
+  the `count` characters and runs `insert_newline_bridge` (so `'autoindent'`
+  applies) before the `<Esc>` step-back. `replace_char` now stores the curswant
+  with `remember_cursor_column`.
 - `apply_op_double` no longer records a `LastChange::LineOp` for
   `Operator::Yank`.
 - `apply_op_with_text_object` ends the row-wise operators (`Indent`, `Outdent`,

@@ -81,3 +81,87 @@ initial_cursor = [0, 0]
 keys = "RXY<BS><Esc>l."
 expected_buffer = "XXcdef\n"
 expected_mode = "normal"
+
+[[cases]]
+name = "replace_with_enter_splits_the_line"
+initial_buffer = "abcd"
+initial_cursor = [0, 1]
+keys = "r<CR>"
+expected_buffer = "a\ncd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_replace_with_enter_is_one_line_break"
+initial_buffer = "abcd"
+initial_cursor = [0, 1]
+keys = "2r<CR>"
+expected_buffer = "a\nd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_replace_with_enter_past_line_end_fails"
+initial_buffer = "abcd"
+initial_cursor = [0, 1]
+keys = "5r<CR>"
+expected_buffer = "abcd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "replace_with_enter_keeps_blanks_without_autoindent"
+initial_buffer = "ab  cd"
+initial_cursor = [0, 1]
+keys = "r<CR>"
+expected_buffer = "a\n  cd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "replace_with_enter_repeats_with_dot"
+initial_buffer = "abcd"
+initial_cursor = [0, 1]
+keys = "r<CR>."
+expected_buffer = "a\n\nd"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "replace_with_enter_undoes_in_one_step"
+initial_buffer = "abcd"
+initial_cursor = [0, 1]
+keys = "r<CR>u"
+expected_buffer = "abcd"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_replace_sets_curswant_for_j"
+initial_buffer = "abcd\nabcdef"
+initial_cursor = [0, 0]
+keys = "3rxj"
+expected_buffer = "xxxd\nabcdef"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
