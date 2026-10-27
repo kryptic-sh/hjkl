@@ -224,3 +224,75 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+
+[[cases]]
+name = "visual_search_extends_selection"
+initial_buffer = "aa\nbb\ncc\ndd"
+initial_cursor = [0, 0]
+keys = "v/cc<CR>d"
+expected_buffer = "c\ndd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_search_backward_extends_selection"
+initial_buffer = "aa\nbb\ncc\ndd"
+initial_cursor = [3, 0]
+keys = "v?bb<CR>d"
+expected_buffer = "aa\nd"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_visual_search_extends_selection"
+initial_buffer = "aa\nbb\ncc\ndd"
+initial_cursor = [0, 0]
+keys = "V/cc<CR>d"
+expected_buffer = "dd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_visual_search_extends_block"
+initial_buffer = "aa\nbb\ncc\ndd"
+initial_cursor = [0, 0]
+keys = "<C-v>/cc<CR>d"
+expected_buffer = "a\nb\nc\ndd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_search_without_match_keeps_selection"
+initial_buffer = "aa\nbb\ncc\ndd"
+initial_cursor = [0, 0]
+keys = "v/zz<CR>d"
+expected_buffer = "a\nbb\ncc\ndd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_search_opens_fold_at_match"
+initial_buffer = "aa\nbb\ncc\ndd"
+initial_cursor = [0, 0]
+keys = "jzfjggv/cc<CR><Esc>dd"
+expected_buffer = "aa\nbb\ndd"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

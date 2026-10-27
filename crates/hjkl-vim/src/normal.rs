@@ -231,6 +231,12 @@ pub fn step_normal<H: Host>(
         _ => {}
     }
 
+    // Visual mode: `/` / `?` search, the match extending the selection.
+    if ed.is_visual() && !input.ctrl && matches!(input.key, Key::Char('/') | Key::Char('?')) {
+        ed.enter_search(input.key == Key::Char('/'));
+        return true;
+    }
+
     // Visual mode: `p` / `P` replace the selection with the register.
     if ed.is_visual() && !input.ctrl && matches!(input.key, Key::Char('p') | Key::Char('P')) {
         ed.visual_paste(matches!(input.key, Key::Char('P')));

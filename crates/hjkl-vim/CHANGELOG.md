@@ -44,6 +44,8 @@ and this project adheres to
 
 ### Fixed
 
+- `step_normal` handles `/` / `?` in the Visual modes with `enter_search`; they
+  were reachable only from Normal mode (`handle_normal_only`).
 - `replay_last_change` maps a recorded `Motion::ChangeWordEnd` back to the typed
   `w` / `W` and runs `change_word_motion` against the replay's cursor, so the
   `cw` rewrite follows where `.` starts instead of where the change did.

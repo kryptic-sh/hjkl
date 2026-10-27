@@ -22,6 +22,10 @@ patch bumps.
 
 ### Fixed
 
+- `/` and `?` in Visual mode open the search prompt and extend the selection to
+  the match, as in vim, in `hjkl_vim::dispatch_input` (the key path behind
+  `--nvim-api`, the headless mode and embedding). They used to fall through as
+  other commands, so `v/cc<CR>` ran a `c` change on the selection.
 - `.` of a `cw` / `cW` decides afresh where it starts, as in vim: a `cw` typed
   on a blank and repeated inside a word changes to the word's end, where hjkl
   also took the space after it, and the reverse.
