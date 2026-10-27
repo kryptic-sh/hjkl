@@ -1865,6 +1865,41 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             }
             return;
         }
+        // vim's `current_par` in Visual-line mode extends the selection
+        // instead of selecting afresh when it is taller than one line, or
+        // when the fresh object starts on the cursor's own line ("when doing
+        // `Vipipip` nothing happens in a single white line, we get the same
+        // area. So extend it instead."). A Visual block taller than one row
+        // extends the same way, keeping its mode and anchor, with
+        // `block_vcol` moved to the landing column so `block_bounds` sees the
+        // new geometry.
+        let paragraph_anchor = match crate::vim_state::vim(self).mode {
+            FsmMode::VisualLine => Some(crate::vim_state::vim(self).visual_line_anchor),
+            FsmMode::VisualBlock => Some(crate::vim_state::vim(self).block_anchor.0),
+            _ => None,
+        };
+        if obj == TextObject::Paragraph
+            && let Some(anchor_row) = paragraph_anchor
+        {
+            let cur_row = self.cursor().0;
+            let block = crate::vim_state::vim(self).mode == FsmMode::VisualBlock;
+            let extend = cur_row != anchor_row
+                || (!block
+                    && crate::vim::text_object_range(self, obj, inner, count)
+                        .is_some_and(|(start, _, _)| start.0 == cur_row));
+            if extend {
+                if let Some(row) =
+                    crate::vim::paragraph_extend_landing(self, cur_row, anchor_row, inner, count)
+                {
+                    self.jump_cursor(row, 0);
+                    if block {
+                        crate::vim_state::vim_mut(self).block_vcol = 0;
+                        crate::vim_state::vim_mut(self).block_to_eol = false;
+                    }
+                }
+                return;
+            }
+        }
         let reverse_block_sentence = obj == TextObject::Sentence
             && crate::vim_state::vim(self).mode == FsmMode::VisualBlock
             && self.cursor().0 < crate::vim_state::vim(self).block_anchor.0;
@@ -1903,14 +1938,13 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             return;
         };
         // B6: `:h v_ip` — when the selection ALREADY exactly equals this
-        // text object's natural bounds (the user is re-applying `ip`/`ap`/
-        // etc. to a selection it already produced, e.g. `vipip`), the
+        // text object's natural bounds (the user is re-applying `iw` / `i(`
+        // etc. to a selection it already produced, e.g. `viwiw`), the
         // object GROWS instead of re-selecting the identical (so
-        // no-op-looking) range. `ip`/`ap` alternate paragraph and
-        // blank-run units this way; growth is implemented generically here
-        // by probing the SAME text object one row past the current end and
-        // unioning the two ranges, rather than hand-rolling paragraph-
-        // specific alternation logic.
+        // no-op-looking) range. Growth is implemented generically here by
+        // probing the SAME text object past the current end and unioning
+        // the two ranges. The paragraph objects, the linewise ones, extend
+        // through vim's own walk before the fresh range above.
         // Compare the SELECTION'S END (which the cursor always tracks, by
         // this function's own construction below) against the freshly
         // computed object's end — NOT the anchor. After a grow, the anchor
@@ -1918,52 +1952,27 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         // moving, so an anchor-based check would only ever match once
         // (verified against real nvim: `vipipipd`, three applications,
         // grows a second time too — the anchor-based check breaks that).
-        let already_matches = match kind {
-            // From a one-line `V` selection vim selects the object afresh,
-            // unless it is that same one line (vim's `current_par`: "when
-            // doing `Vipipip` … we get the same area", then extends).
-            // `Vip` on the last line of a paragraph takes the whole paragraph.
-            RangeKind::Linewise => {
-                let cursor_row = self.cursor().0;
-                crate::vim_state::vim(self).mode == FsmMode::VisualLine
-                    && if crate::vim_state::vim(self).visual_line_anchor == cursor_row {
-                        start.0 == cursor_row && end.0 == cursor_row
-                    } else {
-                        cursor_row == end.0
-                    }
-            }
-            // vim extends a charwise selection only once it is bigger than
-            // one character: a one-character object on a fresh `v`
-            // (`viw` on a one-letter word, `vis` on an empty line) is
-            // selected again, not grown.
-            _ => {
-                crate::vim_state::vim(self).mode == FsmMode::Visual
-                    && crate::vim_state::vim(self).visual_anchor != self.cursor()
-                    && self.cursor() == crate::vim::retreat_one(self, end)
-            }
-        };
+        //
+        // vim extends a charwise selection only once it is bigger than one
+        // character: a one-character object on a fresh `v` (`viw` on a
+        // one-letter word, `vis` on an empty line) is selected again, not
+        // grown.
+        let already_matches = kind != RangeKind::Linewise
+            && crate::vim_state::vim(self).mode == FsmMode::Visual
+            && crate::vim_state::vim(self).visual_anchor != self.cursor()
+            && self.cursor() == crate::vim::retreat_one(self, end);
         // When growing, keep the EXISTING anchor (the first application's
         // start) — `start` above is the freshly computed single-object's
-        // start (e.g. the blank run's own start on a second `ip`), which is
-        // NOT where the accumulated selection began.
+        // start, which is NOT where the accumulated selection began.
         //
-        // The probe position differs by kind: Linewise units are probed one
-        // ROW past the current end (`ip`/`ap` grow onto the next line);
-        // charwise units (`iw`, quotes, brackets, …) are probed at `end`
-        // directly — `end` for an Exclusive object already points ONE PAST
-        // the last selected char, i.e. exactly where the next same-line unit
-        // begins (verified against real nvim: `viwiw` on "foo bar baz"
-        // grows "foo" to "foo " — the following WHITESPACE run on the SAME
-        // row, not a jump to the next line).
+        // The probe is `end` itself: `end` for an Exclusive object already
+        // points ONE PAST the last selected char, i.e. exactly where the
+        // next same-line unit begins (verified against real nvim: `viwiw`
+        // on "foo bar baz" grows "foo" to "foo " — the following WHITESPACE
+        // run on the SAME row, not a jump to the next line).
         let (start, end) = if already_matches {
-            let existing_start = match kind {
-                RangeKind::Linewise => (crate::vim_state::vim(self).visual_line_anchor, 0),
-                _ => crate::vim_state::vim(self).visual_anchor,
-            };
-            let probe = match kind {
-                RangeKind::Linewise => (end.0 + 1, 0),
-                _ => end,
-            };
+            let existing_start = crate::vim_state::vim(self).visual_anchor;
+            let probe = end;
             let saved_cursor = self.cursor();
             self.jump_cursor(probe.0, probe.1);
             let grown = crate::vim::text_object_range(self, obj, inner, 1)
@@ -2017,28 +2026,11 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             if let TextObject::Bracket(_) | TextObject::XmlTag = obj {
                 return;
             }
-            // Paragraph (`ip`) and sentence (`is`) objects EXTEND the block
-            // (nvim-measured): mode and anchor stay, the cursor lands at
-            // the object-extend position, and `block_vcol` syncs to the
-            // landing column so `block_bounds` sees the new geometry. A
-            // single-row block falls through to the collapse below (vim
-            // takes its normal object path there).
-            if let TextObject::Paragraph = obj {
-                let (cur_row, _) = self.cursor();
-                let anchor_row = crate::vim_state::vim(self).block_anchor.0;
-                if cur_row != anchor_row {
-                    if let Some(land_row) =
-                        crate::vim::paragraph_extend_landing(self, cur_row, anchor_row, inner)
-                    {
-                        self.jump_cursor(land_row, 0);
-                        crate::vim_state::vim_mut(self).block_vcol = 0;
-                        crate::vim_state::vim_mut(self).block_to_eol = false;
-                        return;
-                    }
-                    // Buffer edge: vim's `current_par` FAILs (a no-op).
-                    return;
-                }
-            }
+            // Sentence (`is`) objects EXTEND the block (nvim-measured; the
+            // paragraph objects do too, handled before the fresh range):
+            // mode and anchor stay, the cursor lands at the object-extend
+            // position. A single-row block falls through to the collapse
+            // below (vim takes its normal object path there).
             if let TextObject::Sentence = obj {
                 let (cur_row, _) = self.cursor();
                 let anchor_row = crate::vim_state::vim(self).block_anchor.0;

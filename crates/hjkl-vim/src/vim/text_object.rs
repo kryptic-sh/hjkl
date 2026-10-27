@@ -1716,26 +1716,24 @@ pub fn paragraph_text_object<H: hjkl_engine::types::Host>(
     Some(((top, 0), (bot, end_col)))
 }
 
-/// Landing row for `ip`/`ap` in a MULTI-LINE visual selection — vim's
+/// Landing row for `ip` / `ap` extending a Visual selection — vim's
 /// `current_par` "extend" path (`textobject.c`): the anchor and visual mode
-/// stay untouched and the cursor walks one same-blankness run past itself,
-/// away from the anchor, landing at the run's end on column 0. `ap`
+/// stay untouched and, `count` times, the cursor walks one same-blankness
+/// run past itself, away from the anchor (forward when the cursor is on the
+/// anchor's row), landing at the run's end on column 0. `ap`
 /// (`inner == false`) continues with a second run of the opposite
-/// blankness, mirroring `current_par`'s `include` loop. `None` when the
-/// block is a single row (vim takes the normal object path there) or the
-/// first step leaves the buffer (vim's `current_par` FAILs — a no-op, not
-/// a collapse). Measured against neovim 0.12.4: `<C-v>jip` on
-/// `"one\n\ntwo\n"` lands the cursor on row 2 with the block spanning rows
-/// 0-2 at column 0.
+/// blankness, mirroring `current_par`'s `include` loop. A repetition that
+/// starts on the buffer's first / last line is vim's `FAIL`: the walk stops
+/// there, and `None` means it never moved (a no-op, not a collapse).
+/// Measured against neovim 0.12.4: `<C-v>jip` on `"one\n\ntwo\n"` lands
+/// the cursor on row 2 with the block spanning rows 0-2 at column 0.
 pub fn paragraph_extend_landing<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     cursor_row: usize,
     anchor_row: usize,
     inner: bool,
+    count: usize,
 ) -> Option<usize> {
-    if cursor_row == anchor_row {
-        return None;
-    }
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let raw_n_lines = rope.len_lines();
     // Mirror `paragraph_text_object`'s phantom-row-aware count: the single
@@ -1747,35 +1745,33 @@ pub fn paragraph_extend_landing<H: hjkl_engine::types::Host>(
         raw_n_lines
     };
     let dir: isize = if cursor_row < anchor_row { -1 } else { 1 };
-    let first = cursor_row as isize + dir;
-    if first < 0 || first >= n_lines as isize {
-        return None;
-    }
-    let edge = |r: isize| r < 0 || r >= n_lines as isize;
     let is_blank = |r: isize| rope_line_to_str(&rope, r as usize).trim().is_empty();
     // vim's `current_par` treats the first / last line as the walk's edge:
-    // the t=1 run never starts from the boundary line.
+    // no run steps past it, and a repetition cannot start from it.
     let boundary = if dir < 0 { 0 } else { n_lines as isize - 1 };
-    let mut land = first;
-    let mut prev_blank: Option<bool> = None;
-    for t in 0..2 {
-        if t == 1 {
+    let mut land = cursor_row as isize;
+    for _ in 0..count.max(1) {
+        if land == boundary {
+            break;
+        }
+        let mut prev_blank: Option<bool> = None;
+        for _ in 0..2 {
             land += dir;
-            if prev_blank == Some(is_blank(land)) {
+            let blank0 = is_blank(land);
+            if prev_blank == Some(blank0) {
                 land -= dir;
                 break;
             }
+            while land != boundary && is_blank(land + dir) == blank0 {
+                land += dir;
+            }
+            if inner || land == boundary {
+                break;
+            }
+            prev_blank = Some(blank0);
         }
-        let blank0 = is_blank(land);
-        while !edge(land + dir) && is_blank(land + dir) == blank0 {
-            land += dir;
-        }
-        if inner || land == boundary {
-            break;
-        }
-        prev_blank = Some(blank0);
     }
-    Some(land as usize)
+    (land != cursor_row as isize).then_some(land as usize)
 }
 
 #[cfg(test)]

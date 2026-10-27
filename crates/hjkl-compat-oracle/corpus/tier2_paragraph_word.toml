@@ -1024,3 +1024,99 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "linewise_visual_ap_on_one_line_paragraph_extends"
+initial_buffer = "ab\n\ncd\nxy"
+initial_cursor = [0, 0]
+keys = "Vapd"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_visual_ap_twice_stops_at_buffer_end"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [0, 0]
+keys = "Vapapd"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_visual_ap_extends_one_unit"
+initial_buffer = "ab\n\ncd\n\nef"
+initial_cursor = [0, 0]
+keys = "Vapd"
+expected_buffer = "\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_visual_count_ap_extends_count_units"
+initial_buffer = "ab\n\ncd\n\nef\n\ngh"
+initial_cursor = [0, 0]
+keys = "V2apd"
+expected_buffer = "\ngh"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_visual_ap_on_last_paragraph_selects_afresh"
+initial_buffer = "ab\n\ncd"
+initial_cursor = [2, 0]
+keys = "Vapd"
+expected_buffer = "ab"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_visual_count_ap_past_the_end_stops_there"
+initial_buffer = "ab\n\ncd\n\nef"
+initial_cursor = [0, 0]
+keys = "Vj9apd"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "linewise_visual_ap_extends_upward"
+initial_buffer = "ab\n\ncd\n\nef"
+initial_cursor = [4, 0]
+keys = "Vkapd"
+expected_buffer = "ab"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_count_ap_past_the_end_stops_there"
+initial_buffer = "ab\n\ncd\n\nef"
+initial_cursor = [0, 0]
+keys = "<C-v>j9ap<Esc>"
+expected_buffer = "ab\n\ncd\n\nef"
+expected_cursor = [4, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

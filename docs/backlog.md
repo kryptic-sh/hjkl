@@ -1272,14 +1272,6 @@ Seen while measuring, not `gq`:
   stopping at a blank line), but the register type of such a delete (charwise in
   hjkl, possibly linewise in vim) was not compared.
 
-- **`Vap` from a one-line paragraph's line stops short.** `Vapy` @ (0,0) on
-  `"ab\n\ncd"`: nvim yanks all three lines (`"ab\n\ncd\n"`), hjkl `"ab\n\n"`;
-  `Vapapy` there gives nvim the same and hjkl `"\ncd\n"`. `Vipy` in the same
-  spot agrees since the 2026-10-20 fix (the object extends when it is the one
-  selected line), and `Vapy` from row 1 of `"ab\ncd\n\nef"` agrees. nvim's
-  result looks like `current_par` extending here too, but `ap`'s fresh range is
-  two lines, not the one selected, so the condition that triggers it was not
-  pinned down; vim's source was not read.
 - **A linewise delete that leaves a real empty last line lands one row high.**
   `Vipp` (empty register) @ (2,7) on `"baz\n\n\t{foo}, {a}"` leaves `"baz\n"` in
   both, but nvim's cursor is on (1,0), the empty line it kept, and hjkl's on

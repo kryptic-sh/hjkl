@@ -22,6 +22,12 @@ patch bumps.
 
 ### Fixed
 
+- `ap` / `ip` in line-wise Visual mode extend the selection when vim does: from
+  a one-line paragraph, `Vap` takes the blank lines after it and the next
+  paragraph, `V2ap` counts units, and a count with too few paragraphs left goes
+  as far as it can. hjkl stopped after the blank lines, and a second `ap`
+  dropped the first paragraph from the selection. A Visual block taller than one
+  row extends the same way under a count.
 - A Visual block taken by `j` / `k` onto a shorter line narrows to where the
   cursor lands, as in vim: `<C-v>jd` from the `d` of `"abcd\nab"` deletes `cd`,
   where hjkl deleted only the `d` and padded the short line. Back on a long

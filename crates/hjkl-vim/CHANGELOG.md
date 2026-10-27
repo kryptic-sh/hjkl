@@ -44,6 +44,12 @@ and this project adheres to
 
 ### Fixed
 
+- `visual_text_obj_extend` sends Visual-line and Visual-block `ip` / `ap`
+  through `paragraph_extend_landing`, vim's `current_par` extend walk, when the
+  selection is taller than one line or (Visual-line) the fresh object starts on
+  the cursor's row, replacing the generic one-row grow for linewise objects.
+  `paragraph_extend_landing` takes a `count` and walks as far as it can before
+  vim's `FAIL`, and no longer refuses a one-row selection.
 - `update_block_vcol` syncs `block_vcol` to the cursor after `Motion::Up` /
   `Down`, as vim's `block_prep` reads the cursor's own column: a block taken
   onto a shorter line narrows to the cursor (the line's NUL in Visual), where it
