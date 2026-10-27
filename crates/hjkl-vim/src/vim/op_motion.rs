@@ -790,8 +790,11 @@ fn operator_over_range_body<H: hjkl_engine::types::Host>(
                 // insert. The helper handles push_undo + insert entry.
                 change_linewise_rows(ed, top.0, bot.0);
             } else {
-                // Charwise change: cut the range and enter insert.
+                // Charwise change: cut the range and enter insert. The undo
+                // step saves the range's start, so `u` returns there even when
+                // a closed fold moved it before the cursor (`zfjcl`).
                 vim_mut(ed).change_mark_start = Some(top);
+                buf_set_cursor_rc(ed.buffer_mut(), top.0, top.1);
                 ed.push_undo();
                 cut_vim_range(ed, top, bot, kind);
                 begin_insert_noundo(ed, 1, InsertReason::AfterChange);

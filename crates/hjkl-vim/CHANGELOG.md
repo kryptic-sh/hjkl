@@ -44,6 +44,9 @@ and this project adheres to
 
 ### Fixed
 
+- `substitute_char_bridge` runs `cl` through `apply_op_with_motion` on a closed
+  fold, and the charwise change in `run_operator_over_range` saves its undo step
+  with the cursor on the range's start.
 - `do_char_delete` and the `l` operator path in `apply_op_with_motion` do not
   widen to a closed fold when the cursor is on its line's last character, where
   vim's `l` cannot move.

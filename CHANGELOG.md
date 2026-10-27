@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- `s` on a closed fold changes the whole fold, as `cl` does in vim, where hjkl
+  changed one character; `u` after `s` or `cl` there returns to the fold's first
+  column.
 - `x`, `dl`, `yl` and `cl` on a closed fold with the cursor on its line's last
   character act on just that character, as in vim, where hjkl took the whole
   fold; from anywhere else on the line they still take the fold.

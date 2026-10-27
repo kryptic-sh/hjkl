@@ -190,8 +190,29 @@ pub fn substitute_char_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     count: usize,
 ) {
-    use hjkl_buffer::{Edit, MotionKind, Position};
     let register = vim(ed).pending_register;
+    if on_closed_fold(ed) {
+        // `cl` on a closed fold changes the whole fold, or just the line's
+        // last character with the cursor on it; the operator path knows both.
+        apply_op_with_motion(ed, Operator::Change, &Motion::Right, count.max(1));
+    } else {
+        substitute_chars(ed, count);
+    }
+    if !vim(ed).replaying {
+        vim_mut(ed).last_change = Some(LastChange::OpMotion {
+            op: Operator::Change,
+            motion: Motion::Right,
+            count: count.max(1),
+            inserted: None,
+            register,
+        });
+    }
+}
+fn substitute_chars<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    count: usize,
+) {
+    use hjkl_buffer::{Edit, MotionKind, Position};
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
     // vim's `s` is `cl`: the deleted text lands in the unnamed register, so
@@ -219,15 +240,6 @@ pub fn substitute_char_bridge<H: hjkl_engine::types::Host>(
         ed.record_delete(deleted, false, target);
     }
     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
-    if !vim(ed).replaying {
-        vim_mut(ed).last_change = Some(LastChange::OpMotion {
-            op: Operator::Change,
-            motion: Motion::Right,
-            count: count.max(1),
-            inserted: None,
-            register,
-        });
-    }
 }
 /// `S` — substitute the whole line (delete line contents then enter Insert).
 /// Equivalent to `cc`. Records `LastChange::LineOp` for dot-repeat.
