@@ -1098,35 +1098,14 @@ fail on the parent commit, the other 6 are negative guards).
   keys through its own keymap, which binds `/` / `?` (`OpenSearchPrompt`) in
   Normal mode only (`keymap_build.rs`); what Visual `/` does there was not
   tried.
-- **The curswant after `zf` / on a closed fold is not pinned down.** The other
-  operators now reset the curswant to the cursor (`remember_operator_column`);
-  `zf{motion}` is left alone, keeping whatever curswant came before, because the
-  measurements do not fit one simple rule. All on nvim 0.12.5 through `dfcase`:
-  - `zfGj` @ (0,4) on `"abcdef"` (the `j` fails) lands on (0,0), and so does
-    `zfGgqj`; `lzfjzoj` @ (0,1) on `"abcd\nefgh\nijkl\nmnop"` lands on (1,0). A
-    curswant of 0 after `zf` fits these.
-  - But on an indented line it does not: `>EzfGgqj` @ (0,1) on `"foo, [hello]"`
-    (`>E` indents to `"    foo, [hello]"`, cursor (0,4)) stays on (0,4); and
-    `zfGr gqj` @ (0,1) on `"    [foo] [_id] bar"` stays on (0,1).
-  - The old reading of nvim's source (an operator leaves `w_set_curswant`
-    pending, the next vertical motion takes curswant from `w_virtcol`, which is
-    special on a folded line) would explain all of them if the folded-line
-    `w_virtcol` is the indent or the column of the last change, but that is not
-    confirmed. `[count]zF` has the same question. hjkl parks it on the top row's
-    first non-blank, which matches nvim on unindented lines (`2zFj` @ (1,2) on
-    `"xx yy\nabc def\nghi\njkl\n"` lands on (3,0), `jzFk` @ (0,3) on (0,0)). On
-    an indented line it does not: on `"  ab\ncd\nef"` @ (0,3), nvim's `2zFx`
-    deletes only the `b` (the cursor kept column 3) and `2zFjk` comes back on
-    (0,0), where hjkl's `x` takes the whole fold and `jk` comes back on (0,2).
-  - `x` / `dl` / `d$` on the fresh closed fold depend on it too (2026-10-20, on
-    `"ab\ncd\nef"`): `zfjx` / `zfjzcx` @ (0,1) delete just the `b` in nvim (the
-    cursor kept column 1), `zfjx` @ (0,0) and `zfj0x` delete the whole fold, and
-    `zfjjkx` @ (0,1) deletes the whole fold too — nvim's `jk` comes back on
-    column 0 — while hjkl's comes back on column 1. hjkl's `x` takes the whole
-    fold from any column (`do_char_delete`, `command.rs`), so making it
-    column-0-only fixes the first two but breaks `zfjjkx` until the curswant
-    question is settled; tried and reverted. `zfjk` @ (1,1) and `zfjj` / `zfjjk`
-    @ (0,1) also land on column 0 in nvim, column 1 in hjkl.
+- **`x` on a fresh closed fold takes the whole fold from any column.** nvim
+  deletes just the character under the cursor unless the cursor is on column 0
+  (2026-10-20, on `"ab\ncd\nef"`): `zfjx` / `zfjzcx` @ (0,1) delete just the
+  `b`, while `zfjx` @ (0,0), `zfj0x` and `zfjjkx` @ (0,1) delete the whole fold.
+  hjkl's `x` takes the whole fold from any column (`do_char_delete`,
+  `command.rs`). Making it column-0-only was tried and reverted while `zfjjkx`
+  came back on column 1; `zf` over a linewise motion now leaves a curswant of 0,
+  so `zfjjkx` lands on column 0 and the column-0 rule can be tried again.
 - **Left by the operator + mark work (2026-10-18):**
   - **Undo/redo cursor gaps left after the operator-delete fix.** On
     `"aa bb\n  cc dd\nee ff\ngg hh\n"` @ (0,3), all the same on the parent

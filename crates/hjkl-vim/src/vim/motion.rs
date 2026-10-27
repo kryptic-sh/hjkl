@@ -132,6 +132,11 @@ pub fn execute_motion<H: hjkl_engine::types::Host>(
             if matches!(motion, Motion::ScreenUp | Motion::ScreenDown)
                 && pre_pos.0 == post_pos.0
                 && screen_wraps(ed) => {}
+        // A `j` / `k` that cannot move fails in vim and leaves the cursor where
+        // it was, even when the curswant names another column (after `zfj`,
+        // say), so the clamp onto the want is skipped.
+        MotionClass::Vertical
+            if matches!(motion, Motion::Up | Motion::Down) && pre_pos == post_pos => {}
         MotionClass::Vertical => {
             // Re-run the sticky clamp on the landed row. The vertical motion
             // fns already clamped there, so this only confirms the

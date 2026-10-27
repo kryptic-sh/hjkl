@@ -44,6 +44,10 @@ and this project adheres to
 
 ### Fixed
 
+- `run_operator_over_range` sets the sticky column to 0 after `zf` over a
+  linewise range, `[count]zF` keeps the cursor where it was with a sticky column
+  of 0, and `execute_motion` skips the vertical re-move after a `j` / `k` that
+  did not move.
 - `apply_visual_operator` widens the selection over closed folds before the
   operator runs (`include_closed_folds_in_selection`): the earlier end moves to
   its fold's first line, column 0, the later one to its fold's last line past

@@ -677,10 +677,13 @@ pub fn run_operator_over_range<H: hjkl_engine::types::Host>(
     kind: RangeKind,
 ) {
     operator_over_range_body(ed, op, start, end, kind);
-    // Not after `zf`: what vim's curswant becomes on a closed fold is not
-    // pinned down (docs/backlog.md), so it stays as it was.
+    // `zf` over a linewise motion leaves the cursor's column alone but makes
+    // the curswant 0, as vim does once it starts a linewise range at column 0;
+    // over a charwise motion the curswant stays as it was.
     if op != Operator::Fold {
         remember_operator_column(ed);
+    } else if kind == RangeKind::Linewise {
+        ed.set_sticky_col(Some(0));
     }
 }
 

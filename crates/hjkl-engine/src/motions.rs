@@ -1168,6 +1168,11 @@ fn move_vertical<B: Cursor + Query>(
             }
         }
     }
+    // A `j` / `k` that cannot move fails in vim and leaves the cursor where it
+    // was, even when the curswant names another column.
+    if target_row == cursor.row {
+        return;
+    }
     // Convert the display column back to a char index on the target line.
     // On a line with tabs, display col 8 might map to char index 5, etc.
     let line = read_line(buf, target_row);

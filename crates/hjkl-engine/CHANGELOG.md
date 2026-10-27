@@ -17,6 +17,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `motions::move_up` / `move_down` that cannot move leave the cursor in place
+  instead of moving it to the sticky column on the same row.
 - `motions::move_up` (and every `k` built on `move_vertical`) from a row hidden
   inside a closed fold counts from the fold's first line, as vim's `cursor_up`
   does, so `k` lands above the fold instead of on it.

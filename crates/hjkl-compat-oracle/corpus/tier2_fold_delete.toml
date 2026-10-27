@@ -1394,3 +1394,99 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "zf_linewise_then_k_lands_on_column_zero"
+initial_buffer = "abcdef\nabcdef\nabcdef\nabcdef"
+initial_cursor = [1, 4]
+keys = "zfjk"
+expected_buffer = "abcdef\nabcdef\nabcdef\nabcdef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "zf_linewise_zo_then_j_lands_on_column_zero"
+initial_buffer = "abcdef\nabcdef\nabcdef\nabcdef"
+initial_cursor = [1, 4]
+keys = "zfjzoj"
+expected_buffer = "abcdef\nabcdef\nabcdef\nabcdef"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "zf_indented_then_j_lands_on_column_zero"
+initial_buffer = "  abcd\n  abcd\nabcdef\nabcdef"
+initial_cursor = [0, 4]
+keys = "zfjj"
+expected_buffer = "  abcd\n  abcd\nabcdef\nabcdef"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "zf_charwise_keeps_curswant"
+initial_buffer = "abcdef\nabcdef\nabcdef\nabcdef"
+initial_cursor = [1, 4]
+keys = "zfwzoj"
+expected_buffer = "abcdef\nabcdef\nabcdef\nabcdef"
+expected_cursor = [2, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "zf_fold_at_end_failed_j_keeps_column"
+initial_buffer = "abcdef\nabcdef\nab"
+initial_cursor = [1, 4]
+keys = "zfjj"
+expected_buffer = "abcdef\nabcdef\nab"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_zf_keeps_cursor_column"
+initial_buffer = "  ab\ncd\nef"
+initial_cursor = [0, 3]
+keys = "2zF"
+expected_buffer = "  ab\ncd\nef"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "count_zf_then_jk_lands_on_column_zero"
+initial_buffer = "  ab\ncd\nef"
+initial_cursor = [0, 3]
+keys = "2zFjk"
+expected_buffer = "  ab\ncd\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "failed_gqj_after_zf_keeps_cursor"
+initial_buffer = "foo, [hello]"
+initial_cursor = [0, 1]
+keys = ">EzfGgqj"
+expected_buffer = "    foo, [hello]"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

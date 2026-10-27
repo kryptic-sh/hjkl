@@ -22,6 +22,10 @@ patch bumps.
 
 ### Fixed
 
+- After `zf` over a linewise motion (`zfj`, `zfG`, `zfip`) or `[count]zF`, the
+  next `j` / `k` lands on column 0, as in vim; `[count]zF` no longer moves the
+  cursor to the first non-blank. A `j` / `k` that cannot move leaves the cursor
+  where it was instead of jumping to the remembered column.
 - `k` with the cursor inside a closed fold (after `zfjG`, say) moves to the line
   above the fold, as in vim, where it stopped on the fold itself.
 - A Visual selection that starts or ends on a closed fold takes the whole fold
