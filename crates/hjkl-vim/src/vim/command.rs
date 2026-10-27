@@ -939,6 +939,11 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
         } else {
             ed.cursor()
         };
+        // Text that spans lines leaves the cursor on its first character
+        // instead (vim's `do_put`), for `p` / `P` but not `gp` / `gP`.
+        if !cursor_after && yank.contains('\n') {
+            buf_set_cursor_rc(ed.buffer_mut(), at.row, at.col);
+        }
         (lo, hi)
     };
     ed.set_mark('[', paste_mark.0);

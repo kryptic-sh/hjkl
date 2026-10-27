@@ -22,6 +22,8 @@ patch bumps.
 
 ### Fixed
 
+- `p` / `P` / `]p` of charwise text that spans lines leave the cursor on the
+  first pasted character, as in vim; hjkl left it on the paste's last line.
 - `d%` across lines stays a charwise delete, as in vim, where hjkl deleted the
   whole lines. On a closed fold `%` opens the fold even when it finds no
   bracket, and `d%` / `c%` there take the fold's text whether or not it found

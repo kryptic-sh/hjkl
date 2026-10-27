@@ -181,3 +181,75 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+
+[[cases]]
+name = "multiline_charwise_p_cursor_on_first_pasted_char"
+initial_buffer = "ab\ncd\nxyz"
+initial_cursor = [0, 0]
+keys = "vjyGp"
+expected_buffer = "ab\ncd\nxab\ncyz"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "multiline_charwise_P_cursor_on_first_pasted_char"
+initial_buffer = "ab\ncd\nxyz"
+initial_cursor = [0, 0]
+keys = "vjyGP"
+expected_buffer = "ab\ncd\nab\ncxyz"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "multiline_charwise_count_P_cursor_on_first_pasted_char"
+initial_buffer = "ab\ncd\nxyz"
+initial_cursor = [0, 0]
+keys = "vjyG2P"
+expected_buffer = "ab\ncd\nab\ncab\ncxyz"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "multiline_charwise_p_at_eol_cursor_on_first_pasted_char"
+initial_buffer = "ab\ncd\nxyz"
+initial_cursor = [0, 0]
+keys = "vjyG$p"
+expected_buffer = "ab\ncd\nxyzab\nc"
+expected_cursor = [2, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "multiline_charwise_gp_cursor_after_paste"
+initial_buffer = "ab\ncd\nxyz"
+initial_cursor = [0, 0]
+keys = "vjyGgp"
+expected_buffer = "ab\ncd\nxab\ncyz"
+expected_cursor = [3, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "single_line_charwise_P_cursor_on_last_pasted_char"
+initial_buffer = "ab\ncd\nxyz"
+initial_cursor = [0, 0]
+keys = "vlyGP"
+expected_buffer = "ab\ncd\nabxyz"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

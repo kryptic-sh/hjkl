@@ -44,6 +44,8 @@ and this project adheres to
 
 ### Fixed
 
+- `do_paste` puts the cursor on the insert point after a charwise paste whose
+  text contains a line break, unless it is `gp` / `gP`.
 - `operate_over_motion_range` takes the motion (`None` for a mark) instead of a
   `w` flag: `%` skips the charwise-to-linewise delete promotion and widens to a
   closed fold even when it did not move. `motion_opens_fold` opens a fold on
