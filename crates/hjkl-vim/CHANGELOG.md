@@ -44,6 +44,12 @@ and this project adheres to
 
 ### Fixed
 
+- Every sticky-column write that stored the cursor's char column (`gg`, `%`, `J`
+  / `gJ`, the paste paths, Visual join / paste / `g<C-a>`, Insert-mode `<Esc>`,
+  mark and jumplist jumps, mouse placement, `zF`, the line operators, `gw` and
+  the replace-mode `.`) now goes through the new `remember_cursor_column`, which
+  stores `Editor::cursor_want`: the display column, with a Normal-mode cursor on
+  a tab at its last cell.
 - `execute_motion` passes `motion_opens_fold` whether the motion succeeded, not
   only whether it moved: a `t` / `T` onto an adjacent target
   (`till_succeeds_in_place`, now shared with `op_motion`'s `succeeds_in_place`)

@@ -317,7 +317,7 @@ fn jump_to_mark<H: hjkl_engine::types::Host>(
         // `'foldopen'` `mark`: only a jump that moved opens the fold.
         foldopen_cursor(ed);
     }
-    ed.set_sticky_col(Some(ed.cursor().1));
+    remember_cursor_column(ed);
 }
 /// Unified mark-jump entry point that returns a [`hjkl_engine::MarkJump`]
 /// so the app layer can decide whether to switch buffers.

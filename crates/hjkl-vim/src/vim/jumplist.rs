@@ -19,7 +19,6 @@ pub fn jump_back<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View,
     ed.jump_fwd_list_mut().push(cur);
     let (r, c) = clamp_pos(ed, target);
     ed.jump_cursor(r, c);
-    ed.set_sticky_col(Some(c));
     true
 }
 /// `Ctrl-i` / `Tab` — redo the last `Ctrl-o`. Saves the current cursor
@@ -36,7 +35,6 @@ pub fn jump_forward<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Vi
     }
     let (r, c) = clamp_pos(ed, target);
     ed.jump_cursor(r, c);
-    ed.set_sticky_col(Some(c));
     true
 }
 /// Clamp a stored `(row, col)` to the live buffer in case edits

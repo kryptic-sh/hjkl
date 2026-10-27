@@ -162,7 +162,7 @@ fn line_op_body<H: hjkl_engine::types::Host>(
             let deleted_through_last = end_row + 1 >= total;
             cut_vim_range(ed, (row, col), (end_row, 0), RangeKind::Linewise);
             land_after_linewise_delete(ed, row, deleted_through_last);
-            ed.set_sticky_col(Some(ed.cursor().1));
+            remember_cursor_column(ed);
             vim_mut(ed).mode = Mode::Normal;
             // Vim `:h '[` / `:h ']`: dd/Ndd — both marks park at the
             // post-delete cursor position (the join point).
@@ -193,7 +193,7 @@ fn line_op_body<H: hjkl_engine::types::Host>(
             } else {
                 outdent_rows(ed, row, end_row, 1);
             }
-            ed.set_sticky_col(Some(ed.cursor().1));
+            remember_cursor_column(ed);
             vim_mut(ed).mode = Mode::Normal;
         }
         // No doubled form — `zfzf` is two consecutive `zf` chords.
@@ -203,7 +203,7 @@ fn line_op_body<H: hjkl_engine::types::Host>(
             ed.push_undo();
             reflow_rows(ed, row, end_row);
             move_first_non_whitespace(ed);
-            ed.set_sticky_col(Some(ed.cursor().1));
+            remember_cursor_column(ed);
             vim_mut(ed).mode = Mode::Normal;
         }
         Operator::ReflowKeepCursor => {
@@ -215,14 +215,14 @@ fn line_op_body<H: hjkl_engine::types::Host>(
             let (new_row, new_col) =
                 reflow_keep_cursor(row, saved.0, saved.1, &before, &after, opts);
             buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
-            ed.set_sticky_col(Some(new_col));
+            remember_cursor_column(ed);
             vim_mut(ed).mode = Mode::Normal;
         }
         Operator::AutoIndent => {
             // `==` / `N==` — auto-indent `count` rows starting at cursor.
             ed.push_undo();
             auto_indent_rows(ed, row, end_row);
-            ed.set_sticky_col(Some(ed.cursor().1));
+            remember_cursor_column(ed);
             vim_mut(ed).mode = Mode::Normal;
         }
         Operator::Filter => {

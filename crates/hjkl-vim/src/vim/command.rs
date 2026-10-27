@@ -646,7 +646,7 @@ pub fn visual_join<H: hjkl_engine::types::Host>(
         vim_mut(ed).last_change = Some(LastChange::JoinLine { count: joins });
     }
     vim_mut(ed).mode = Mode::Normal;
-    ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
+    remember_cursor_column(ed);
 }
 /// `[count]%` — go to the line at `count` percent of the file (vim: line
 /// `(count * line_count + 99) / 100`), cursor on the first non-blank.
@@ -672,7 +672,7 @@ pub fn goto_percent<H: hjkl_engine::types::Host>(
     let pre = ed.cursor();
     ed.jump_cursor(line - 1, 0);
     move_first_non_whitespace(ed);
-    ed.set_sticky_col(Some(ed.cursor().1));
+    remember_cursor_column(ed);
     if ed.cursor() != pre {
         ed.push_jump(pre);
     }
@@ -942,7 +942,7 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
         hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
     }
     // Any paste re-anchors the sticky column to the new cursor position.
-    ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
+    remember_cursor_column(ed);
     true
 }
 /// Blockwise paste (`p`/`P` with a visual-block register). Re-inserts the
@@ -1038,7 +1038,7 @@ fn do_block_paste<H: hjkl_engine::types::Host>(
     let bot_row = start_row + segments.len().saturating_sub(1);
     ed.set_mark('[', (start_row, insert_col));
     ed.set_mark(']', (bot_row, insert_col));
-    ed.set_sticky_col(Some(insert_col));
+    remember_cursor_column(ed);
 }
 /// Visual-mode `p` / `P` — replace the active selection with the register.
 /// With `p` the deleted selection lands in the unnamed register (vim's swap);
@@ -1241,7 +1241,7 @@ pub fn visual_paste<H: hjkl_engine::types::Host>(
         ed.with_registers_mut(|regs| regs.unnamed = slot);
     }
     vim_mut(ed).mode = Mode::Normal;
-    ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
+    remember_cursor_column(ed);
 }
 /// Visual-mode `<C-a>` / `<C-x>` and `g<C-a>` / `g<C-x>`. Adds `delta` to the
 /// first number on each selected line. When `sequential` is true the increment
@@ -1327,7 +1327,7 @@ pub fn adjust_number_visual<H: hjkl_engine::types::Host>(
     // Vim leaves the cursor at the start of the selection.
     buf_set_cursor_rc(ed.buffer_mut(), top, block_left.unwrap_or(0));
     vim_mut(ed).mode = Mode::Normal;
-    ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
+    remember_cursor_column(ed);
 }
 #[cfg(test)]
 mod replace_char_tests {

@@ -338,6 +338,7 @@ pub fn join_line_bridge<H: hjkl_engine::types::Host>(
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::JoinLine { count: joins });
     }
+    remember_cursor_column(ed);
 }
 /// `~` — toggle the case of `count` chars from the cursor, advancing right.
 /// Records `LastChange::ToggleCase` for dot-repeat.
@@ -464,7 +465,7 @@ pub fn mouse_click_doc_bridge<H: hjkl_engine::types::Host>(
     };
     let c = col.min(cap);
     buf_set_cursor_rc(ed.buffer_mut(), r, c);
-    ed.set_sticky_col(Some(c));
+    remember_cursor_column(ed);
 }
 pub fn mouse_begin_drag_bridge<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     if !vim(ed).is_visual_char() {

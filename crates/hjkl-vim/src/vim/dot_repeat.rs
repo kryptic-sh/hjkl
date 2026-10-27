@@ -228,7 +228,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
         }
         LastChange::ReplaceMode { text } => {
             if text.is_empty() {
-                ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
+                remember_cursor_column(ed);
                 vim_mut(ed).replaying = false;
                 return;
             }
@@ -262,7 +262,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             if ed.cursor().1 > 0 {
                 hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
             }
-            ed.set_sticky_col(Some(buf_cursor_pos(ed.buffer()).col));
+            remember_cursor_column(ed);
         }
         LastChange::DeleteToEol { inserted, register } => {
             use hjkl_buffer::{Edit, Position};

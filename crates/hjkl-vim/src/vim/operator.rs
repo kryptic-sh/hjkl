@@ -354,7 +354,7 @@ pub fn apply_after_g<H: hjkl_engine::types::Host>(
             move_first_non_whitespace(ed);
             // Update sticky_col to the first-non-blank column so j/k after
             // gg aim for the correct column per vim semantics.
-            ed.set_sticky_col(Some(ed.cursor().1));
+            remember_cursor_column(ed);
             if ed.cursor() != pre {
                 ed.push_jump(pre);
             }
@@ -439,6 +439,7 @@ pub fn apply_after_g<H: hjkl_engine::types::Host>(
             if !vim(ed).replaying {
                 vim_mut(ed).last_change = Some(LastChange::JoinLine { count: joins });
             }
+            remember_cursor_column(ed);
         }
         'd' => {
             // `gd` — goto definition. hjkl-engine doesn't run an LSP
@@ -675,7 +676,7 @@ pub fn apply_after_z<H: hjkl_engine::types::Host>(
                 });
                 ed.jump_cursor(row, 0);
                 move_first_non_whitespace(ed);
-                ed.set_sticky_col(Some(ed.cursor().1));
+                remember_cursor_column(ed);
             } else {
                 // `zf{motion}` / `zf{textobj}` — route through the
                 // operator pipeline. `Operator::Fold` reuses every

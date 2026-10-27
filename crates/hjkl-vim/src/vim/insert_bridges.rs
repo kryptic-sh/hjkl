@@ -946,6 +946,6 @@ pub fn leave_insert_to_normal_bridge<H: hjkl_engine::types::Host>(
     if col > 0 {
         hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
     }
-    ed.set_sticky_col(Some(ed.cursor().1));
+    remember_cursor_column(ed);
     true
 }

@@ -22,6 +22,10 @@ patch bumps.
 
 ### Fixed
 
+- After `gg`, `J` / `gJ`, `p` / `P`, leaving Insert mode, a mark jump, `zF`,
+  `>>` and similar commands on a line with a tab before the cursor, `j` / `k`
+  aim for the column the cursor is drawn in, as in vim, instead of its character
+  index: `ggj` from `"\tab cd"` lands under the `a`.
 - A `t` / `T` onto an adjacent character, and an `n` / `N` / `*` / `#` whose
   only match is under the cursor, open the closed fold they start on, as in vim:
   they succeed without moving, and `'foldopen'` follows success, not movement.

@@ -1700,3 +1700,88 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+# ─── The curswant a command leaves is a display column: tabs count wide ─────
+[[cases]]
+name = "gg_after_tab_keeps_display_column_for_j"
+initial_buffer = "\tab cd\nxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+initial_cursor = [0, 2]
+keys = "ggj"
+expected_buffer = "\tab cd\nxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "put_above_after_tab_keeps_display_column_for_j"
+initial_buffer = "\tab cd\nxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+initial_cursor = [0, 2]
+keys = "yyPj"
+expected_buffer = "\tab cd\n\tab cd\nxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "join_after_tab_keeps_display_column_for_j"
+initial_buffer = "\tab cd\nxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+initial_cursor = [0, 2]
+keys = "Jj"
+expected_buffer = "\tab cd xxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+expected_cursor = [1, 9]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "join_raw_after_tab_keeps_display_column_for_j"
+initial_buffer = "\tab cd\nxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+initial_cursor = [0, 2]
+keys = "gJj"
+expected_buffer = "\tab cdxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+expected_cursor = [1, 9]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "append_escape_after_tab_keeps_display_column_for_j"
+initial_buffer = "\tab cd\nxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+initial_cursor = [0, 2]
+keys = "A<Esc>j"
+expected_buffer = "\tab cd\nxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+expected_cursor = [1, 8]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "insert_escape_onto_tab_keeps_its_last_cell_for_j"
+initial_buffer = "\tab cd\nxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+initial_cursor = [0, 2]
+keys = "I<Esc>j"
+expected_buffer = "\tab cd\nxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "mark_jump_after_tab_keeps_display_column_for_j"
+initial_buffer = "\tab cd\nxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+initial_cursor = [0, 2]
+keys = "ma0j`akj"
+expected_buffer = "\tab cd\nxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyy"
+expected_cursor = [1, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

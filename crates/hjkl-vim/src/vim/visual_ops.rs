@@ -30,10 +30,17 @@ pub fn remember_operator_column<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     if vim(ed).mode == Mode::Normal {
-        let (row, col) = ed.cursor();
-        let want = ed.cursor_want(row, col);
-        ed.set_sticky_col(Some(want));
+        remember_cursor_column(ed);
     }
+}
+
+/// Make the cursor's display column the sticky column, as vim does after
+/// any command that sets `w_set_curswant`: a tab before the cursor counts
+/// at its width, and a cursor on a tab in Normal mode at its last cell.
+pub fn remember_cursor_column<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
+    let (row, col) = ed.cursor();
+    let want = ed.cursor_want(row, col);
+    ed.set_sticky_col(Some(want));
 }
 
 fn visual_operator_body<H: hjkl_engine::types::Host>(

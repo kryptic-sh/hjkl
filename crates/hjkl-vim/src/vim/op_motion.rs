@@ -798,7 +798,7 @@ fn operator_over_range_body<H: hjkl_engine::types::Host>(
             let (new_row, new_col) =
                 reflow_keep_cursor(top.0, saved.0, saved.1, &before, &after, opts);
             buf_set_cursor_rc(ed.buffer_mut(), new_row, new_col);
-            ed.set_sticky_col(Some(new_col));
+            remember_cursor_column(ed);
             vim_mut(ed).mode = Mode::Normal;
         }
         Operator::AutoIndent => {
