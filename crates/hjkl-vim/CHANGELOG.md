@@ -44,6 +44,8 @@ and this project adheres to
 
 ### Fixed
 
+- `bracket_text_object` falls back to `find_next_open` when the cursor's closing
+  bracket has no open partner, as it already did off a bracket.
 - `visual_operator_body`'s charwise branch parks the cursor on the selection's
   start before the operator saves its undo step (except `gq` / `gw`), as the
   Visual-line branch already did, and its case and shift arms use the bounds

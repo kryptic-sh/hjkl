@@ -1347,7 +1347,7 @@ pub fn bracket_text_object<H: hjkl_engine::types::Host>(
     // open — making `di}`/`di{`-on-`}` a silent no-op.
     let cursor_char = lines.get(row).and_then(|l| l.chars().nth(col));
     let (open_pos, close_pos) = if cursor_char == Some(close) {
-        let open_pos = if col > 0 {
+        let anchored = if col > 0 {
             find_open_bracket(lines, row, col - 1, open, close)
         } else if row > 0 {
             let pr = row - 1;
@@ -1355,8 +1355,18 @@ pub fn bracket_text_object<H: hjkl_engine::types::Host>(
             find_open_bracket(lines, pr, pc, open, close)
         } else {
             None
-        }?;
-        (open_pos, (row, col))
+        };
+        match anchored {
+            Some(open_pos) => (open_pos, (row, col)),
+            // An unmatched close under the cursor: like any cursor outside a
+            // pair, take the next pair forward (`di(` on the `)` of
+            // `")x (ab)"` empties `(ab)` in nvim 0.12.5).
+            None => {
+                let open_pos = find_next_open(lines, row, col, open)?;
+                let close_pos = find_close_bracket(lines, open_pos.0, open_pos.1 + 1, open, close)?;
+                (open_pos, close_pos)
+            }
+        }
     } else {
         // Walk backward from cursor to find unbalanced opening. When the
         // cursor isn't inside any pair, fall back to scanning forward for

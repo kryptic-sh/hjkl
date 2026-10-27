@@ -1195,6 +1195,14 @@ Seen while measuring, not `gq`:
   / `-` handle folds in the vim layer (`apply_motion_cursor_ctx`'s
   `FirstNonBlankNextLine` arm), which `_` could join once the overshoot rule is
   settled.
+- **`it` / `at` before a tag pair scan forward; nvim does nothing; a test pins
+  it. Needs a decision.** `dit` on `"x <a>b</a> y"` @ (0,0) leaves the buffer
+  alone in nvim 0.12.5 and deletes `b` in hjkl, whose `tag_text_object`
+  (`text_object.rs`) falls back to the next pair forward, as the bracket objects
+  also do (and there nvim agrees). The unit test `tag_text_object_edge_cases`
+  (same file) asserts that forward scan ("Cursor before the first tag → forward
+  scan to the next pair"). Matching nvim means changing it, which is the user's
+  call.
 - **A counted `f` / `t` / `;` with too few targets moves; three tests pin it.
   Needs a decision.** vim's `searchc` fails when the line holds fewer than
   `count` targets after the cursor, and the cursor stays: measured in nvim

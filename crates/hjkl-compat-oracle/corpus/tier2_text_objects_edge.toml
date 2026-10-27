@@ -214,3 +214,63 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "inner_paren_from_unmatched_close_takes_next_pair"
+initial_buffer = ")x (ab) y"
+initial_cursor = [0, 0]
+keys = "di("
+expected_buffer = ")x () y"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "change_inner_paren_from_unmatched_close"
+initial_buffer = ")x (ab) y"
+initial_cursor = [0, 0]
+keys = "ci(Z<Esc>"
+expected_buffer = ")x (Z) y"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "around_paren_from_unmatched_close"
+initial_buffer = ")x (ab) y"
+initial_cursor = [0, 0]
+keys = "da("
+expected_buffer = ")x  y"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inner_bracket_from_unmatched_close_takes_next_pair"
+initial_buffer = "]x [ab]"
+initial_cursor = [0, 0]
+keys = "di["
+expected_buffer = "]x []"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "inner_paren_from_lone_close_does_nothing"
+initial_buffer = ")x"
+initial_cursor = [0, 0]
+keys = "di("
+expected_buffer = ")x"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

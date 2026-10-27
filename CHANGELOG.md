@@ -22,6 +22,9 @@ patch bumps.
 
 ### Fixed
 
+- `i(` / `a(` and the other bracket objects with the cursor on a closing bracket
+  that has no partner take the next pair forward, as in vim and as they already
+  did from anywhere else outside a pair; they used to do nothing.
 - `u` after a charwise Visual operator or a Visual `r` returns the cursor to the
   selection's start, as in vim, where it went back to the selection's end
   (`vll~u` from column 0 now lands on column 0).
