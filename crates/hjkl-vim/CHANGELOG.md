@@ -49,6 +49,16 @@ and this project adheres to
 
 ### Fixed
 
+- The read-only registers `".` and `"/` can be named in Normal and Visual mode.
+  `".p` / `".P` type the last inserted text again, leaving the cursor on its
+  last character; `"/p` pastes the last search pattern. A delete, yank or change
+  naming either is refused with `E354` before it touches the text, as in vim:
+  `".dd` leaves the line and every register alone, and `".cw` enters Insert
+  without deleting. Before, `set_pending_register` dropped both, so `".p` pasted
+  the unnamed register and `".dd` deleted.
+- `.` and `".` after an insert that broke a line hold what was typed, read from
+  where the insert started. The text diff split a repeated character the wrong
+  way, so `iab<CR>c<Esc>j.` broke the next line after `c` instead of after `ab`.
 - `.` after an insert that backspaced past its start replays the backspaces:
   `A<BS><BS>x<Esc>j.` deletes two characters on the next line before typing `x`,
   and `I<BS>` at column 0 joins the line above, as in vim. Before, `.` retyped

@@ -954,3 +954,27 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "dot_insert_line_break_split"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<CR>c<Esc>j."
+expected_buffer = "ab\ncabc def\nab\ncxyz\n"
+expected_cursor = [3, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_line_break_only"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "ia<CR><Esc>j."
+expected_buffer = "a\nabc def\na\nxyz\n"
+expected_cursor = [3, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

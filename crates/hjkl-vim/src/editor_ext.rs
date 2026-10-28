@@ -2540,8 +2540,12 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     }
 
     fn set_pending_register(&mut self, reg: char) {
-        // `-` is the small-delete register (readable/pasteable, e.g. `"-p`).
-        if reg.is_ascii_alphanumeric() || matches!(reg, '"' | '+' | '*' | '_' | '-') {
+        // `-` is the small-delete register (readable/pasteable, e.g. `"-p`);
+        // `.` and `/` paste but refuse a write (`refuse_read_only_register`).
+        if reg.is_ascii_alphanumeric()
+            || matches!(reg, '"' | '+' | '*' | '_' | '-')
+            || crate::vim::is_read_only_register(reg)
+        {
             crate::vim_state::vim_mut(self).pending_register = Some(reg);
         }
         // Invalid chars silently no-op (matches engine FSM behavior).

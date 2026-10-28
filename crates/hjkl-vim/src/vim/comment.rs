@@ -157,6 +157,35 @@ pub fn try_dedent_close_bracket<H: hjkl_engine::types::Host>(
 pub fn open_line_repeats(leader: &str, inserted: &str, count: usize) -> String {
     format!("\n{leader}{inserted}").repeat(count.saturating_sub(1))
 }
+/// The text an `i` / `a` / `I` / `A` session typed, read from where it
+/// started: the buffer grew by the typed length less what `<BS>` past the
+/// start removed. `None` when the rest of the buffer is not what it was
+/// around that run (a cursor move typed somewhere else), and the caller
+/// falls back to the text diff. The diff alone splits a repeated character
+/// the wrong way: after `iab<CR>c` on `"abc"` it reads `"\nca"`, not
+/// `"ab\nc"`, and `.` then breaks the line in the wrong place.
+fn typed_at_start<H: hjkl_engine::types::Host>(
+    session: &InsertSession,
+    ed: &Editor<hjkl_buffer::View, H>,
+) -> Option<String> {
+    let before = &session.before_rope;
+    let after = hjkl_engine::types::Query::rope(ed.buffer());
+    let deleted = usize::try_from(session.deleted).ok()?;
+    let typed =
+        usize::try_from(after.len_chars() as isize - before.len_chars() as isize + session.deleted)
+            .ok()?;
+    if session.start_row >= after.len_lines() {
+        return None;
+    }
+    let start = after.line_to_char(session.start_row) + session.start_col;
+    let end = start + typed;
+    if end > after.len_chars() || start + deleted > before.len_chars() {
+        return None;
+    }
+    (before.slice(..start) == after.slice(..start)
+        && before.slice(start + deleted..) == after.slice(end..))
+    .then(|| after.slice(start..end).to_string())
+}
 pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     let Some(session) = vim_mut(ed).insert_session.take() else {
         return;
@@ -191,23 +220,16 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
     // `R` overstrike keeps the line length the same, so `extract_inserted`
     // (which only reports net growth) misses the typed text. Use the changed
     // run instead so dot-repeat retypes it.
-    // `<BS>` past the start deleted text the diff would count against the
-    // typed text, so read what was typed from where the start ended up: the
-    // buffer grew by the typed length less what those presses removed.
     let backspaces = match session.reason {
         InsertReason::Enter(_) => session.backspaces,
         _ => 0,
     };
     let inserted = if matches!(session.reason, InsertReason::Replace) {
         changed_run(&before, &after)
-    } else if backspaces > 0 {
-        let typed = after_rope.len_chars() as isize - session.before_rope.len_chars() as isize
-            + session.deleted;
-        let start = (after_rope.line_to_char(session.start_row.min(after_n - 1))
-            + session.start_col)
-            .min(after_rope.len_chars());
-        let end = (start + typed.max(0) as usize).min(after_rope.len_chars());
-        after_rope.slice(start..end).to_string()
+    } else if let InsertReason::Enter(_) = session.reason
+        && let Some(typed) = typed_at_start(&session, ed)
+    {
+        typed
     } else {
         extract_inserted(&before, &after)
     };

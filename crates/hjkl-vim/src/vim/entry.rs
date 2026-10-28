@@ -135,6 +135,19 @@ pub fn sync_clipboard_register_for<H: hjkl_engine::types::Host>(
         ed.sync_clipboard_register(text, linewise);
     }
 }
+/// The text of a read-only register: the last search pattern for `/`, the
+/// last inserted text for `.`. `None` when it is empty or `reg` is neither.
+pub fn read_only_register_text<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    reg: char,
+) -> Option<String> {
+    let text = match reg {
+        '/' => ed.last_search_pattern(),
+        '.' => vim(ed).last_insert_text.clone(),
+        _ => None,
+    };
+    text.filter(|s| !s.is_empty())
+}
 
 /// `Ctrl-R {reg}` body — insert the named register's contents at the
 /// cursor as charwise text. Embedded newlines split lines naturally via
@@ -146,16 +159,11 @@ pub fn insert_register_text<H: hjkl_engine::types::Host>(
 ) {
     use hjkl_buffer::Edit;
     sync_clipboard_register_for(ed, Some(selector));
-    // Special read-only registers: `/` = last search pattern, `.` = last
-    // inserted text. Fall back to the register store for everything else.
+    // The read-only registers (`/`, `.`) have no slot in the register store.
     let text = match selector {
-        '/' => match &ed.last_search_pattern() {
-            Some(s) if !s.is_empty() => s.clone(),
-            _ => return,
-        },
-        '.' => match &vim(ed).last_insert_text {
-            Some(s) if !s.is_empty() => s.clone(),
-            _ => return,
+        '/' | '.' => match read_only_register_text(ed, selector) {
+            Some(s) => s,
+            None => return,
         },
         _ => match ed.with_registers(|r| r.read(selector).cloned()) {
             Some(slot) if !slot.text.is_empty() => slot.text,

@@ -197,6 +197,12 @@ pub fn gn_operate<H: hjkl_engine::types::Host>(
     }
     let start_t = (range.0.line as usize, range.0.col as usize);
     let end_t = (range.1.line as usize, range.1.col as usize);
+    if let Some(op @ (Operator::Delete | Operator::Yank | Operator::Change)) = op
+        && refuse_read_only_register(ed)
+    {
+        refused_operator(ed, op, start_t, RangeKind::Inclusive);
+        return;
+    }
 
     match op {
         None => {

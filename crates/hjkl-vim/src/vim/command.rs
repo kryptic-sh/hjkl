@@ -205,12 +205,39 @@ pub fn delete_to_eol<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
     }
     buf_set_cursor_pos(ed.buffer_mut(), cursor);
 }
+/// Whether `reg` is one of the read-only registers a Normal-mode command can
+/// name: `".` (the last inserted text) and `"/` (the last search pattern).
+/// They paste like any other register but cannot be written.
+pub fn is_read_only_register(reg: char) -> bool {
+    matches!(reg, '.' | '/')
+}
+/// vim's `op_delete` and `op_yank` refuse a read-only register (E354) before
+/// touching the text, so a delete, yank or change naming `".` or `"/` leaves
+/// the buffer and the registers alone. Takes the pending register, queues
+/// vim's message, and returns `true` when it refuses; the caller skips its
+/// delete or yank, and a change still enters Insert, as vim's `op_change`
+/// carries on past the refused delete.
+pub fn refuse_read_only_register<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+) -> bool {
+    match vim(ed).pending_register {
+        Some(reg) if is_read_only_register(reg) => {
+            vim_mut(ed).pending_register = None;
+            ed.push_error(format!("E354: Invalid register name: '{reg}'"));
+            true
+        }
+        _ => false,
+    }
+}
 pub fn do_char_delete<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     forward: bool,
     count: usize,
 ) {
     use hjkl_buffer::{Edit, MotionKind, Position};
+    if refuse_read_only_register(ed) {
+        return;
+    }
     // `x` on a CLOSED fold deletes the whole fold linewise (vim `:h fold`: a
     // closed fold is included as a whole), unless the cursor is on its line's
     // last character: there the `l` inside `x` cannot move, and vim deletes
@@ -772,6 +799,62 @@ fn reject_oversized_paste<H: hjkl_engine::types::Host>(
 ) {
     ed.push_error(format!("E342: Out of memory!  (allocating {bytes} bytes)"));
 }
+/// What a paste reads from `selector` (the unnamed register when none was
+/// named): its text, whether it is linewise, whether it is blockwise, and
+/// the block's width. A read-only register (`".`, `"/`) pastes its text
+/// charwise, as vim does; empty text there means nothing to paste.
+fn paste_source<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    selector: Option<char>,
+) -> (String, bool, bool, usize) {
+    if let Some(reg) = selector.filter(|&c| is_read_only_register(c)) {
+        let text = read_only_register_text(ed, reg).unwrap_or_default();
+        return (text, false, false, 0);
+    }
+    ed.with_registers(|regs| match selector.and_then(|c| regs.read(c)) {
+        Some(slot) => (
+            slot.text.clone(),
+            slot.linewise,
+            slot.blockwise,
+            slot.block_width,
+        ),
+        // Read both fields from the unnamed slot rather than mixing the
+        // slot's text with `vim.yank_linewise`. The cached vim flag is
+        // per-editor, so a register imported from another editor (e.g.
+        // cross-buffer yank/paste) carried the wrong linewise without
+        // this — pasting a linewise yank inserted at the char cursor.
+        None => (
+            regs.unnamed.text.clone(),
+            regs.unnamed.linewise,
+            regs.unnamed.blockwise,
+            regs.unnamed.block_width,
+        ),
+    })
+}
+/// `".p` / `".P`: vim pastes the last inserted text by typing it again, as
+/// an `a` / `i` would, so the cursor ends on its last character even when
+/// the text spans lines, where a charwise paste would leave it at the start.
+fn paste_as_typed<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    before: bool,
+    text: &str,
+) {
+    use hjkl_buffer::{Edit, Position};
+    ed.push_undo();
+    ed.sync_buffer_content_from_textarea();
+    if !before {
+        hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
+    }
+    let (row, col) = ed.cursor();
+    ed.mutate_edit(Edit::InsertStr {
+        at: Position::new(row, col),
+        text: text.to_string(),
+    });
+    if ed.cursor().1 > 0 {
+        hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
+    }
+    remember_cursor_column(ed);
+}
 
 pub fn do_paste<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
@@ -790,26 +873,7 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
     // before reading it below (audit-r2 fix 4) — otherwise this reads
     // whatever the internal slot last had from an in-editor `"+y`.
     sync_clipboard_register_for(ed, selector);
-    let (yank, linewise, blockwise, block_width) =
-        ed.with_registers(|regs| match selector.and_then(|c| regs.read(c)) {
-            Some(slot) => (
-                slot.text.clone(),
-                slot.linewise,
-                slot.blockwise,
-                slot.block_width,
-            ),
-            // Read both fields from the unnamed slot rather than mixing the
-            // slot's text with `vim.yank_linewise`. The cached vim flag is
-            // per-editor, so a register imported from another editor (e.g.
-            // cross-buffer yank/paste) carried the wrong linewise without
-            // this — pasting a linewise yank inserted at the char cursor.
-            None => (
-                regs.unnamed.text.clone(),
-                regs.unnamed.linewise,
-                regs.unnamed.blockwise,
-                regs.unnamed.block_width,
-            ),
-        });
+    let (yank, linewise, blockwise, block_width) = paste_source(ed, selector);
     // Vim `:h '[` / `:h ']`: after paste `[` = first inserted char of
     // the final paste, `]` = last inserted char of the final paste.
     // We track (lo, hi) across iterations; the last value wins.
@@ -846,6 +910,10 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
     if requested_bytes > MAX_PASTE_BYTES {
         reject_oversized_paste(ed, requested_bytes);
         return false;
+    }
+    if selector == Some('.') {
+        paste_as_typed(ed, before, &yank.repeat(count));
+        return true;
     }
     if blockwise {
         let Some(block_bytes) = block_width
@@ -1080,21 +1148,7 @@ pub fn visual_paste<H: hjkl_engine::types::Host>(
     // `"+p`/`"*p` in visual mode: same live-clipboard refresh as normal-mode
     // paste (audit-r2 fix 4).
     sync_clipboard_register_for(ed, selector);
-    let (reg_text, reg_linewise, reg_blockwise, reg_block_width) =
-        ed.with_registers(|regs| match selector.and_then(|c| regs.read(c)) {
-            Some(slot) => (
-                slot.text.clone(),
-                slot.linewise,
-                slot.blockwise,
-                slot.block_width,
-            ),
-            None => (
-                regs.unnamed.text.clone(),
-                regs.unnamed.linewise,
-                regs.unnamed.blockwise,
-                regs.unnamed.block_width,
-            ),
-        });
+    let (reg_text, reg_linewise, reg_blockwise, reg_block_width) = paste_source(ed, selector);
     // For `P`, snapshot the unnamed register so we can restore it afterwards.
     let saved_unnamed = before.then(|| ed.with_registers(|regs| regs.unnamed.clone()));
 
@@ -1103,16 +1157,7 @@ pub fn visual_paste<H: hjkl_engine::types::Host>(
     // operators (`u` returns there); the arms below still read the selection
     // from the cursor, so it goes back afterwards.
     let cursor = ed.cursor();
-    let start = match mode {
-        Mode::Visual => order(vim(ed).visual_anchor, cursor).0,
-        Mode::VisualLine if cursor.0 < vim(ed).visual_line_anchor => cursor,
-        Mode::VisualLine => (vim(ed).visual_line_anchor, 0),
-        Mode::VisualBlock => {
-            let (top, _, left, _) = block_bounds(ed);
-            (top, left)
-        }
-        _ => cursor,
-    };
+    let start = visual_op_start(ed);
     buf_set_cursor_rc(ed.buffer_mut(), start.0, start.1);
     ed.push_undo();
     buf_set_cursor_rc(ed.buffer_mut(), cursor.0, cursor.1);

@@ -86,6 +86,26 @@ pub fn remember_cursor_column<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_
     ed.set_sticky_col(Some(want));
 }
 
+/// Where a Visual operator starts: the selection's first character, the
+/// Visual-line anchor's column 0 (or the cursor when it is above the
+/// anchor), or a block's top-left corner. The undo step saves it, and a
+/// refused operator leaves the cursor there.
+pub fn visual_op_start<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+) -> (usize, usize) {
+    let cursor = ed.cursor();
+    match vim(ed).mode {
+        Mode::Visual => order(vim(ed).visual_anchor, cursor).0,
+        Mode::VisualLine if cursor.0 < vim(ed).visual_line_anchor => cursor,
+        Mode::VisualLine => (vim(ed).visual_line_anchor, 0),
+        Mode::VisualBlock => {
+            let (top, _, left, _) = block_bounds(ed);
+            (top, left)
+        }
+        _ => cursor,
+    }
+}
+
 fn visual_operator_body<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
@@ -97,6 +117,13 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
     // Read the explicit register before an operator consumes it, so the
     // dot-repeat entry can name it (`:h redo-register`).
     let register = vim(ed).pending_register;
+    if matches!(op, Operator::Delete | Operator::Yank | Operator::Change)
+        && refuse_read_only_register(ed)
+    {
+        let start = visual_op_start(ed);
+        refused_operator(ed, op, start, RangeKind::Exclusive);
+        return;
+    }
     match vim(ed).mode {
         Mode::VisualLine => {
             let (cursor_row, cursor_col) = ed.cursor();
@@ -551,6 +578,12 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
     // directly from `range_ops`, so it cannot rely on that one.
     let register = vim(ed).pending_register;
     let (top, bot, left, right) = block_bounds(ed);
+    if matches!(op, Operator::Delete | Operator::Yank | Operator::Change)
+        && refuse_read_only_register(ed)
+    {
+        refused_operator(ed, op, (top, left), RangeKind::Exclusive);
+        return;
+    }
     // `$` (`:h v_b_$`) makes the block ragged: every row resolves its own
     // right edge to its own EOL instead of the fixed `right` above. Read
     // once here and thread through — vim's `$`-block affects every

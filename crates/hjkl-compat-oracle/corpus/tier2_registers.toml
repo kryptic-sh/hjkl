@@ -278,3 +278,315 @@ expected_buffer = "bdef\n"
 expected_cursor = [0, 1]
 expected_mode = "normal"
 expected_register = ['a', "ac"]
+
+[[cases]]
+name = "reg_dot_paste_after"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>\".p"
+expected_buffer = "abababc def\nxyz\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_paste_before"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>\".P"
+expected_buffer = "aabbabc def\nxyz\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_paste_counted"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>\".2p"
+expected_buffer = "ababababc def\nxyz\n"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_paste_multiline_types_it"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<CR>c<Esc>\".p"
+expected_buffer = "ab\ncab\ncabc def\nxyz\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_paste_empty_pastes_nothing"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "x\".p"
+expected_buffer = "bc def\nxyz\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_slash_paste_after"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "/de<CR>\"/p"
+expected_buffer = "abc ddeef\nxyz\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_slash_paste_before"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "/de<CR>\"/P"
+expected_buffer = "abc dedef\nxyz\n"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_visual_paste"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>vl\".p"
+expected_buffer = "aabbc def\nxyz\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_dd_refused"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "yyiab<Esc>\".ddp"
+expected_buffer = "ababc def\nabc def\nxyz\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_x_refused"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>\".x"
+expected_buffer = "ababc def\nxyz\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_yy_refused"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>\".yyp"
+expected_buffer = "ababc def\nxyz\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_cw_inserts_without_delete"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>\".cwX<Esc>"
+expected_buffer = "aXbabc def\nxyz\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_D_refused"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>\".D"
+expected_buffer = "ababc def\nxyz\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_s_inserts_without_delete"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>\".s"
+expected_buffer = "ababc def\nxyz\n"
+expected_cursor = [0, 1]
+expected_mode = "insert"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_visual_d_refused"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>vl\".d"
+expected_buffer = "ababc def\nxyz\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_visual_y_refused"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>vl\".y"
+expected_buffer = "ababc def\nxyz\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_block_d_refused"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc><C-v>j\".d"
+expected_buffer = "ababc def\nxyz\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_dd_refused_dot_refuses_again"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>\".dd."
+expected_buffer = "ababc def\nxyz\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_dd_refused_undo"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>\".ddu"
+expected_buffer = "abc def\nxyz\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_ignored_by_case_op"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "yyiab<Esc>\".gUiw"
+expected_buffer = "ABABC def\nxyz\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_db_refused_cursor"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>$\".db"
+expected_buffer = "ababc def\nxyz\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_dd_refused_first_nonblank"
+initial_buffer = "  abc def\n    xyz\n"
+initial_cursor = [0, 0]
+keys = "jAab<Esc>\".dd"
+expected_buffer = "  abc def\n    xyzab\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_dk_refused_keeps_column"
+initial_buffer = "abc def\nxyz\n"
+initial_cursor = [0, 0]
+keys = "jlliab<Esc>\".dk"
+expected_buffer = "abc def\nxyabz\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_cc_refused_first_nonblank"
+initial_buffer = "  abc def\n    xyz\n"
+initial_cursor = [0, 0]
+keys = "Aab<Esc>\".ccX<Esc>"
+expected_buffer = "  Xabc defab\n    xyz\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_cj_refused_keeps_column"
+initial_buffer = "  abc def\n    xyz\n"
+initial_cursor = [0, 0]
+keys = "Aab<Esc>\".cjX<Esc>"
+expected_buffer = "  abc defaXb\n    xyz\n"
+expected_cursor = [0, 10]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_visual_line_c_refused"
+initial_buffer = "  abc def\n    xyz\n"
+initial_cursor = [0, 0]
+keys = "Aab<Esc>Vj\".cX<Esc>"
+expected_buffer = "X  abc defab\n    xyz\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

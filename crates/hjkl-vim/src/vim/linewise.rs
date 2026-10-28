@@ -143,6 +143,19 @@ fn line_op_body<H: hjkl_engine::types::Host>(
     // the `[row, end_row]` range to cover any closed fold it touches (repeats
     // until stable so nested folds are absorbed too).
     let (row, end_row) = expand_linewise_over_closed_folds(ed.buffer(), row, end_row);
+    if matches!(op, Operator::Delete | Operator::Yank | Operator::Change)
+        && refuse_read_only_register(ed)
+    {
+        // `dd` / `cc` start on the first non-blank, as vim's `nv_lineop`
+        // puts them there before the operator runs.
+        buf_set_cursor_rc(ed.buffer_mut(), row, col);
+        if op != Operator::Yank {
+            move_first_non_whitespace(ed);
+        }
+        let at = ed.cursor();
+        refused_operator(ed, op, at, RangeKind::Linewise);
+        return;
+    }
 
     match op {
         Operator::Yank => {

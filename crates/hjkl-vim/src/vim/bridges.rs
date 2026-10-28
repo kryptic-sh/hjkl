@@ -232,7 +232,12 @@ fn substitute_chars<H: hjkl_engine::types::Host>(
     // `p` right after `s` pastes the substituted char. Collect it from each
     // delete's inverse (same shape as `do_char_delete` for `x`/`X`).
     let mut deleted = String::new();
-    for _ in 0..count.max(1) {
+    let count = if refuse_read_only_register(ed) {
+        0
+    } else {
+        count.max(1)
+    };
+    for _ in 0..count {
         let cursor = buf_cursor_pos(ed.buffer());
         let line_chars = buf_line_chars(ed.buffer(), cursor.row);
         if cursor.col >= line_chars {
@@ -288,7 +293,9 @@ pub fn delete_to_eol_bridge<H: hjkl_engine::types::Host>(
 ) {
     // Peeked before the delete consumes it — see `operator::apply_op_double`.
     let register = vim(ed).pending_register;
-    if count <= 1 && !on_closed_fold(ed) {
+    if refuse_read_only_register(ed) {
+        // The cursor stays: `D`'s range starts under it.
+    } else if count <= 1 && !on_closed_fold(ed) {
         ed.push_undo();
         delete_to_eol(ed);
         hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
@@ -316,7 +323,9 @@ pub fn change_to_eol_bridge<H: hjkl_engine::types::Host>(
         // the register across.
         let register = vim(ed).pending_register;
         ed.push_undo();
-        delete_to_eol(ed);
+        if !refuse_read_only_register(ed) {
+            delete_to_eol(ed);
+        }
         if !vim(ed).replaying {
             vim_mut(ed).last_change = Some(LastChange::DeleteToEol {
                 inserted: None,

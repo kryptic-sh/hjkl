@@ -729,6 +729,33 @@ pub fn change_linewise_rows<H: hjkl_engine::types::Host>(
     buf_set_cursor_rc(ed.buffer_mut(), top_row, indent_chars);
     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
 }
+/// A delete, yank or change whose register refused the write
+/// ([`refuse_read_only_register`]): the text stays, the cursor goes to the
+/// range's start, column included even for a linewise motion (`".dk` keeps
+/// the column `k` landed on), where vim's `do_pending_operator` put it before
+/// the operator failed, except after a linewise yank, and a change enters
+/// Insert there.
+pub fn refused_operator<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    op: Operator,
+    top: (usize, usize),
+    kind: RangeKind,
+) {
+    // `yy` and `yj` leave the cursor where it was.
+    if op == Operator::Yank && kind == RangeKind::Linewise {
+        return;
+    }
+    let at = top;
+    buf_set_cursor_rc(ed.buffer_mut(), at.0, at.1);
+    if op == Operator::Change {
+        vim_mut(ed).change_mark_start = Some(at);
+        ed.push_undo();
+        begin_insert_noundo(ed, 1, InsertReason::AfterChange);
+    } else {
+        clamp_cursor_to_normal_mode(ed);
+        vim_mut(ed).mode = Mode::Normal;
+    }
+}
 pub fn run_operator_over_range<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
@@ -767,6 +794,12 @@ fn operator_over_range_body<H: hjkl_engine::types::Host>(
             ed.push_undo();
             begin_insert_noundo(ed, 1, InsertReason::AfterChange);
         }
+        return;
+    }
+    if matches!(op, Operator::Delete | Operator::Yank | Operator::Change)
+        && refuse_read_only_register(ed)
+    {
+        refused_operator(ed, op, top, kind);
         return;
     }
 

@@ -1278,21 +1278,20 @@ Seen while measuring, not `gq`:
   0.12.5, `apply_op_with_motion` in `op_motion.rs`). The rule is copied from the
   measurements, not from vim's `op_tilde`, so a case outside them (multibyte, a
   closed fold, a count past the line) may still differ.
-- **The read-only registers `".` and `"/` cannot be named in Normal mode.**
-  `set_pending_register` (`hjkl-vim` `editor_ext.rs`) accepts only
-  `[a-zA-Z0-9"+*_-]`, so `".` is swallowed and `".p` becomes a plain `p`;
-  `do_paste` also reads only the register store, where those two have no slot
-  (`<C-r>.` / `<C-r>/` in Insert mode do work, via `insert_register_text`).
-  Measured against nvim 0.12.5 on `"abc def\nxyz\n"` @ (0,0): `iab<Esc>".p` →
-  `"abababc def"`, `".P` → `"aabbabc def"`, `2".p` → `"ababababc def"`; but a
-  WRITING command naming one aborts with E354 and changes nothing —
-  `yyiab<Esc>".dd` leaves the buffer as it was, and a following `p` still pastes
-  the `yy`. hjkl today deletes. So accepting `.` / `/` needs, besides a read in
-  `do_paste`, one gate that aborts every non-paste command naming a read-only
-  register; the pending register is consumed at ~25 sites (`bridges`, `command`,
-  `operator`, `op_motion`, `visual_ops`, `sneak`, `linewise`), on both the FSM
-  and the keymap path, so the gate belongs where the command is dispatched, not
-  at each site.
+- **What the read-only register support leaves out (2026-10-29).**
+  `refuse_read_only_register` (`hjkl-vim` `command.rs`) covers `".` and `"/`.
+  Not covered:
+  - `"%` and `":` are still not accepted by `set_pending_register`; `"%` reads
+    from the register store but cannot be named in Normal mode.
+  - vim's `".` holds the typed keys, backspaces included: after
+    `jA<BS><BS>x<Esc>`, `".p` replays the two backspaces in nvim, while hjkl's
+    `last_insert_text` keeps only the text, so it pastes `x`. `<C-r>.` and
+    `<C-a>` read the same field.
+  - A refused Visual or `gn` operator records no `LastChange`, where vim's redo
+    holds the refused command; a refused Normal-mode operator does record it,
+    and `.` refuses again.
+  - A count typed before the register is dropped for every register, not only
+    these: `"ayl2"ap` pastes once where nvim pastes twice (`"a2p` works).
 
 ## 2. Blocked on platform access
 
