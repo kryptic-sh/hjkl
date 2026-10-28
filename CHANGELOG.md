@@ -15,6 +15,14 @@ patch bumps.
   fold's top line, as in vim. In Visual mode `zF` folds the selection, as `zf`
   does.
 
+### Changed
+
+- **Dependency updates**, all within existing ranges (`Cargo.lock` only): `zip`
+  9.1.3 and `typed-path` 0.13.0 under `hjkl-anvil`'s archive extraction;
+  `notify` 8.2.1, `ignore` 0.4.34 and `globset` 0.4.21; `unicode-width` 0.2.3;
+  `uuid` 1.29.0, `rustix` 1.1.6, `smallvec` 1.16.4 and the `icu_*` 2.4.0 crates.
+  No manifest's version requirement moved, and no hjkl code changed with them.
+
 ### Security
 
 - tokio 1.54.0 → 1.54.1 for RUSTSEC-2026-0384, a race in
