@@ -19,6 +19,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Undo and redo set the sticky column (curswant) from where the cursor lands, as
+  vim's `u_undoredo` does, so a `j` / `k` after `u` aims for that column:
+  `jjAzz<Esc>uk` went to the column left over from the insert.
 - `motions::move_screen_down` / `move_screen_up` (`gj` / `gk`) step from a
   closed fold's last line going down and its first line going up, as vim's
   `nv_screengo` does. `gk` from a row hidden inside a fold now lands above the

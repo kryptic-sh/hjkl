@@ -4727,6 +4727,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // that would hide it.
         let row = buf_cursor_row(&self.buffer);
         self.buffer.open_folds_containing(row);
+        // vim's `u_undoredo` sets curswant from where the cursor lands, so a
+        // `k` after `u` aims for that column, not one left from before.
+        let (row, col) = self.cursor();
+        let want = self.cursor_want(row, col);
+        self.set_sticky_col(Some(want));
     }
 
     /// Walk one step back through the undo history. Equivalent to the

@@ -615,3 +615,63 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "undo_sets_curswant_after_insert"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "jjAzz<Esc>uk"
+expected_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "redo_sets_curswant_after_insert"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "jjAzz<Esc>u<C-r>k"
+expected_buffer = "aa bb\n  cc dd\nee ffzz\ngg hh\n"
+expected_cursor = [1, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_sets_curswant_after_dd"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "jjddukj"
+expected_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_sets_curswant_after_x_at_eol"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "jj$xukj"
+expected_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+expected_cursor = [2, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_sets_curswant_down"
+initial_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+initial_cursor = [0, 3]
+keys = "jjAzz<Esc>uj"
+expected_buffer = "aa bb\n  cc dd\nee ff\ngg hh\n"
+expected_cursor = [3, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
