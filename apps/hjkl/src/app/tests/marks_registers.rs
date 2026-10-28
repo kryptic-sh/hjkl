@@ -1249,16 +1249,8 @@ fn count_then_register_5_quote_a_dd_targets_register_a() {
 
 #[test]
 fn outer_count_inner_count_2_quote_a_5dd_total_10() {
-    // `2"a5dd` — outer count 2, register 'a', inner count 5.
-    // In vim these multiply: total = 2 * 5 = 10 lines deleted.
-    // With our implementation: pending_count=2 survives `"`, then `5` is
-    // accumulated into pending_count making it 25 (not 10). That's a known
-    // quirk of the linear accumulation model; this test documents actual
-    // behaviour so regressions are caught. The primary bug (5 discarded by
-    // the reset) is fixed; the multiply semantic is aspirational.
-    //
-    // NOTE: This test deliberately documents current behaviour. If the
-    // multiplication semantic is ever implemented, update the assertion.
+    // `2"a5dd` — outer count 2, register 'a', inner count 5. vim multiplies
+    // them: 2 * 5 = 10 lines deleted.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_numbered_lines(&mut app, 30);
 
@@ -1273,23 +1265,19 @@ fn outer_count_inner_count_2_quote_a_5dd_total_10() {
         "pending_count must be 2 after \"a"
     );
 
-    // Inner count 5 — appends to pending_count (becomes 25 in current model).
+    // Inner count 5 — multiplies the outer count.
     app.pending_count.try_accumulate('5');
-    assert_eq!(
-        app.pending_count.peek(),
-        25,
-        "pending_count digits accumulate to 25"
-    );
+    assert_eq!(app.pending_count.peek(), 10, "2\"a5 counts 2 * 5");
 
-    // `dd` — delete count1=25 lines into register 'a'.
+    // `dd` — delete count1=10 lines into register 'a'.
     rck(&mut app, &['d', 'd']);
 
     let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
-    // 25 lines deleted from a 30-line buffer → line26 is now first.
+    // 10 lines deleted from a 30-line buffer → line11 is now first.
     assert_eq!(
         lines.first().map(String::as_str),
-        Some("line26"),
-        "2\"a5dd with digit-accumulation semantics must delete 25 lines; got {lines:?}"
+        Some("line11"),
+        "2\"a5dd must delete 10 lines; got {lines:?}"
     );
     let reg_a = app.active_editor().with_registers(|r| r.named[0].clone());
     assert!(

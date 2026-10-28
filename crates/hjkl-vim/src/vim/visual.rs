@@ -140,7 +140,7 @@ pub fn exit_visual_to_normal_bridge<H: hjkl_engine::types::Host>(
     };
     // Transition to Normal first (matches FSM order).
     vim_mut(ed).pending = Pending::None;
-    vim_mut(ed).count = 0;
+    vim_mut(ed).reset_count();
     vim_mut(ed).insert_session = None;
     set_vim_mode_bridge(ed, Mode::Normal);
     // The snapshot above keeps a cursor on the NUL for `gv`; Normal mode

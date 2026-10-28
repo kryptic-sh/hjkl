@@ -636,6 +636,12 @@ pub fn step_normal<H: Host>(
         )
         && input.key == Key::Char('"')
     {
+        // A count typed before the register belongs to the command after it
+        // (`2"ap` pastes twice), times any count typed after it.
+        if had_explicit_count {
+            ed.set_count(count);
+            crate::vim_state::vim_mut(ed).register_count = count;
+        }
         ed.set_pending(Pending::SelectRegister);
         return true;
     }

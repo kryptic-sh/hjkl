@@ -49,6 +49,11 @@ and this project adheres to
 
 ### Fixed
 
+- A count typed before a register prefix is kept, and one typed after it
+  multiplies it, as in vim: `2"ap` pastes twice (the Normal-mode FSM dropped the
+  count at `"`), and `2"a3p` pastes six times where the app's keymap
+  concatenated the digits into 23. `CountAccumulator::begin_register_count`
+  starts the multiplication; the app calls it on `"`.
 - The read-only registers `".` and `"/` can be named in Normal and Visual mode.
   `".p` / `".P` type the last inserted text again, leaving the cursor on its
   last character; `"/p` pastes the last search pattern. A delete, yank or change

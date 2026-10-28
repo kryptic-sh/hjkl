@@ -2390,7 +2390,9 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     }
 
     fn set_count(&mut self, c: usize) {
-        crate::vim_state::vim_mut(self).count = c.min(crate::vim::MAX_COUNT);
+        let v = crate::vim_state::vim_mut(self);
+        v.reset_count();
+        v.count = c.min(crate::vim::MAX_COUNT);
     }
 
     fn accumulate_count_digit(&mut self, digit: usize) {
@@ -2400,21 +2402,30 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         // ceiling (`:h count`) so no apply loop can iterate more than
         // 999,999,999 times regardless of how many digits were typed.
         let v = crate::vim_state::vim_mut(self);
-        v.count = v
-            .count
-            .saturating_mul(10)
-            .saturating_add(digit)
-            .min(crate::vim::MAX_COUNT);
+        let next = |n: usize| {
+            n.saturating_mul(10)
+                .saturating_add(digit)
+                .min(crate::vim::MAX_COUNT)
+        };
+        if v.register_count > 0 {
+            v.count_after_register = next(v.count_after_register);
+            v.count = v
+                .register_count
+                .saturating_mul(v.count_after_register)
+                .min(crate::vim::MAX_COUNT);
+        } else {
+            v.count = next(v.count);
+        }
     }
 
     fn reset_count(&mut self) {
-        crate::vim_state::vim_mut(self).count = 0;
+        crate::vim_state::vim_mut(self).reset_count();
     }
 
     fn take_count(&mut self) -> usize {
         if crate::vim_state::vim(self).count > 0 {
             let n = crate::vim_state::vim(self).count;
-            crate::vim_state::vim_mut(self).count = 0;
+            crate::vim_state::vim_mut(self).reset_count();
             n
         } else {
             1

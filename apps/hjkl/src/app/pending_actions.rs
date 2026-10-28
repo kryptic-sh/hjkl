@@ -83,7 +83,9 @@ impl App {
                 // selection so the subsequent operator (`d`) can consume it.
                 // Example: `5"add` → pending_count=5, `"` → SelectRegister (count
                 // preserved), `a` → SetPendingRegister, `dd` → delete 5 lines
-                // into register `a`.
+                // into register `a`. A count typed after the register
+                // multiplies it (`2"a3p` pastes six times).
+                self.pending_count.begin_register_count();
                 self.pending_state = Some(hjkl_vim::PendingState::SelectRegister);
             }
             AppAction::BeginPendingSetMark => {

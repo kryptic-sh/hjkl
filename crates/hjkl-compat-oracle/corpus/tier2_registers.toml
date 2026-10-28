@@ -590,3 +590,87 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "reg_count_before_register_pastes"
+initial_buffer = "abc def\nxyz\nlast\nmore\n"
+initial_cursor = [0, 0]
+keys = "\"ayl2\"ap"
+expected_buffer = "aaabc def\nxyz\nlast\nmore\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_count_before_and_after_multiply"
+initial_buffer = "abc def\nxyz\nlast\nmore\n"
+initial_cursor = [0, 0]
+keys = "\"ayl2\"a3p"
+expected_buffer = "aaaaaaabc def\nxyz\nlast\nmore\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_count_multiplies_multi_digit"
+initial_buffer = "abc def\nxyz\nlast\nmore\n"
+initial_cursor = [0, 0]
+keys = "\"ayl2\"a12p"
+expected_buffer = "aaaaaaaaaaaaaaaaaaaaaaaaabc def\nxyz\nlast\nmore\n"
+expected_cursor = [0, 24]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_count_before_register_dd"
+initial_buffer = "abc def\nxyz\nlast\nmore\n"
+initial_cursor = [0, 0]
+keys = "2\"add"
+expected_buffer = "last\nmore\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_count_before_and_after_dd"
+initial_buffer = "abc def\nxyz\nlast\nmore\n"
+initial_cursor = [0, 0]
+keys = "2\"a2dd"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_count_before_unnamed"
+initial_buffer = "abc def\nxyz\nlast\nmore\n"
+initial_cursor = [0, 0]
+keys = "yl2\"\"p"
+expected_buffer = "aaabc def\nxyz\nlast\nmore\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_count_before_dot_register"
+initial_buffer = "abc def\nxyz\nlast\nmore\n"
+initial_cursor = [0, 0]
+keys = "iab<Esc>2\".P"
+expected_buffer = "aababbabc def\nxyz\nlast\nmore\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

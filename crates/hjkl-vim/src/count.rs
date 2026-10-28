@@ -17,22 +17,47 @@
 pub struct CountAccumulator {
     /// Accumulated count. `0` means "no count specified".
     buffer: u32,
+    /// The count typed before a `"x` register prefix, which multiplies the
+    /// digits typed after it (`2"a3p` pastes six times). `0` when none.
+    multiplier: u32,
 }
 
 impl CountAccumulator {
     /// Create a new, empty accumulator.
     pub const fn new() -> Self {
-        Self { buffer: 0 }
+        Self {
+            buffer: 0,
+            multiplier: 0,
+        }
     }
 
     /// True iff no digits have been accumulated.
     pub const fn is_empty(&self) -> bool {
-        self.buffer == 0
+        self.peek() == 0
     }
 
     /// Peek at the current count without resetting. Returns 0 when empty.
     pub const fn peek(&self) -> u32 {
-        self.buffer
+        if self.multiplier == 0 {
+            return self.buffer;
+        }
+        let after = if self.buffer == 0 { 1 } else { self.buffer };
+        let n = self.multiplier.saturating_mul(after);
+        if n > Self::MAX_COUNT {
+            Self::MAX_COUNT
+        } else {
+            n
+        }
+    }
+
+    /// A `"x` register prefix arrived: the count typed so far multiplies
+    /// whatever count is typed after the register, as in vim.
+    pub fn begin_register_count(&mut self) {
+        let n = self.peek();
+        if n > 0 {
+            self.multiplier = n;
+            self.buffer = 0;
+        }
     }
 
     /// Vim caps counts at 999,999,999 (`:h count`); larger prefixes clamp
@@ -66,12 +91,11 @@ impl CountAccumulator {
     /// Drain the buffer, returning the count or `default` if empty.
     /// Resets state.
     pub fn take_or(&mut self, default: u32) -> u32 {
-        let c = if self.buffer == 0 {
-            default
-        } else {
-            self.buffer
+        let c = match self.peek() {
+            0 => default,
+            n => n,
         };
-        self.buffer = 0;
+        self.reset();
         c
     }
 
@@ -80,6 +104,7 @@ impl CountAccumulator {
     /// [`drain_as_digits`] first if you need the chars.
     pub fn reset(&mut self) {
         self.buffer = 0;
+        self.multiplier = 0;
     }
 
     /// Drain the buffer as the digit characters that were typed,
@@ -89,12 +114,11 @@ impl CountAccumulator {
     ///
     /// Resets state. Returns empty string when buffer is empty.
     pub fn drain_as_digits(&mut self) -> String {
-        let s = if self.buffer == 0 {
-            String::new()
-        } else {
-            self.buffer.to_string()
+        let s = match self.peek() {
+            0 => String::new(),
+            n => n.to_string(),
         };
-        self.buffer = 0;
+        self.reset();
         s
     }
 }
@@ -102,6 +126,20 @@ impl CountAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn register_prefix_count_multiplies_the_count_after_it() {
+        let mut acc = CountAccumulator::new();
+        assert!(acc.try_accumulate('2'));
+        acc.begin_register_count();
+        assert_eq!(acc.peek(), 2);
+        assert!(acc.try_accumulate('3'));
+        assert_eq!(acc.peek(), 6);
+        assert!(acc.try_accumulate('1'));
+        assert_eq!(acc.peek(), 62);
+        assert_eq!(acc.take_or(1), 62);
+        assert!(acc.is_empty());
+    }
 
     #[test]
     fn new_is_empty() {

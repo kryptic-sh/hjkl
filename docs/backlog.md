@@ -1290,8 +1290,6 @@ Seen while measuring, not `gq`:
   - A refused Visual or `gn` operator records no `LastChange`, where vim's redo
     holds the refused command; a refused Normal-mode operator does record it,
     and `.` refuses again.
-  - A count typed before the register is dropped for every register, not only
-    these: `"ayl2"ap` pastes once where nvim pastes twice (`"a2p` works).
 
 ## 2. Blocked on platform access
 

@@ -36,6 +36,11 @@ pub struct VimState {
     /// Digit prefix accumulated before an operator or motion. `0` means
     /// no prefix was typed (treated as 1 by most commands).
     pub count: usize,
+    /// The count typed before a `"x` register prefix, and the digits typed
+    /// after it. vim multiplies the two (`2"a3p` pastes six times), so while
+    /// `register_count` is set, `count` holds their product.
+    pub register_count: usize,
+    pub count_after_register: usize,
     /// Last `f`/`F`/`t`/`T` target, for `;` / `,` repeat.
     pub last_find: Option<(char, bool, bool)>,
     /// Transient: set while resolving a `;` / `,` repeat so the following
@@ -201,10 +206,17 @@ impl VimState {
         }
     }
 
+    /// Drop the count prefix, including one typed around a register.
+    pub fn reset_count(&mut self) {
+        self.count = 0;
+        self.register_count = 0;
+        self.count_after_register = 0;
+    }
+
     pub fn force_normal(&mut self) {
         self.mode = Mode::Normal;
         self.pending = Pending::None;
-        self.count = 0;
+        self.reset_count();
         self.insert_session = None;
         // Phase 6.3: keep current_mode in sync for callers that bypass step().
         self.current_mode = hjkl_engine::VimMode::Normal;
@@ -221,7 +233,7 @@ impl VimState {
     /// those aren't part of the in-flight chord.
     pub fn clear_pending_prefix(&mut self) {
         self.pending = Pending::None;
-        self.count = 0;
+        self.reset_count();
         self.pending_register = None;
         self.insert_pending_register = false;
     }
