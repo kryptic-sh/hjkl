@@ -58,6 +58,12 @@ jobs:
       - run: rustup update --no-self-update stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-targets --all-features -- -D warnings
+      # `hjkl-vim-types`' enums are `#[non_exhaustive]` for outside crates;
+      # this cfg drops the attribute so `hjkl-vim` must match every variant.
+      - name: Exhaustive matches over hjkl-vim-types
+        run: cargo check --workspace --all-targets
+        env:
+          RUSTFLAGS: '-D warnings --cfg hjkl_exhaustive'
 
   machete:
     name: cargo-machete (unused deps)

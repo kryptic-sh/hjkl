@@ -8,6 +8,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed (breaking)
 
+- `SearchBank` is `#[non_exhaustive]`: build it with `SearchBank::default()` and
+  set its fields, not with a struct literal, so new fields are not breaking.
 - `move_word_fwd`, `move_word_back` and `move_word_end` take a
   `&dyn FoldProvider` (pass `NoopFoldProvider` to walk as if nothing were
   folded), and `move_word_end` takes vim's `stop` flag. Vim's `fwd_word()` /

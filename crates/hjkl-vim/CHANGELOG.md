@@ -10,6 +10,11 @@ and this project adheres to
 
 ### Changed (BREAKING)
 
+- `PendingState` and `VimState` are `#[non_exhaustive]`: a `match` over
+  `PendingState` needs a wildcard arm, and `VimState` cannot be built with a
+  struct literal outside this crate. New variants and fields stop being
+  breaking. `EngineCmd` stays exhaustive, since a new command needs the host to
+  handle it.
 - `PendingState::OpMark`, `EngineCmd::ApplyOpMark` and the required
   `VimEditorExt::apply_op_mark` are new, for an operator over a mark motion. A
   host matching `Outcome::Commit(EngineCmd::..)` exhaustively must handle

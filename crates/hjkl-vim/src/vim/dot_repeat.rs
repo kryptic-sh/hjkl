@@ -335,6 +335,8 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                     hjkl_engine::motions::move_line_end(ed.buffer_mut());
                     hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
                 }
+                #[cfg(not(hjkl_exhaustive))]
+                _ => {}
             }
             for _ in 0..scaled(count).max(1) {
                 let cursor = ed.cursor();
@@ -350,6 +352,8 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             }
             remember_cursor_column(ed);
         }
+        #[cfg(not(hjkl_exhaustive))]
+        _ => {}
     }
     vim_mut(ed).replaying = false;
 }

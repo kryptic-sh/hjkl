@@ -15,6 +15,16 @@ patch bumps.
   fold's top line, as in vim. In Visual mode `zF` folds the selection, as `zf`
   does.
 
+### Changed (BREAKING)
+
+- `hjkl-vim-types`' `Pending`, `Motion`, `LastChange` and `InsertEntry`,
+  `hjkl-vim`'s `PendingState` and `VimState`, and `hjkl-engine`'s `SearchBank`
+  are `#[non_exhaustive]`. A match over those enums outside their crate needs a
+  wildcard arm, and the structs cannot be built with a struct literal; in
+  return, new variants and fields stop being breaking changes. CI builds with
+  `--cfg hjkl_exhaustive`, which drops the attribute, so `hjkl-vim` still
+  handles every variant.
+
 ### Changed
 
 - **Dependency updates**, all within existing ranges (`Cargo.lock` only): `zip`

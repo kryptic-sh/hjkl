@@ -8,6 +8,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed (BREAKING)
+
+- `Pending`, `Motion`, `LastChange` and `InsertEntry` are `#[non_exhaustive]`: a
+  `match` over them outside this crate needs a wildcard arm. From here on a new
+  variant on any of them is not a breaking change. Building with
+  `--cfg hjkl_exhaustive` drops the attribute, which `hjkl`'s CI uses to keep
+  `hjkl-vim`'s matches exhaustive.
+
 ### Added
 
 - `Motion::ScreenLineStart`, `Motion::ScreenLineFirstNonBlank` and

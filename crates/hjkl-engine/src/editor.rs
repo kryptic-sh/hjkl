@@ -682,6 +682,7 @@ pub type GlobalMarks = std::collections::BTreeMap<char, (u64, usize, usize)>;
 /// the same breath, and `n`/`N` reads both. Mirrors [`GlobalMarks`] /
 /// [`crate::Registers`] as the app host's spelling for the shared-bank type.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct SearchBank {
     /// Last committed search pattern, for `n` / `N` (or Find Next).
     pub last: Option<String>,

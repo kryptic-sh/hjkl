@@ -1,4 +1,11 @@
 //! Vim vocabulary types for the hjkl editor.
+//!
+//! The enums that grow as vim coverage does (`Pending`, `Motion`,
+//! `LastChange`, `InsertEntry`) are `#[non_exhaustive]`, so a new variant is
+//! not a breaking change for a crate matching on them. `hjkl-vim` must still
+//! handle every variant: building with `--cfg hjkl_exhaustive` drops the
+//! attribute and the wildcard arms `hjkl-vim` carries for it, so CI fails on an
+//! unhandled variant.
 
 // ─── Modes & parser state ───────────────────────────────────────────────────
 
@@ -17,6 +24,7 @@ pub enum Mode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[cfg_attr(not(hjkl_exhaustive), non_exhaustive)]
 pub enum Pending {
     #[default]
     None,
@@ -164,6 +172,7 @@ pub enum Operator {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(hjkl_exhaustive), non_exhaustive)]
 pub enum Motion {
     Left,
     Right,
@@ -318,6 +327,7 @@ pub enum RangeKind {
 
 /// Information needed to replay a mutating change via `.`.
 #[derive(Debug, Clone)]
+#[cfg_attr(not(hjkl_exhaustive), non_exhaustive)]
 pub enum LastChange {
     /// Operator over a motion.
     OpMotion {
@@ -496,6 +506,7 @@ pub enum VisualExtent {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(hjkl_exhaustive), non_exhaustive)]
 pub enum InsertEntry {
     I,
     A,

@@ -521,6 +521,8 @@ fn motion_class(motion: &Motion) -> MotionClass {
         | Motion::ScreenLineFirstNonBlank
         | Motion::ScreenLineEnd
         | Motion::GotoColumn => Horizontal,
+        #[cfg(not(hjkl_exhaustive))]
+        _ => Horizontal,
         // No Motion variant classifies Raw — see the enum docs.
     }
 }
@@ -603,6 +605,8 @@ fn motion_opens_fold(motion: &Motion, count: usize, succeeded: bool) -> bool {
         | Motion::FirstNonBlankPrevLine
         | Motion::FirstNonBlankLine
         | Motion::GotoColumn => false,
+        #[cfg(not(hjkl_exhaustive))]
+        _ => false,
     }
 }
 /// The text area's width in cells, `0` before a host has published one.
@@ -1075,6 +1079,8 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         Motion::GotoColumn => {
             hjkl_engine::motions::move_goto_column(ed.buffer_mut(), count);
         }
+        #[cfg(not(hjkl_exhaustive))]
+        _ => {}
     }
 }
 pub fn move_first_non_whitespace<H: hjkl_engine::types::Host>(

@@ -2,6 +2,7 @@
 /// `Option<PendingState>`; when `Some`, it routes keys through `step`
 /// instead of the keymap trie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PendingState {
     Replace {
         count: usize,

@@ -322,19 +322,15 @@ fixed:
     and nvim would need `:set nowrap` and a sideways scroll set up to match.
   - The subprocess driver (`run_case_via_nvim_api`, `HJKL_ORACLE_NVIM_API=1`),
     which runs the `hjkl` binary with whatever wrap its options give.
-- **Breaking enum variants shipped in patch releases (needs a decision).**
-  `Motion::ScreenLineStart`, `ScreenLineFirstNonBlank` and `ScreenLineEnd` (for
-  `g0` / `g^` / `g$`) went out in v0.43.3, cut as a patch. They are new variants
-  on the exhaustive `Motion` enum in `hjkl-vim-types`, so an external exhaustive
-  `match` stops compiling on `cargo update`. Below 1.0 that should have been a
-  minor bump. (The earlier additions the same crate's `[Unreleased]` changelog
-  lists, `LastChange::OpenLine { count }`, `InsertEntry::GShiftI` and
-  `Pending::OpMark`, are already in v0.43.0, a minor release; per-crate
-  changelogs are not rolled at release.) Published versions cannot be changed.
-  The options: mark `Motion` (and the other public enums that keep growing)
-  `#[non_exhaustive]` in the next minor release, so new variants stop being
-  breaking; or keep them exhaustive and make the release process check
-  `hjkl-vim-types` for added variants before choosing a patch bump.
+- **What `#[non_exhaustive]` does not cover (2026-10-28).** The growing
+  `hjkl-vim-types` enums, `PendingState`, `VimState` and `SearchBank` are
+  marked; a new variant or field on those is no longer breaking. Still breaking:
+  a new field on an existing struct-like variant (`LastChange::VisualOp`, ...),
+  and any change to `InsertSession` / `LastVisual` or `EngineCmd`. The variants
+  and those two structs are built by `hjkl-vim`, which a `#[non_exhaustive]`
+  outside their crate would forbid; `EngineCmd` stays exhaustive because a new
+  command needs the host to act on it. A release that changes any of them still
+  needs a minor bump.
 
 ### 1.5b Left open by the motion- and blockwise-parity passes
 
@@ -1103,9 +1099,9 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
   the count: `Vj2>.` and `<C-v>j2>.` on `"ab\ncd"` @ (0,0) indent each line 16
   columns in nvim 0.12.5 (two shifts of two), 12 in hjkl, because
   `LastChange::VisualOp` stores no count and the replay (`replay_last_change`'s
-  `VisualOp` arm, `replay_block_visual_op`) shifts one level. Held back
-  2026-10-27 on the semver question in §1.5: `LastChange` is an exhaustive
-  public enum in `hjkl-vim-types`, so a new field is breaking.
+  `VisualOp` arm, `replay_block_visual_op`) shifts one level. A count field on
+  `VisualOp` is still a breaking change (see §1.5), so it waits for a minor
+  release.
 - **`n` / `N` forget the last search's offset.** vim stores the offset with the
   pattern (`spats[0].off`) and `n` re-applies it; hjkl's prompt applies it once
   (`apply_search_offset`, `search_prompt.rs`) and keeps only the pattern
@@ -1114,12 +1110,9 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
   `/ab/e<CR>N` on (0,11) and (0,0), and `/ab/+1<CR>n` on `"ab\ncd\nab\nef"` on
   (1,0) and (0,0). Fixing it means keeping the offset beside the last pattern
   and running `offset_search_match` / `apply_search_offset` from
-  `Motion::SearchNext` too. Held back 2026-10-27 on the semver question in §1.5
-  ("Breaking enum variants shipped in patch releases"): the natural homes,
-  `hjkl_engine::SearchBank` and `hjkl_vim::VimState`, are public structs with
-  only public fields, so a new field breaks a struct literal outside the
-  workspace; `#[non_exhaustive]` on them, in a minor release, would make the
-  addition safe.
+  `Motion::SearchNext` too. The natural homes, `hjkl_engine::SearchBank` and
+  `hjkl_vim::VimState`, are `#[non_exhaustive]` since 2026-10-28, so a new field
+  there is not breaking.
 - **Visual `r<CR>` cannot be represented.** vim replaces every selected cell
   with a literal carriage return (`vr<CR>` on `"abcd"` gives `"\rbcd"` in nvim
   0.12.5), but the rope reads `\r` as a line break, so the buffer would split

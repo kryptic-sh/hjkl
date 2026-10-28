@@ -14,6 +14,11 @@ readme = "README.md"
 
 # Idiom lints kept fixed workspace-wide (round 2, item 20). Every member
 # manifest opts in with `[lints] workspace = true`.
+[workspace.lints.rust]
+# `hjkl-vim-types` drops `#[non_exhaustive]` under this cfg so CI can
+# check that `hjkl-vim` matches every variant (see that crate's docs).
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(hjkl_exhaustive)'] }
+
 [workspace.lints.clippy]
 or_fun_call = "deny"
 unused_peekable = "deny"

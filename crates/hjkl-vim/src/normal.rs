@@ -125,6 +125,8 @@ pub fn step_normal<H: Host>(
             return handle_op_sneak_second(ed, input, op, count1, c1, forward);
         }
         Pending::None => {}
+        #[cfg(not(hjkl_exhaustive))]
+        _ => {}
     }
 
     // Whether the user typed an explicit count before this key (`take_count`

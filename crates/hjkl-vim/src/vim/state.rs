@@ -24,6 +24,7 @@ pub fn rot13_str(s: &str) -> String {
         .collect()
 }
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct VimState {
     /// Internal FSM mode. Kept in sync with `current_mode` after every
     /// `step`. Phase 6.6b: promoted from private to `pub` so the FSM
