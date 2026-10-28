@@ -921,3 +921,135 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "one_cell_block_inner_bracket_selects_charwise"
+initial_buffer = "ab [cd ef] gh\nxy (zz) \"q r\" w"
+initial_cursor = [0, 5]
+keys = "<C-v>i["
+expected_buffer = "ab [cd ef] gh\nxy (zz) \"q r\" w"
+expected_cursor = [0, 8]
+expected_mode = "visual"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "one_cell_block_around_bracket_yank"
+initial_buffer = "ab [cd ef] gh\nxy (zz) \"q r\" w"
+initial_cursor = [0, 5]
+keys = "<C-v>a[y"
+expected_buffer = "ab [cd ef] gh\nxy (zz) \"q r\" w"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "tall_block_inner_bracket_from_low_end"
+initial_buffer = "ab [cd ef] gh\nxy (zz) \"q r\" w"
+initial_cursor = [0, 5]
+keys = "<C-v>ji[y"
+expected_buffer = "ab [cd ef] gh\nxy (zz) \"q r\" w"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "wide_block_inner_bracket_delete"
+initial_buffer = "ab [cd ef] gh\nxy (zz) \"q r\" w"
+initial_cursor = [0, 5]
+keys = "<C-v>lli[d"
+expected_buffer = "ab [] gh\nxy (zz) \"q r\" w"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "charwise_inner_bracket_from_low_end"
+initial_buffer = "ab [cd ef] gh\nxy (zz) \"q r\" w"
+initial_cursor = [0, 5]
+keys = "vji[y"
+expected_buffer = "ab [cd ef] gh\nxy (zz) \"q r\" w"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "charwise_selection_on_open_paren_finds_no_block"
+initial_buffer = "(ab\ncd)\n"
+initial_cursor = [0, 0]
+keys = "vjib~"
+expected_buffer = "(AB\nCd)\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "repeated_inner_bracket_grows_to_outer"
+initial_buffer = "ab [[cd ef]] gh"
+initial_cursor = [0, 5]
+keys = "vi[i[y"
+expected_buffer = "ab [[cd ef]] gh"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "repeated_inner_brace_grows_over_lines"
+initial_buffer = "x {ab {\n  cd\n  ef\n}\n}"
+initial_cursor = [1, 2]
+keys = "vji{i{y"
+expected_buffer = "x {ab {\n  cd\n  ef\n}\n}"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "around_bracket_without_outer_takes_next_forward"
+initial_buffer = "a [b [cd ef] g] h"
+initial_cursor = [0, 5]
+keys = "vla[a["
+expected_buffer = "a [b [cd ef] g] h"
+expected_cursor = [0, 11]
+expected_mode = "visual"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_forward_bracket_needs_balanced_closes"
+initial_buffer = "xy [ab] [cd]"
+initial_cursor = [0, 0]
+keys = "vl2i[y"
+expected_buffer = "xy [ab] [cd]"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_forward_bracket_nested"
+initial_buffer = "xy [a [b] c]"
+initial_cursor = [0, 0]
+keys = "vl2i[y"
+expected_buffer = "xy [a [b] c]"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

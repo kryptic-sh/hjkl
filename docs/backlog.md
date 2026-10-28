@@ -368,8 +368,8 @@ goes to row 1.
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
 keys. A corpus case would need the ex layer driven some other way.
 
-**The differential fuzzer's standing counts.** After the `gu02$.` fix
-(2026-10-28) `difffuzz 2000 424242` reports 44 distinct divergences (77 at
+**The differential fuzzer's standing counts.** After the Visual bracket object
+fix (2026-10-28) `difffuzz 2000 424242` reports 41 distinct divergences (77 at
 `c24057ca`, 2026-10-27); `difffuzz 400 777` reported 23 at `c24057ca` (69 when
 the seed-777 count was first recorded, 2026-08-04). Each slice compares the
 sorted divergence list before and after rather than the count, since the
@@ -1256,6 +1256,15 @@ Seen while measuring, not `gq`:
     on `"ab  "`: nvim `"ab x"`, hjkl `"abx"`, as vim itself gives under
     `:set sts=4`). A deliberate default, noted so a differential case after text
     is not read as a regression; the oracle does not pin `softtabstop`.
+- **Visual bracket objects: what `bracket_visual` does not cover (2026-10-28).**
+  The port of vim's `current_block` (`hjkl-vim` `text_object.rs`) runs for
+  charwise and block selections bigger than one cell. Visual-line still takes
+  hjkl's own path, because `visual_line_anchor` keeps only a row where vim keeps
+  a position (the same gap as the sentence objects, §1.16). The one-cell case
+  still goes through `bracket_text_object`, whose forward fallback ignores
+  nesting where the Visual port's `find_open_after` counts it; unmeasured
+  whether they differ. The tag objects (`it` / `at`, vim's `current_tagblock`)
+  were not ported.
 - **`.` after `!{motion}` and `gc{motion}` is not recorded (2026-10-28).**
   `op_is_change` (`hjkl-vim` `visual.rs`) now admits every operator vim redoes
   except these two. Neither was measured: the oracle's nvim has no

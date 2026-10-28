@@ -1330,13 +1330,7 @@ pub fn bracket_text_object<H: hjkl_engine::types::Host>(
     inner: bool,
     count: usize,
 ) -> Option<(Pos, Pos, RangeKind)> {
-    let close = match open {
-        '(' => ')',
-        '[' => ']',
-        '{' => '}',
-        '<' => '>',
-        _ => return None,
-    };
+    let close = closing_bracket(open)?;
     let (row, col) = ed.cursor();
     let lines = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
     let lines = lines.as_slice();
@@ -1347,16 +1341,7 @@ pub fn bracket_text_object<H: hjkl_engine::types::Host>(
     // open — making `di}`/`di{`-on-`}` a silent no-op.
     let cursor_char = lines.get(row).and_then(|l| l.chars().nth(col));
     let (open_pos, close_pos) = if cursor_char == Some(close) {
-        let anchored = if col > 0 {
-            find_open_bracket(lines, row, col - 1, open, close)
-        } else if row > 0 {
-            let pr = row - 1;
-            let pc = lines[pr].chars().count().saturating_sub(1);
-            find_open_bracket(lines, pr, pc, open, close)
-        } else {
-            None
-        };
-        match anchored {
+        match find_open_before(lines, (row, col), open, close) {
             Some(open_pos) => (open_pos, (row, col)),
             // An unmatched close under the cursor: like any cursor outside a
             // pair, take the next pair forward (`di(` on the `)` of
@@ -1383,16 +1368,7 @@ pub fn bracket_text_object<H: hjkl_engine::types::Host>(
     let (open_pos, close_pos) = {
         let (mut op, mut cp) = (open_pos, close_pos);
         for _ in 1..count.max(1) {
-            let outer = if op.1 > 0 {
-                find_open_bracket(lines, op.0, op.1 - 1, open, close)
-            } else if op.0 > 0 {
-                let pr = op.0 - 1;
-                let pc = lines[pr].chars().count().saturating_sub(1);
-                find_open_bracket(lines, pr, pc, open, close)
-            } else {
-                None
-            };
-            let oo = outer?;
+            let oo = find_open_before(lines, op, open, close)?;
             let oc = find_close_bracket(lines, oo.0, oo.1 + 1, open, close)?;
             op = oo;
             cp = oc;
@@ -1469,6 +1445,121 @@ pub fn bracket_text_object<H: hjkl_engine::types::Host>(
         ))
     }
 }
+/// The bracket that closes `open` for the bracket text objects.
+fn closing_bracket(open: char) -> Option<char> {
+    match open {
+        '(' => Some(')'),
+        '[' => Some(']'),
+        '{' => Some('}'),
+        '<' => Some('>'),
+        _ => None,
+    }
+}
+
+/// The unmatched `open` strictly before `pos`, the way vim's `findmatch`
+/// steps off its start position before it looks.
+fn find_open_before(lines: &[String], pos: Pos, open: char, close: char) -> Option<Pos> {
+    if pos.1 > 0 {
+        find_open_bracket(lines, pos.0, pos.1 - 1, open, close)
+    } else if pos.0 > 0 {
+        let pr = pos.0 - 1;
+        let pc = lines[pr].chars().count().saturating_sub(1);
+        find_open_bracket(lines, pr, pc, open, close)
+    } else {
+        None
+    }
+}
+
+/// The next `open` strictly after `pos` that no earlier `close` on the way
+/// pairs with: vim's `findmatchlimit` searching forward (`FM_FORWARD`), where
+/// a `close` passed raises the depth an `open` must bring back to zero.
+fn find_open_after(lines: &[String], pos: Pos, open: char, close: char) -> Option<Pos> {
+    let mut depth = 0usize;
+    let mut col = pos.1 + 1;
+    for (row, line) in lines.iter().enumerate().skip(pos.0) {
+        for (c, ch) in line.chars().enumerate().skip(col) {
+            if ch == close {
+                depth += 1;
+            } else if ch == open {
+                if depth == 0 {
+                    return Some((row, c));
+                }
+                depth -= 1;
+            }
+        }
+        col = 0;
+    }
+    None
+}
+
+/// Visual-mode `i(` / `a(` and the other bracket objects on a selection
+/// bigger than one cell, from `anchor` to the cursor: vim's `current_block`
+/// with Visual active. The search starts from the selection's low end
+/// without stepping off a bracket under it (so a selection starting on the
+/// `(` finds no enclosing block); with none, it takes the next `(` after
+/// that end instead, as vim's forward `findmatchlimit` does. An inner object
+/// that would not be bigger than the selection grows to the next enclosing
+/// block. Returns the new selection's anchor and cursor, which vim makes
+/// charwise.
+pub fn bracket_visual<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    anchor: Pos,
+    open: char,
+    inner: bool,
+    count: usize,
+) -> Option<(Pos, Pos)> {
+    let close = closing_bracket(open)?;
+    let lines = rope_to_lines_vec(&hjkl_engine::types::Query::rope(ed.buffer()));
+    let (old_start, old_end) = super::order(anchor, ed.cursor());
+    let enclosed = find_open_before(&lines, old_start, open, close).is_some();
+    let mut open_pos = old_start;
+    for _ in 0..count.max(1) {
+        open_pos = if enclosed {
+            find_open_before(&lines, open_pos, open, close)?
+        } else {
+            find_open_after(&lines, open_pos, open, close)?
+        };
+    }
+    let mut close_pos = find_close_bracket(&lines, open_pos.0, open_pos.1 + 1, open, close)?;
+    if !inner {
+        return Some((open_pos, close_pos));
+    }
+    with_vim_buf(ed, |buf, _| {
+        loop {
+            let mut start = open_pos;
+            buf.incl(&mut start);
+            let mut end = close_pos;
+            let mut sol = end.1 == 0;
+            buf.decl(&mut end);
+            // A close preceded only by indent: back over that indent.
+            while in_indent(buf, end) {
+                sol = true;
+                if buf.decl(&mut end) != 0 {
+                    break;
+                }
+            }
+            if start >= old_start && end <= old_end {
+                let mut from = old_start;
+                buf.decl(&mut from);
+                open_pos = find_open_before(&lines, from, open, close)?;
+                close_pos = find_close_bracket(&lines, open_pos.0, open_pos.1 + 1, open, close)?;
+                continue;
+            }
+            // The close started its line: take the line break before it.
+            if sol && buf.gchar(end).is_some() {
+                buf.inc(&mut end);
+            }
+            return Some((start, end));
+        }
+    })
+    .flatten()
+}
+
+/// vim `inindent(1)`: whether `p` sits in its line's leading white space.
+fn in_indent(buf: &VimBuf<'_>, p: Pos) -> bool {
+    (0..=p.1).all(|col| buf.gchar((p.0, col)).is_some_and(is_vim_white))
+}
+
 pub fn find_open_bracket(
     lines: &[String],
     row: usize,

@@ -40,6 +40,10 @@ patch bumps.
 
 ### Fixed
 
+- Bracket text objects in Visual mode follow vim: `<C-v>i[` / `<C-v>a{` select
+  the block charwise (they did nothing), `vji(` takes the block around the
+  selection's start instead of its end, `vi[i[` grows to the enclosing block,
+  and a selection with no enclosing block takes the next one forward.
 - `.` repeats `gU` / `gu` / `g~` / `g?`, `=`, `gq` and `gw` over a motion or
   text object (`gUw`, `g~iw`, `gqj`), as in vim; hjkl repeated only `d`, `c`,
   `>` and `<`.

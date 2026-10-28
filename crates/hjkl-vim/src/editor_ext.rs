@@ -1828,6 +1828,28 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         let Some(obj) = crate::vim::text_object_from_char(ch) else {
             return;
         };
+        // Bracket objects on a charwise or block selection bigger than one
+        // cell follow vim's `current_block` with Visual active: select the
+        // block charwise, or do nothing when none encloses the selection.
+        let bracket_anchor = match crate::vim_state::vim(self).mode {
+            FsmMode::Visual => Some(crate::vim_state::vim(self).visual_anchor),
+            FsmMode::VisualBlock => Some(crate::vim_state::vim(self).block_anchor),
+            _ => None,
+        };
+        if let TextObject::Bracket(open) = obj
+            && let Some(anchor) = bracket_anchor
+            && anchor != self.cursor()
+        {
+            if let Some((start, (row, col))) =
+                crate::vim::bracket_visual(self, anchor, open, inner, count)
+            {
+                crate::vim_state::vim_mut(self).mode = FsmMode::Visual;
+                crate::vim_state::vim_mut(self).current_mode = VimMode::Visual;
+                crate::vim_state::vim_mut(self).visual_anchor = start;
+                self.jump_cursor(row, col);
+            }
+            return;
+        }
         // Sentences and words follow vim's `current_sent` / `current_word`
         // with Visual active: select the object charwise, or extend the
         // selection keeping anchor and mode. Visual-line keeps only its
@@ -1999,21 +2021,21 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         };
         // NOTE: only the WORD objects stay blockwise and EXTEND the block
         // (handled above — the block keeps its rows and the cursor extends
-        // its columns to the object end); BRACKET and TAG objects are
-        // selection no-ops, and paragraph / sentence also stay blockwise,
-        // landing the cursor at the object-extend position. Measured on
-        // neovim 0.12.4 from a `<C-v>j` block:
+        // its columns to the object end); TAG objects are selection no-ops,
+        // and paragraph / sentence also stay blockwise, landing the cursor at
+        // the object-extend position. Measured on neovim 0.12.4 from a
+        // `<C-v>j` block:
         //
         //   - `iw` / `aw` / `iW` / `aW` / `ip` / `is` stay BLOCKWISE and just
         //     extend the cursor (so the block keeps its rows and takes the
         //     object's columns);
-        //   - `ib` / `ab` / `iB` / `it` leave the block EXACTLY as the block
-        //     motion made it — mode stays visual_block, cursor keeps the
-        //     post-motion position; the object is found but the selection
-        //     does not change (`<C-v>jib~` flips the same cells as
-        //     `<C-v>j~`). hjkl used to collapse these to charwise;
+        //   - `it` leaves the block exactly as the block motion made it;
         //   - `i"` does nothing at all (the object is not found from a block
         //     at the measured position).
+        //
+        // Bracket objects on a block bigger than one cell take
+        // `bracket_visual` before this; from a one-cell block they select
+        // the object charwise like `v` does.
         //
         // Sentence objects with the anchor below the cursor use vim's reverse
         // `findsent` landing: `is` returns to the current sentence start and
@@ -2035,11 +2057,11 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 crate::vim_state::vim_mut(self).block_to_eol = false;
                 return;
             }
-            // Bracket and tag objects are selection no-ops in blockwise
-            // visual (nvim-measured): return without touching mode or
-            // cursor. `end` was computed above but is deliberately unused —
-            // the block keeps the post-motion geometry.
-            if let TextObject::Bracket(_) | TextObject::XmlTag = obj {
+            // Tag objects are selection no-ops in blockwise visual
+            // (nvim-measured): return without touching mode or cursor. `end`
+            // was computed above but is deliberately unused — the block
+            // keeps the post-motion geometry.
+            if obj == TextObject::XmlTag {
                 return;
             }
             // Sentence (`is`) objects EXTEND the block (nvim-measured; the

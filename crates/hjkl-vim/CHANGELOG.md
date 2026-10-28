@@ -49,6 +49,13 @@ and this project adheres to
 
 ### Fixed
 
+- `visual_text_obj_extend_counted`: a bracket object (`i(`, `a[`, `iB`, ...) on
+  a charwise or block selection bigger than one cell follows vim's
+  `current_block` (`text_object::bracket_visual`). It searches from the
+  selection's low end, takes the next bracket forward when none encloses it,
+  grows an inner object that is not bigger than the selection, and makes the
+  selection charwise. From a one-cell block it selects the object charwise as
+  `v` does; it was a no-op in blockwise Visual.
 - `op_is_change` covers every operator vim redoes: the case operators, `=`, `gq`
   and `gw` join `d` / `c` / `>` / `<`, so `gUw`, `g?iw` and `gqj` are recorded
   for `.`. `!` and `gc` stay out, unverified.
