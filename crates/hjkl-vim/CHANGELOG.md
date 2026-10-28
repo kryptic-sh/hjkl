@@ -49,6 +49,10 @@ and this project adheres to
 
 ### Fixed
 
+- `J` keeps the current line's marks and moves the next line's onto it the way
+  vim's `do_join` does: shifted to where its text lands, less the indent the
+  join strips, and onto the join point from inside that indent. Before, `lmaJ`
+  lost `'a` and a mark on the joined line kept its old column.
 - A macro recorded through `dispatch_input` keeps the keys typed into the search
   prompt: `qq/g<CR>q@q` searched nothing on replay, because the prompt's
   intercept returned before the recorder and `"q` held only `/`. During replay

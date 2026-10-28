@@ -828,14 +828,13 @@ impl View {
             c.marks.remove(&ch);
         }
     }
-    /// Move every mark on row `from` to row `to`, adding `col_add` to its
-    /// column: a charwise delete across rows joins its last row onto its
-    /// first.
-    pub fn join_row_marks(&mut self, from: usize, to: usize, col_add: usize) {
-        for (row, col) in self.content_lock_mut().marks.values_mut() {
+    /// Move every mark on row `from` to row `to`, mapping its column through
+    /// `col`: an edit that joins `from` onto `to`.
+    pub fn join_row_marks(&mut self, from: usize, to: usize, col: impl Fn(usize) -> usize) {
+        for (row, c) in self.content_lock_mut().marks.values_mut() {
             if *row == from {
                 *row = to;
-                *col += col_add;
+                *c = col(*c);
             }
         }
     }

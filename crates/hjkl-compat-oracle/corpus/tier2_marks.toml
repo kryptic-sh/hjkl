@@ -330,3 +330,99 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "mark_join_moves_next_line_mark"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\n"
+initial_cursor = [0, 0]
+keys = "jlmakJ`a"
+expected_buffer = "aa bb cc dd\nee ff\ngg hh\nii jj\n"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "mark_join_keeps_first_line_mark"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\n"
+initial_cursor = [0, 0]
+keys = "lmaJ`a"
+expected_buffer = "aa bb cc dd\nee ff\ngg hh\nii jj\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "mark_join_counted"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\n"
+initial_cursor = [0, 0]
+keys = "jjlmakk3J`a"
+expected_buffer = "aa bb cc dd ee ff\ngg hh\nii jj\n"
+expected_cursor = [0, 13]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "mark_join_raw_moves_mark"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\n"
+initial_cursor = [0, 0]
+keys = "jlmakgJ`a"
+expected_buffer = "aa bbcc dd\nee ff\ngg hh\nii jj\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "mark_join_raw_counted"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\n"
+initial_cursor = [0, 0]
+keys = "jjlmakk3gJ`a"
+expected_buffer = "aa bbcc ddee ff\ngg hh\nii jj\n"
+expected_cursor = [0, 11]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "mark_join_visual"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\n"
+initial_cursor = [0, 0]
+keys = "jlmakVjJ`a"
+expected_buffer = "aa bb cc dd\nee ff\ngg hh\nii jj\n"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "mark_join_in_stripped_indent"
+initial_buffer = "aa bb\n    cc dd\n"
+initial_cursor = [0, 0]
+keys = "jlmakJ`a"
+expected_buffer = "aa bb cc dd\n"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "mark_join_after_stripped_indent"
+initial_buffer = "aa bb\n    cc dd\n"
+initial_cursor = [0, 0]
+keys = "j5lmakJ`a"
+expected_buffer = "aa bb cc dd\n"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

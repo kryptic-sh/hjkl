@@ -19,6 +19,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `gJ` (`Edit::JoinLines`) and a charwise `Edit::Replace` across rows keep the
+  first row's marks and move each joined row's marks to where its text lands.
+  Both rebased from the cursor row before, which dropped the first row's marks
+  and left the joined rows' marks at their old columns.
 - A charwise delete across rows rebases marks and jumps the way vim's join does:
   marks on its first row stay (they were dropped when the cursor was there),
   marks on the rows between go, and marks on its last row move onto the first
@@ -89,6 +93,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `Editor::join_row_marks(from, to, moved)`: move the marks and jumps on one row
+  onto another, mapping their columns, for a command that joins lines itself
+  (`J`).
 - `MotionKind::Home`, for `<Home>`: `LineStart` without opening a closed fold.
 - `SearchBank::offset`, with `Editor::last_search_offset` /
   `set_last_search_offset`: the last committed search's offset (`e` for

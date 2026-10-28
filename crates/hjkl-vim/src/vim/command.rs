@@ -590,6 +590,17 @@ pub fn join_line<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View,
     };
     let joined = format!("{cur_line}{separator}{next_trimmed}");
     let joined_chars = joined.chars().count();
+    // The next line's marks follow its text onto this row, less the indent
+    // the join strips; one inside that indent lands on the join point.
+    let indent = next_chars - next_trimmed.chars().count();
+    let text_start = cur_chars + separator.len();
+    ed.join_row_marks(row + 1, row, |c| {
+        if c < indent {
+            cur_chars
+        } else {
+            c - indent + text_start
+        }
+    });
     ed.mutate_edit(Edit::Replace {
         start: Position::new(row, 0),
         end: Position::new(row + 1, next_chars),

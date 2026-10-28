@@ -2707,7 +2707,10 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
                 start,
                 end,
                 kind: hjkl_buffer::MotionKind::Char,
-            } if start.row != end.row => {
+            }
+            | hjkl_buffer::Edit::Replace { start, end, .. }
+                if start.row != end.row =>
+            {
                 let (top, bot) = if (start.row, start.col) <= (end.row, end.col) {
                     (start, end)
                 } else {
@@ -2723,6 +2726,8 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
                 end,
                 kind: hjkl_buffer::MotionKind::Line,
             } => start.row.min(end.row),
+            // `gJ` keeps `row` and folds the rows after it into it.
+            hjkl_buffer::Edit::JoinLines { row, .. } => row + 1,
             _ => match charwise_join {
                 Some((top, _, _)) => top + 1,
                 None => pre_row,
@@ -2848,7 +2853,21 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // edit silently invalidates `'a`-style positions.
         if delta != 0 {
             if let Some((top, bot, top_col)) = charwise_join {
-                self.join_row_marks(bot, top, top_col);
+                self.join_row_marks(bot, top, |c| c + top_col);
+            }
+            // Each joined row's marks follow its text to where it now
+            // starts on `row`: the length `row` had before that join, plus
+            // the space the join put in.
+            if let hjkl_buffer::Edit::SplitLines {
+                row,
+                cols,
+                inserted_spaces,
+            } = &inverse
+            {
+                for (i, (&col, &space)) in cols.iter().zip(inserted_spaces).enumerate() {
+                    let start = col + usize::from(space);
+                    self.join_row_marks(row + 1 + i, *row, |c| c + start);
+                }
             }
             self.shift_marks_after_edit(rebase_row, delta);
         }
@@ -2856,24 +2875,26 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         inverse
     }
 
-    /// The marks and jumps on the last row of a charwise delete across rows
-    /// follow it onto the first row. vim's `do_join` adds the kept prefix's
-    /// length to their columns (`mark_col_adjust`) without subtracting what
-    /// the delete took off the joined row, so `d` from (1,2) to (2,1) moves a
-    /// mark at (2,3) to (1,5).
-    fn join_row_marks(&mut self, from: usize, to: usize, col_add: usize) {
-        self.buffer.join_row_marks(from, to, col_add);
+    /// Move the marks and jumps on row `from` onto row `to`, mapping each
+    /// column through `moved`, as vim's `do_join` does for a joined line
+    /// (`mark_col_adjust`). `mutate_edit` calls this for a charwise delete or
+    /// replace across rows, adding the kept prefix's length (vim never
+    /// subtracts what the delete took off the joined row: `d` from (1,2) to
+    /// (2,1) moves a mark at (2,3) to (1,5)), and for `gJ`. `J`, which strips
+    /// the joined line's indent, calls it itself before its edit.
+    pub fn join_row_marks(&mut self, from: usize, to: usize, moved: impl Fn(usize) -> usize) {
+        self.buffer.join_row_marks(from, to, &moved);
         let cur_bid = self.current_buffer_id;
         for (bid, row, col) in self.global_marks.lock().unwrap().values_mut() {
             if *bid == cur_bid && *row == from {
                 *row = to;
-                *col += col_add;
+                *col = moved(*col);
             }
         }
         for (row, col) in self.jump_back.iter_mut().chain(self.jump_fwd.iter_mut()) {
             if *row == from {
                 *row = to;
-                *col += col_add;
+                *col = moved(*col);
             }
         }
     }

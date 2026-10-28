@@ -1112,11 +1112,14 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
     `dd` / `>>` / `<<` / `cc` / `gUU` / `==` that this entry also listed now
     match nvim. Read `u_undoredo`'s cursor rule in nvim's source before
     guessing.
-  - **Mark rebasing after a `Replace` edit across rows still keys off the cursor
-    row.** `mutate_edit` rebases a charwise `DeleteRange` across rows the way
-    vim's join does since 2026-10-29 (`join_row_marks`), but an `Edit::Replace`
-    that changes the row count still drops and shifts from the cursor. Not
-    measured against nvim.
+  - **Mark columns after a charwise `Edit::Replace` across rows are a guess.**
+    Since 2026-10-29 `mutate_edit` rebases it like a charwise delete: the first
+    row's marks stay, the last row's move onto it with the kept prefix's length
+    added (`join_row_marks`). That rule was measured for `d` and for `J` (which
+    moves its own marks first), not for the other `Replace` callers
+    (`substitute.rs`, `text_object_ops.rs`, `visual_ops.rs`,
+    `insert_bridges.rs`, the app's LSP edits in `lsp_glue.rs`), and which of
+    them replace across rows was not checked.
   - **Crate changelogs are not rolled at a release.** `hjkl-vim-types`'s
     `[Unreleased]` still lists `Motion::ChangeWordEnd`, which the root changelog
     records as shipped in 0.42.0. BCTP moves the root changelog only; whether
