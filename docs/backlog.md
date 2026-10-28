@@ -351,11 +351,18 @@ queue, so code that pushes per-iteration would flood the toast bar.
 
 **A block operator after `k` onto a line with a tab uses the wrong column.**
 From the last column of `abcdefghij` below `\tab`, `<C-v>kd` deletes `defghij`
-where nvim deletes `ghij`: hjkl takes the block's right edge from the cursor's
-character column on the tab line, not the display column the block was built at.
-Reproduced on the parent of the Visual-fold change, so not caused by it; not
-looked into further. `<C-v>1MU` on `(hello)` (hjkl does nothing, nvim uppercases
-the line) is a separate open fuzz case.
+where nvim deletes `ghij` (re-measured 2026-10-29 against nvim 0.12.5, whose
+oracle `tabstop` is 4). vim's block is display columns: `k` keeps curswant 9,
+and in Visual mode the cursor may stand on the NUL past `ab` (display column 6),
+so the block is display columns 6–9, which on the tab line is empty. hjkl's
+`block_bounds` (`visual_ops.rs`) treats `block_anchor` / `block_vcol` as
+character columns on every row, so `j` / `k` onto a line with a tab sets the
+right edge to that line's character column (3) and cuts columns 3–9 below.
+`<C-v>kU` from column 5 shows the same shape. The fix is a display-column block
+model — each row converting the block's display columns to its own character
+range — through `block_bounds`, `block_yank`, `apply_block_operator`, block `I`
+/ `A` and the highlight; not started. `<C-v>1MU` on `(hello)` (hjkl does
+nothing, nvim uppercases the line) is a separate open fuzz case.
 
 **The `:s` curswant fix has no oracle case.** It is covered by two unit tests in
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`

@@ -49,6 +49,9 @@ and this project adheres to
 
 ### Fixed
 
+- An operator over a counted `gj` / `gk` that runs out of screen lines is
+  cancelled, as in vim, with the cursor left where the motion stopped: `d9gj`
+  two lines from the end deletes nothing, where it deleted to the last line.
 - A count typed before a register prefix is kept, and one typed after it
   multiplies it, as in vim: `2"ap` pastes twice (the Normal-mode FSM dropped the
   count at `"`), and `2"a3p` pastes six times where the app's keymap

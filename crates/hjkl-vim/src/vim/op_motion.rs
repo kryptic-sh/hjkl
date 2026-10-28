@@ -49,6 +49,12 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // wrap they are `j` / `k`.
     let screen_charwise =
         matches!(motion, Motion::ScreenUp | Motion::ScreenDown) && screen_wraps(ed);
+    // A count that runs them off the buffer fails them, and vim then drops
+    // the operator with the cursor where the motion stopped: `d9gj` two
+    // lines from the end deletes nothing.
+    if screen_charwise && count > 1 && screen_motion_falls_short(ed, motion, count, start) {
+        return;
+    }
     // Linewise motions normally cover their row even when their endpoint has
     // the same row. `_` is a successful zero-distance motion, but `j`/`k` and
     // `+`/`-` fail at a buffer edge and must not operate on the current row.
@@ -185,6 +191,28 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
         }
     }
     operate_over_motion_range(ed, op, start, end, kind, Some(motion), !in_place);
+}
+
+/// Whether `count` steps of `gj` / `gk` from `start` ran out of screen lines.
+/// The motion layer reports no status, so this replays the steps: the last
+/// one moves the cursor only if every step before it did. The cursor and the
+/// sticky column are left as the full motion left them.
+fn screen_motion_falls_short<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    motion: &Motion,
+    count: usize,
+    start: (usize, usize),
+) -> bool {
+    let landed = ed.cursor();
+    let landed_sticky = ed.sticky_col();
+    buf_set_cursor_rc(ed.buffer_mut(), start.0, start.1);
+    apply_motion_cursor_ctx(ed, motion, count - 1, true);
+    let before_last = ed.cursor();
+    apply_motion_cursor_ctx(ed, motion, 1, true);
+    let short = ed.cursor() == before_last;
+    buf_set_cursor_rc(ed.buffer_mut(), landed.0, landed.1);
+    ed.set_sticky_col(landed_sticky);
+    short
 }
 
 /// The motions that leave a pending operator in place when they cannot move,
