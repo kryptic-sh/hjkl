@@ -108,8 +108,10 @@ fn dispatch_input_inner<H: hjkl_engine::Host>(
     input: hjkl_engine::Input,
 ) -> bool {
     // Search-prompt intercept: short-circuits before begin_step because it
-    // needs no prelude/epilogue.
+    // needs no prelude/epilogue, except the recorder: a macro holds the
+    // pattern and its `<CR>` (`qq/g<CR>q` records `/g<CR>`, not `/`).
     if editor.search_prompt_state().is_some() {
+        editor.record_input(input);
         return search_prompt::step_search_prompt(editor, input);
     }
     // Run the prelude (timestamps, chord-timeout, macro-stop, snapshots).

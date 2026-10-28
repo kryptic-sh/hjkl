@@ -49,6 +49,11 @@ and this project adheres to
 
 ### Fixed
 
+- A macro recorded through `dispatch_input` keeps the keys typed into the search
+  prompt: `qq/g<CR>q@q` searched nothing on replay, because the prompt's
+  intercept returned before the recorder and `"q` held only `/`. During replay
+  an `<Esc>` in the prompt runs the search instead of cancelling it, as vim's
+  command line does inside a macro (`:h c_<Esc>`).
 - An operator over a counted `gj` / `gk` that runs out of screen lines is
   cancelled, as in vim, with the cursor left where the motion stopped: `d9gj`
   two lines from the end deletes nothing, where it deleted to the last line.

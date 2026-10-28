@@ -73,3 +73,75 @@ initial_cursor = [0, 0]
 keys = "qaAtest<Esc>0jq@a"
 expected_buffer = "line0test\nline1test\nline2\nline3\n"
 expected_cursor = [2, 0]
+
+[[cases]]
+name = "macro_records_search_pattern"
+initial_buffer = "a g b g c g d g\n"
+initial_cursor = [0, 0]
+keys = "qq/g<CR>q@q"
+expected_buffer = "a g b g c g d g\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "macro_records_search_then_edit"
+initial_buffer = "a g b g c g d g\n"
+initial_cursor = [0, 0]
+keys = "qq/g<CR>xq@q"
+expected_buffer = "a  b  c g d g\n"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "macro_records_backward_search"
+initial_buffer = "a g b g c g d g\n"
+initial_cursor = [0, 0]
+keys = "qq?g<CR>q$@q"
+expected_buffer = "a g b g c g d g\n"
+expected_cursor = [0, 10]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "macro_search_counted_replay"
+initial_buffer = "a g b g c g d g\n"
+initial_cursor = [0, 0]
+keys = "qq/g<CR>q2@q"
+expected_buffer = "a g b g c g d g\n"
+expected_cursor = [0, 10]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "macro_operator_over_search"
+initial_buffer = "a g b g c g d g\n"
+initial_cursor = [0, 0]
+keys = "qqd/b<CR>q@q"
+expected_buffer = "b g c g d g\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "macro_search_esc_runs_on_replay"
+initial_buffer = "a g b g c g d g\n"
+initial_cursor = [0, 0]
+keys = "qq/g<Esc>xq@q"
+expected_buffer = "  b g c g d g\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

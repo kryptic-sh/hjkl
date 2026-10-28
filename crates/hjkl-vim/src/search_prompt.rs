@@ -14,6 +14,16 @@ pub fn step_search_prompt<H: Host>(
     ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
     input: Input,
 ) -> bool {
+    // In a macro vim's `<Esc>` runs the command line instead of quitting it
+    // (`:h c_<Esc>`), so a replayed `/pat<Esc>` searches.
+    let input = if input.key == Key::Esc && crate::vim_state::vim(ed).replaying_macro {
+        Input {
+            key: Key::Enter,
+            ..input
+        }
+    } else {
+        input
+    };
     // Ctrl-P / Ctrl-N (and Up / Down) walk the search history. Handled
     // before the regular char/backspace branches so `Ctrl-P` doesn't
     // type a literal `p`.

@@ -1132,9 +1132,13 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
     `[Unreleased]` still lists `Motion::ChangeWordEnd`, which the root changelog
     records as shipped in 0.42.0. BCTP moves the root changelog only; whether
     the per-crate ones should move with it is the owner's call.
-- **Observed in the oracle driver, not investigated:** a macro recorded with
-  `/g<CR>` (`qq/g<CR>q…@q`) does not replay. Reproduces on the old binary; may
-  be driver-only.
+- **A macro's register text spells keys in `<>` notation.** `encode_macro`
+  writes `<CR>` (and `<Esc>`, ...) where vim's register holds the raw byte, so
+  `qq/g<CR>q"qp` pastes `/g<CR>` in hjkl and `/g` plus a carriage return in nvim
+  0.12.5. Replay decodes it back, so `@q` is unaffected; only reading or pasting
+  the register differs. The app runs its own search prompt (`apps/hjkl`
+  `prompt.rs`), not the one `dispatch_input` records since 2026-10-29; whether
+  `qq/g<CR>q@q` records and replays there was not checked.
 - **Surprise, not a bug: `dfcase` and the corpus run nvim with different
   `'startofline'`.** The nvim driver sets `startofline` only when a case pins
   `shiftwidth` / `expandtab`; `dfcase` always pins them. Expectations copied
