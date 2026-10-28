@@ -319,6 +319,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             entry,
             inserted,
             count,
+            backspaces,
         } => {
             use hjkl_buffer::{Edit, Position};
             ed.push_undo();
@@ -340,6 +341,9 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                 _ => {}
             }
             for _ in 0..scaled(count).max(1) {
+                for _ in 0..backspaces {
+                    generic_backspace(ed);
+                }
                 let cursor = ed.cursor();
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(cursor.0, cursor.1),

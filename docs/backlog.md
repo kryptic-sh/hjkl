@@ -368,8 +368,8 @@ goes to row 1.
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
 keys. A corpus case would need the ex layer driven some other way.
 
-**The differential fuzzer's standing counts.** After the Visual bracket object
-fix (2026-10-28) `difffuzz 2000 424242` reports 41 distinct divergences (77 at
+**The differential fuzzer's standing counts.** After the insert-backspace replay
+fix (2026-10-29) `difffuzz 2000 424242` reports 37 distinct divergences (77 at
 `c24057ca`, 2026-10-27); `difffuzz 400 777` reported 23 at `c24057ca` (69 when
 the seed-777 count was first recorded, 2026-08-04). Each slice compares the
 sorted divergence list before and after rather than the count, since the
@@ -1244,12 +1244,13 @@ Seen while measuring, not `gq`:
   cursor one column right, inserts containing `<CR>` replaying nothing, and `o`
   / `O` replaying an empty line). On `"abc def\n  q r\nxyz w\nlast\n"` @ (0,2),
   each also wrong before those fixes:
-  - `jA<BS><BS>x<Esc>j.` and `jI<BS>x<Esc>j.` replay the typed `x` but not the
-    backspaces — vim replays the keys, hjkl the net text. The live `<BS>` in an
-    indent was a separate bug, fixed 2026-10-18 (`generic_backspace` now goes to
-    the previous `softtabstop` stop); what is left is the replay: record the
-    deletions past the insert start (e.g. a `deleted_before` count on
-    `LastChange::InsertAt`) and redo them before retyping.
+  - A cursor move inside the insert (`<Left>`, `<Home>`, ...) should start a new
+    redo, as vim's `start_arrow` does: `A<BS><BS>x<Left>y<Esc>j.` gives
+    `"  q yr"` in nvim, `"  q ry"` in hjkl. The backspace count recorded since
+    2026-10-29 (`InsertSession::backspaces`) is reset by such a move
+    (`after_insert_motion`), so it falls back to the old text diff instead.
+  - `<C-w>`, `<C-u>` and `<Del>` past the insert's start are not recorded for
+    `.` (only `<BS>` / `<C-h>` are); unmeasured against nvim.
   - **hjkl's `softtabstop` defaults to 4; nvim's is 0, with `smarttab` on.** The
     two agree on `<BS>` inside an indent (`shiftwidth=4` there), but after text
     nvim deletes one space where hjkl deletes back to a stop of 4 (`A<BS>x<Esc>`

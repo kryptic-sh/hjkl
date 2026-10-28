@@ -407,12 +407,42 @@ pub fn insert_backspace_bridge<H: hjkl_engine::types::Host>(
     ) {
         return replace_backspace(ed);
     }
-    generic_backspace(ed)
+    count_backspace_past_start(ed, generic_backspace)
+}
+
+/// Run one `<BS>` / `<C-h>` and, when it deleted at or before the insert's
+/// start, record it on the session the way vim moves `Insstart` and keeps the
+/// key in its redo buffer: `.` then replays the key before the typed text. A
+/// press that changed nothing (at the start of the buffer) is not recorded,
+/// as vim records only a backspace that succeeded.
+fn count_backspace_past_start<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    backspace: fn(&mut Editor<hjkl_buffer::View, H>) -> bool,
+) -> bool {
+    let before_cursor = ed.cursor();
+    let before_len = hjkl_engine::types::Query::rope(ed.buffer()).len_chars();
+    let result = backspace(ed);
+    let after_cursor = ed.cursor();
+    let after_len = hjkl_engine::types::Query::rope(ed.buffer()).len_chars();
+    if after_cursor == before_cursor && after_len == before_len {
+        return result;
+    }
+    if let Some(session) = vim_mut(ed).insert_session.as_mut()
+        && before_cursor <= (session.start_row, session.start_col)
+    {
+        session.backspaces += 1;
+        session.deleted += before_len as isize - after_len as isize;
+        (session.start_row, session.start_col) = after_cursor;
+        session.row_min = session.row_min.min(after_cursor.0);
+    }
+    result
 }
 
 /// The plain-insert-mode `<BS>` body (shared by [`insert_backspace_bridge`]
 /// and, as the past-the-session-start fallback, [`replace_backspace`]).
-fn generic_backspace<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) -> bool {
+pub fn generic_backspace<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+) -> bool {
     use hjkl_buffer::{Edit, MotionKind, Position};
     let cursor = buf_cursor_pos(ed.buffer());
 
@@ -778,8 +808,13 @@ pub fn insert_ctrl_u_bridge<H: hjkl_engine::types::Host>(
 pub fn insert_ctrl_h_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
 ) -> bool {
-    use hjkl_buffer::{Edit, MotionKind, Position};
     ed.sync_buffer_content_from_textarea();
+    count_backspace_past_start(ed, ctrl_h_backspace)
+}
+
+/// The `<C-h>` body: delete one character back, or join at column 0.
+fn ctrl_h_backspace<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) -> bool {
+    use hjkl_buffer::{Edit, MotionKind, Position};
     let cursor = buf_cursor_pos(ed.buffer());
     if cursor.col > 0 {
         ed.mutate_edit(Edit::DeleteRange {

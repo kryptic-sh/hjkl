@@ -846,3 +846,111 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "dot_insert_bs_past_append_start"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "jA<BS><BS>x<Esc>j."
+expected_buffer = "abc def\n  qx\nxyzx\nlast\n"
+expected_cursor = [2, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_bs_joins_line_on_replay"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "jI<BS>x<Esc>j."
+expected_buffer = "abc def\nxq rxxyz w\nlast\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_bs_after_typed_text"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "Ax<BS><BS>y<Esc>j."
+expected_buffer = "abc dey\n  q y\nxyz w\nlast\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_bs_with_count"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "2A<BS>x<Esc>j."
+expected_buffer = "abc dex\n  q x\nxyz w\nlast\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_bs_nothing_typed"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "jA<BS><BS><Esc>j."
+expected_buffer = "abc def\n  q\nxyz\nlast\n"
+expected_cursor = [2, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_bs_at_buffer_start_not_recorded"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "I<BS>x<Esc>j."
+expected_buffer = "xabc def\n  xq r\nxyz w\nlast\n"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_ctrl_h_past_start"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "jA<C-h>x<Esc>j."
+expected_buffer = "abc def\n  q x\nxyz x\nlast\n"
+expected_cursor = [2, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_bs_retypes_deleted_char"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "A<BS>e<Esc>j."
+expected_buffer = "abc dee\n  q e\nxyz w\nlast\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_bs_counted_dot"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "2A<BS>xy<Esc>j3."
+expected_buffer = "abc dexxy\n  q xxxy\nxyz w\nlast\n"
+expected_cursor = [1, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

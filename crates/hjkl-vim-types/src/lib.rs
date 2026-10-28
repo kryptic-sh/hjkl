@@ -418,6 +418,9 @@ pub enum LastChange {
         entry: InsertEntry,
         inserted: String,
         count: usize,
+        /// `<BS>` presses that went past the insert's start; `.` replays
+        /// them before `inserted`, once per counted copy.
+        backspaces: usize,
     },
     /// `dgn` / `cgn` (and `gN` forms) — operate on the next search match.
     /// `inserted` is filled on Esc for the `cgn` change form so `.` retypes it.
@@ -557,6 +560,15 @@ pub struct InsertSession {
     /// pre-existing buffer text is never consumed by expansion.
     pub start_row: usize,
     pub start_col: usize,
+    /// `<BS>` / `<C-h>` presses that deleted at or before the insert's start
+    /// (vim's `Insstart`). Each one moves `start_row` / `start_col` back to
+    /// where it left the cursor, as vim moves `Insstart`, and `.` replays
+    /// them before retyping, as vim's redo buffer does.
+    pub backspaces: usize,
+    /// Characters those `backspaces` removed, net of any spaces a
+    /// `'softtabstop'` delete put back — what the typed text's length is
+    /// measured against when the session ends.
+    pub deleted: isize,
 }
 
 #[derive(Debug, Clone)]

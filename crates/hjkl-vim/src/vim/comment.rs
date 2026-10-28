@@ -191,8 +191,23 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
     // `R` overstrike keeps the line length the same, so `extract_inserted`
     // (which only reports net growth) misses the typed text. Use the changed
     // run instead so dot-repeat retypes it.
+    // `<BS>` past the start deleted text the diff would count against the
+    // typed text, so read what was typed from where the start ended up: the
+    // buffer grew by the typed length less what those presses removed.
+    let backspaces = match session.reason {
+        InsertReason::Enter(_) => session.backspaces,
+        _ => 0,
+    };
     let inserted = if matches!(session.reason, InsertReason::Replace) {
         changed_run(&before, &after)
+    } else if backspaces > 0 {
+        let typed = after_rope.len_chars() as isize - session.before_rope.len_chars() as isize
+            + session.deleted;
+        let start = (after_rope.line_to_char(session.start_row.min(after_n - 1))
+            + session.start_col)
+            .min(after_rope.len_chars());
+        let end = (start + typed.max(0) as usize).min(after_rope.len_chars());
+        after_rope.slice(start..end).to_string()
     } else {
         extract_inserted(&before, &after)
     };
@@ -213,9 +228,13 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
                 at: Position::new(row, col),
                 text: open_line_repeats(&leader, &inserted, session.count),
             });
-        } else if !inserted.is_empty() {
-            // `[count]i` / `[count]A` repeat the typed text inline.
+        } else if !inserted.is_empty() || backspaces > 0 {
+            // `[count]i` / `[count]A` repeat the typed keys inline: the
+            // backspaces past the start, then the text.
             for _ in 0..session.count - 1 {
+                for _ in 0..backspaces {
+                    generic_backspace(ed);
+                }
                 let (row, col) = ed.cursor();
                 ed.mutate_edit(Edit::InsertStr {
                     at: Position::new(row, col),
@@ -345,6 +364,7 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
                 entry,
                 inserted,
                 count: session.count,
+                backspaces,
             });
         }
         InsertReason::Open { above } => {
@@ -428,6 +448,8 @@ pub fn begin_insert_noundo<H: hjkl_engine::types::Host>(
         reason,
         start_row: row,
         start_col: col,
+        backspaces: 0,
+        deleted: 0,
     });
     vim_mut(ed).mode = Mode::Insert;
     vim_mut(ed).insert_want_current = false;

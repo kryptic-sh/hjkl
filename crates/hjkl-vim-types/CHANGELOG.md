@@ -18,6 +18,10 @@ and this project adheres to
 - `LastChange::VisualOp` has a `levels` field: the shift count of a Visual `>` /
   `<` (`Vj2>`), so `.` shifts as far again. Constructing or destructuring the
   variant must add it.
+- `LastChange::InsertAt` has a `backspaces` field, and `InsertSession` has
+  `backspaces` and `deleted`: the `<BS>` / `<C-h>` presses that deleted past
+  where an insert started, so `.` replays them before the typed text. Code
+  building or destructuring either must add the fields.
 
 ### Added
 

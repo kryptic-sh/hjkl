@@ -2834,6 +2834,8 @@ fn insert_session_round_trips() {
         reason: hjkl_engine::InsertReason::Enter(hjkl_engine::InsertEntry::I),
         start_row: 0,
         start_col: 0,
+        backspaces: 0,
+        deleted: 0,
     }));
     assert_eq!(e.insert_session().map(|s| s.count), Some(3));
     let taken = e.take_insert_session();

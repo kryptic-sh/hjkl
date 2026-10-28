@@ -49,6 +49,12 @@ and this project adheres to
 
 ### Fixed
 
+- `.` after an insert that backspaced past its start replays the backspaces:
+  `A<BS><BS>x<Esc>j.` deletes two characters on the next line before typing `x`,
+  and `I<BS>` at column 0 joins the line above, as in vim. Before, `.` retyped
+  only text the buffer grew by, so it did nothing after `A<BS><BS>x`. `<BS>` and
+  `<C-h>` past the start also move the session's start with them, as vim moves
+  `Insstart`, and a count (`2A<BS>x`) repeats the backspaces with each copy.
 - `visual_text_obj_extend_counted`: a bracket object (`i(`, `a[`, `iB`, ...) on
   a charwise or block selection bigger than one cell follows vim's
   `current_block` (`text_object::bracket_visual`). It searches from the
