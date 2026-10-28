@@ -1049,6 +1049,20 @@ fn move_screen_vertical<B: Cursor + Query>(
         cursor_visual_col(&cursor_line, cursor.col, tabstop)
     };
     *sticky_col = Some(want);
+    // vim's `nv_screengo` takes a step down from the last line of a closed
+    // fold and a step up from its first, so `gj` on a fold that ends the
+    // buffer still moves onto its last line, and `gk` from a hidden row
+    // lands above the fold rather than on it.
+    let down = delta > 0;
+    let mut cursor = cursor;
+    if let Some((first, last)) = closed_fold_at(folds, content_row_count(buf), cursor.row) {
+        let row = if down { last } else { first };
+        if row != cursor.row {
+            let col = cursor.col.min(last_col(&read_line(buf, row)));
+            cursor = Position::new(row, col);
+            write_cursor(buf, cursor);
+        }
+    }
     // The current row's wrap layout is computed ONCE here and threaded
     // through `step_screen`; it is only recomputed when a step crosses
     // into a different document row (the cross-row branches below). The
@@ -1059,7 +1073,6 @@ fn move_screen_vertical<B: Cursor + Query>(
     let mut segs = wrap::wrap_segments(&line, viewport.text_width, viewport.wrap);
     let seg_idx = wrap::segment_for_col(&segs, cursor.col);
     let visual_col = cursor.col.saturating_sub(segs[seg_idx].0);
-    let down = delta > 0;
     for _ in 0..delta.unsigned_abs() {
         if !step_screen(buf, folds, viewport, down, visual_col, &mut line, &mut segs) {
             break;

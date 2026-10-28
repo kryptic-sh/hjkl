@@ -19,6 +19,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `motions::move_screen_down` / `move_screen_up` (`gj` / `gk`) step from a
+  closed fold's last line going down and its first line going up, as vim's
+  `nv_screengo` does. `gk` from a row hidden inside a fold now lands above the
+  fold instead of on it, and `gj` on a fold that ends the buffer moves onto the
+  fold's last line instead of failing in place.
 - `motions::move_up` / `move_down` that cannot move leave the cursor in place
   instead of moving it to the sticky column on the same row.
 - `motions::move_up` (and every `k` built on `move_vertical`) from a row hidden

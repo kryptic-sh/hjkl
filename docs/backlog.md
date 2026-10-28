@@ -357,13 +357,6 @@ Reproduced on the parent of the Visual-fold change, so not caused by it; not
 looked into further. `<C-v>1MU` on `(hello)` (hjkl does nothing, nvim uppercases
 the line) is a separate open fuzz case.
 
-**`gk` from a hidden row inside a closed fold lands on the fold.** `k` from
-there now starts at the fold's first line, as vim's `cursor_up` does, but `gk`
-goes through the screen-line path in `hjkl-vim` and never reaches that check. On
-a four-line buffer with the cursor on row 2, `zfjG` folds rows 2–3 and leaves
-the cursor on row 3; `gk` then goes to row 2, the fold's first line, where nvim
-goes to row 1.
-
 **The `:s` curswant fix has no oracle case.** It is covered by two unit tests in
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
 keys. A corpus case would need the ex layer driven some other way.
