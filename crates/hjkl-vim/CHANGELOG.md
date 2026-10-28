@@ -44,6 +44,10 @@ and this project adheres to
 
 ### Fixed
 
+- `operate_over_motion_range`: a linewise motion whose top row is inside a
+  closed fold starts at column 0 of the fold's first row, and the operator parks
+  the cursor there (`zfjyj` / `zfjgUj` / `zfjzfG`), as vim's
+  `do_pending_operator` does.
 - `do_paste` puts the cursor on the insert point after a charwise paste whose
   text contains a line break, unless it is `gp` / `gP`.
 - `operate_over_motion_range` takes the motion (`None` for a mark) instead of a

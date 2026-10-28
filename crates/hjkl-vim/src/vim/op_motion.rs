@@ -287,7 +287,7 @@ fn operate_over_motion_range<H: hjkl_engine::types::Host>(
     // `gw` reads the parked cursor as the one to put back. Held separately
     // from `start` because the exclusive-motion adjustment below can move the
     // range's *backward* endpoint, which must not drag the parked cursor.
-    let cursor_restore = if matches!(op, Operator::Reflow | Operator::ReflowKeepCursor) {
+    let mut cursor_restore = if matches!(op, Operator::Reflow | Operator::ReflowKeepCursor) {
         start
     } else {
         start.min(end)
@@ -370,7 +370,16 @@ fn operate_over_motion_range<H: hjkl_engine::types::Host>(
             // Linewise: both edges grow to cover every closed fold the row
             // range touches, exactly as `dd` on a fold does.
             let (fold_top, fold_bot) = expand_linewise_over_closed_folds(ed.buffer(), top.0, bot.0);
-            let (new_top, new_bot) = ((fold_top, top.1), (fold_bot, bot.1));
+            // A top row inside a closed fold also moves to column 0, and the
+            // operator's start with it (`zfjyj` / `zfjgUj` from column 4 of
+            // the fold park on its first column in nvim 0.12.5).
+            let top_in_fold =
+                expand_linewise_over_closed_folds(ed.buffer(), top.0, top.0) != (top.0, top.0);
+            let new_top = (fold_top, if top_in_fold { 0 } else { top.1 });
+            let new_bot = (fold_bot, bot.1);
+            if top_in_fold && cursor_restore == top {
+                cursor_restore = new_top;
+            }
             if start == top {
                 (start, end) = (new_top, new_bot);
             } else {

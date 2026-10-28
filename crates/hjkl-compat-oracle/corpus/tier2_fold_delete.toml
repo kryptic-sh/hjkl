@@ -1766,3 +1766,39 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "fold_start_linewise_yank_parks_on_fold_first_column"
+initial_buffer = "\t[foo]  [a]\n{hello}\n\t{_id}\nxyz abc\nlast"
+initial_cursor = [1, 4]
+keys = "zfjyj"
+expected_buffer = "\t[foo]  [a]\n{hello}\n\t{_id}\nxyz abc\nlast"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "fold_start_case_op_parks_on_fold_first_column"
+initial_buffer = "\t[foo]  [a]\n{hello}\n\t{_id}\nxyz abc\nlast"
+initial_cursor = [1, 4]
+keys = "zfjgUj"
+expected_buffer = "\t[foo]  [a]\n{HELLO}\n\t{_ID}\nXYZ ABC\nlast"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "fold_start_nested_zf_parks_on_fold_first_column"
+initial_buffer = "\t[foo]  [a]\n{hello}\n\t{_id}"
+initial_cursor = [1, 4]
+keys = "zfjzfG"
+expected_buffer = "\t[foo]  [a]\n{hello}\n\t{_id}"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

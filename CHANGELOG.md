@@ -30,6 +30,9 @@ patch bumps.
 
 ### Fixed
 
+- An operator over a linewise motion (`yj`, `gUj`, `zfG`, ...) started inside a
+  closed fold leaves the cursor on the fold's first column, as in vim; hjkl kept
+  the cursor's column.
 - `p` / `P` / `]p` of charwise text that spans lines leave the cursor on the
   first pasted character, as in vim; hjkl left it on the paste's last line.
 - `d%` across lines stays a charwise delete, as in vim, where hjkl deleted the
