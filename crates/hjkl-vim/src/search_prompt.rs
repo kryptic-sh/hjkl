@@ -48,31 +48,26 @@ pub fn step_search_prompt<H: Host>(
                 let delim = if p.forward { '/' } else { '?' };
                 let (pat_text, offset) = split_search_offset(&p.text, delim);
                 // Empty `/<CR>` (or `?<CR>`) re-runs the previous search
-                // pattern in the prompt's direction — vim parity.
-                let pattern: Option<String> = if pat_text.is_empty() {
-                    ed.last_search_pattern()
+                // pattern in the prompt's direction, with its offset unless
+                // one is given (`//e`; an empty `//` drops it) — vim parity.
+                let (pattern, offset) = if pat_text.is_empty() {
+                    let offset = match offset {
+                        Some(off) => Some(off),
+                        None => ed.last_search_offset(),
+                    };
+                    (ed.last_search_pattern(), offset)
                 } else {
-                    Some(pat_text)
+                    (Some(pat_text), offset)
                 };
                 if let Some(pattern) = pattern {
                     ed.push_search_pattern(&pattern);
                     let pre = ed.cursor();
                     let offset = offset.filter(|s| !s.is_empty());
                     let char_offset = offset.as_deref().and_then(parse_char_offset);
-                    let found = match char_offset {
-                        Some((end, n)) => match offset_search_match(ed, p.forward, end, n) {
-                            Some((row, col)) => {
-                                ed.jump_cursor(row, col);
-                                true
-                            }
-                            None => false,
-                        },
-                        None if p.forward => ed.search_advance_forward(true),
-                        None => ed.search_advance_backward(true),
-                    };
-                    if found && let Some(off) = offset.as_deref() {
-                        apply_search_offset(ed, off);
-                    }
+                    let found = search_with_offset(ed, p.forward, offset.as_deref(), 1);
+                    // Stored before the operator runs: `apply_op_search_range`
+                    // reads it for a line offset's linewise range.
+                    ed.set_last_search_offset(offset.clone());
                     // Operator-pending search (`d/pat`, `c/pat`, `y/pat`): apply
                     // the operator over the range to the match instead of just
                     // moving the cursor / pushing a jump.
@@ -132,6 +127,42 @@ pub fn step_search_prompt<H: Host>(
         _ => {}
     }
     true
+}
+
+/// Find the `count`th match of the installed search pattern in direction
+/// `forward` and land on it with `offset` applied, the way vim's `do_search`
+/// does for `/pat/{offset}` and for `n` / `N` repeating it. An `e` / `s` / `b`
+/// offset shifts where the first search starts (see [`offset_search_match`]);
+/// the offset itself is applied once, after the last match. Returns whether a
+/// match was found.
+pub(crate) fn search_with_offset<H: Host>(
+    ed: &mut hjkl_engine::Editor<hjkl_buffer::View, H>,
+    forward: bool,
+    offset: Option<&str>,
+    count: usize,
+) -> bool {
+    let mut found = false;
+    for i in 0..count.max(1) {
+        let char_offset = offset.and_then(parse_char_offset).filter(|_| i == 0);
+        found = match char_offset {
+            Some((end, n)) => match offset_search_match(ed, forward, end, n) {
+                Some((row, col)) => {
+                    ed.jump_cursor(row, col);
+                    true
+                }
+                None => false,
+            },
+            None if forward => ed.search_advance_forward(true),
+            None => ed.search_advance_backward(true),
+        };
+        if !found {
+            return false;
+        }
+    }
+    if let Some(off) = offset {
+        apply_search_offset(ed, off);
+    }
+    found
 }
 
 /// Split a search string into `(pattern, offset)` on the first UNESCAPED

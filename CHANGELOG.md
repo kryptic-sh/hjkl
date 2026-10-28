@@ -40,6 +40,13 @@ patch bumps.
 
 ### Fixed
 
+- `n` / `N` repeat the last search's offset: after `/ab/e`, `n` lands on the end
+  of the next match, as in vim; hjkl dropped the offset after the first search.
+  `/<CR>` keeps it, `//<CR>` and `*` / `#` drop it, and `dn` after `/ab/e` is
+  inclusive.
+- `d/pat<CR>` whose match starts a later line stops at the end of the line
+  before it (or deletes whole lines, from the indent), and `d/pat/+1` deletes
+  whole lines, as in vim.
 - An operator over a linewise motion (`yj`, `gUj`, `zfG`, ...) started inside a
   closed fold leaves the cursor on the fold's first column, as in vim; hjkl kept
   the cursor's column.

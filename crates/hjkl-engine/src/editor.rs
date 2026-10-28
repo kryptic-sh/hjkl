@@ -689,6 +689,9 @@ pub struct SearchBank {
     /// Direction of the last committed search: `true` = forward (`/`),
     /// `false` = backward (`?`).
     pub forward: bool,
+    /// Offset of the last committed search (`e`, `s-1`, `+2`, ... from
+    /// `/pat/e`), which `n` / `N` apply again. `None` when it had none.
+    pub offset: Option<String>,
     /// Search history, oldest first. Capped at
     /// [`crate::types::SEARCH_HISTORY_MAX`] entries.
     pub history: Vec<String>,
@@ -703,6 +706,7 @@ impl Default for SearchBank {
             // Matches vim's default: before any search, `n` behaves as if
             // the last search were forward.
             forward: true,
+            offset: None,
             history: Vec::new(),
             history_cursor: None,
         }
@@ -3097,6 +3101,16 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
     /// Set the last search pattern without touching direction or highlight.
     pub fn set_last_search_pattern_only(&mut self, pattern: Option<String>) {
         self.search.lock().unwrap().last = pattern;
+    }
+
+    /// The last committed search's offset (`e` for `/pat/e`), if it had one.
+    pub fn last_search_offset(&self) -> Option<String> {
+        self.search.lock().unwrap().offset.clone()
+    }
+
+    /// Set the last search's offset without touching the pattern.
+    pub fn set_last_search_offset(&mut self, offset: Option<String>) {
+        self.search.lock().unwrap().offset = offset;
     }
 
     /// Set the last search direction without touching the pattern.

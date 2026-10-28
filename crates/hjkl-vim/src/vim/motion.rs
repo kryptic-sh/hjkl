@@ -900,13 +900,9 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             // `N` inverts. So a `?` search makes `n` walk backward and
             // `N` walk forward.
             let forward = ed.last_search_forward() != *reverse;
-            for _ in 0..count.max(1) {
-                if forward {
-                    ed.search_advance_forward(true);
-                } else {
-                    ed.search_advance_backward(true);
-                }
-            }
+            // The last search's offset (`/pat/e`) applies again.
+            let offset = ed.last_search_offset();
+            crate::search_prompt::search_with_offset(ed, forward, offset.as_deref(), count);
         }
         Motion::ViewportTop => {
             let v = *ed.host().viewport();
@@ -1324,8 +1320,10 @@ fn search_pattern_and_advance<H: hjkl_engine::types::Host>(
     if ed.search_state().pattern.is_none() {
         return (false, false);
     }
-    // Remember the query so `n` / `N` keep working after the jump.
+    // Remember the query so `n` / `N` keep working after the jump. A new
+    // pattern without an offset drops the old one, as vim's `do_search` does.
     ed.set_last_search_pattern_only(Some(pattern));
+    ed.set_last_search_offset(None);
     ed.set_last_search_forward_only(forward);
     let mut found = false;
     for _ in 0..count.max(1) {

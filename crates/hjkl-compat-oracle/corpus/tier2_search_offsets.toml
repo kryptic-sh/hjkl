@@ -130,3 +130,159 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "n_repeats_end_offset"
+initial_buffer = "ab cd ab xab"
+initial_cursor = [0, 0]
+keys = "/ab/e<CR>n"
+expected_buffer = "ab cd ab xab"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "N_repeats_end_offset"
+initial_buffer = "ab cd ab xab"
+initial_cursor = [0, 0]
+keys = "/ab/e<CR>N"
+expected_buffer = "ab cd ab xab"
+expected_cursor = [0, 11]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_n_repeats_end_offset_once"
+initial_buffer = "ab cd ab xab"
+initial_cursor = [0, 0]
+keys = "/ab/e<CR>2n"
+expected_buffer = "ab cd ab xab"
+expected_cursor = [0, 11]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "n_repeats_start_offset"
+initial_buffer = "ab cd ab xab"
+initial_cursor = [0, 0]
+keys = "/ab/s+1<CR>n"
+expected_buffer = "ab cd ab xab"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "n_repeats_line_offset"
+initial_buffer = "ab\ncd\nab\nef"
+initial_cursor = [0, 0]
+keys = "/ab/+1<CR>n"
+expected_buffer = "ab\ncd\nab\nef"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "empty_search_keeps_last_offset"
+initial_buffer = "ab cd ab xab"
+initial_cursor = [0, 0]
+keys = "/ab/e<CR>/<CR>"
+expected_buffer = "ab cd ab xab"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "empty_offset_drops_last_offset"
+initial_buffer = "ab cd ab xab"
+initial_cursor = [0, 0]
+keys = "/ab/e<CR>//<CR>"
+expected_buffer = "ab cd ab xab"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "star_drops_last_offset"
+initial_buffer = "ab cd ab xab"
+initial_cursor = [0, 0]
+keys = "/ab/e<CR>*n"
+expected_buffer = "ab cd ab xab"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dn_with_end_offset_is_inclusive"
+initial_buffer = "ab cd ab xab"
+initial_cursor = [0, 0]
+keys = "/ab/e<CR>dn"
+expected_buffer = "a xab"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dn_with_line_offset_is_linewise"
+initial_buffer = "ab\ncd\nab\nef"
+initial_cursor = [0, 1]
+keys = "/ab/+1<CR>ggdn"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "d_search_line_offset_is_linewise"
+initial_buffer = "ab\ncd\nab\nef"
+initial_cursor = [0, 1]
+keys = "d/ab/+1<CR>"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "d_search_to_col0_pulls_back_to_line_end"
+initial_buffer = "ab\ncd\nab\nef"
+initial_cursor = [0, 1]
+keys = "d/ab<CR>"
+expected_buffer = "a\nab\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "d_search_to_col0_from_indent_goes_linewise"
+initial_buffer = "  ab\ncd\nab\nef"
+initial_cursor = [0, 2]
+keys = "d/ab<CR>"
+expected_buffer = "ab\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

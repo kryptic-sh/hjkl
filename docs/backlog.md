@@ -1102,17 +1102,6 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
   `VisualOp` arm, `replay_block_visual_op`) shifts one level. A count field on
   `VisualOp` is still a breaking change (see §1.5), so it waits for a minor
   release.
-- **`n` / `N` forget the last search's offset.** vim stores the offset with the
-  pattern (`spats[0].off`) and `n` re-applies it; hjkl's prompt applies it once
-  (`apply_search_offset`, `search_prompt.rs`) and keeps only the pattern
-  (`set_last_search_pattern_only`). Measured against nvim 0.12.5: `/ab/e<CR>n`
-  on `"ab cd ab xab"` @ (0,0) lands on (0,7) in nvim and (0,6) in hjkl,
-  `/ab/e<CR>N` on (0,11) and (0,0), and `/ab/+1<CR>n` on `"ab\ncd\nab\nef"` on
-  (1,0) and (0,0). Fixing it means keeping the offset beside the last pattern
-  and running `offset_search_match` / `apply_search_offset` from
-  `Motion::SearchNext` too. The natural homes, `hjkl_engine::SearchBank` and
-  `hjkl_vim::VimState`, are `#[non_exhaustive]` since 2026-10-28, so a new field
-  there is not breaking.
 - **Visual `r<CR>` cannot be represented.** vim replaces every selected cell
   with a literal carriage return (`vr<CR>` on `"abcd"` gives `"\rbcd"` in nvim
   0.12.5), but the rope reads `\r` as a line break, so the buffer would split

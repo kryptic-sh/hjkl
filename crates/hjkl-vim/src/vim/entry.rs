@@ -50,15 +50,26 @@ pub fn enter_search_op<H: hjkl_engine::types::Host>(
     ed.set_search_pattern(None);
 }
 /// Apply a pending operator-search over the exclusive charwise range from
-/// `origin` to the current (post-search) cursor. Used by the search-prompt
-/// commit path for `d/` / `c/` / `y/`.
+/// `origin` to the current (post-search) cursor, or over whole lines when the
+/// search had a line offset (`d/pat/+1`, `:h search-offset`), with the range
+/// adjustments every motion gets (`:h exclusive`, closed folds). Used by the
+/// search-prompt commit path for `d/` / `c/` / `y/`.
 pub fn apply_op_search_range<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     origin: (usize, usize),
 ) {
     let target = ed.cursor();
-    run_operator_over_range(ed, op, origin, target, RangeKind::Exclusive);
+    let line_offset = ed
+        .last_search_offset()
+        .and_then(|off| off.chars().next())
+        .is_some_and(|c| !matches!(c, 'e' | 's' | 'b'));
+    let kind = if line_offset {
+        RangeKind::Linewise
+    } else {
+        RangeKind::Exclusive
+    };
+    operate_over_motion_range(ed, op, origin, target, kind, None, true);
 }
 /// `g;` / `g,` body. `dir = -1` walks toward older entries (g;),
 /// `dir = 1` toward newer (g,). `count` repeats the step. Stops at

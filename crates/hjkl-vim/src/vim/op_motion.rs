@@ -70,6 +70,18 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     // A charwise edge motion that cannot advance leaves the buffer unchanged.
     let mut kind = if screen_charwise {
         RangeKind::Exclusive
+    } else if matches!(motion, Motion::SearchNext { .. }) {
+        // `n` / `N` repeating a search offset (`:h search-offset`): an `e`
+        // offset makes the motion inclusive, a line offset linewise.
+        match ed
+            .last_search_offset()
+            .as_deref()
+            .and_then(|off| off.chars().next())
+        {
+            Some('e') => RangeKind::Inclusive,
+            Some('s' | 'b') | None => RangeKind::Exclusive,
+            Some(_) => RangeKind::Linewise,
+        }
     } else {
         motion_kind(motion)
     };
@@ -269,7 +281,7 @@ pub fn apply_op_mark<H: hjkl_engine::types::Host>(
 /// closed fold even when it found nothing.
 /// `include_folds` is false for a motion that succeeded without moving, whose
 /// range stays on the cursor's character inside a closed fold.
-fn operate_over_motion_range<H: hjkl_engine::types::Host>(
+pub fn operate_over_motion_range<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     mut start: (usize, usize),

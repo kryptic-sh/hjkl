@@ -49,6 +49,14 @@ and this project adheres to
 
 ### Fixed
 
+- `n` / `N` apply the last search's offset again (`/ab/e` then `n` lands on the
+  next match's end), sharing the search prompt's offset handling. A bare `/<CR>`
+  keeps the offset, `//<CR>` drops it, and `*` / `#` clear it. With an operator,
+  an `e` offset makes `n` inclusive and a line offset linewise.
+- `apply_op_search_range` (`d/pat<CR>`) runs through
+  `operate_over_motion_range`, so it gets vim's exclusive-motion adjustment
+  (`d/ab<CR>` to column 0 of a later line stops at the previous line's end) and
+  closed-fold handling; a line offset (`d/pat/+1`) makes it linewise.
 - `operate_over_motion_range`: a linewise motion whose top row is inside a
   closed fold starts at column 0 of the fold's first row, and the operator parks
   the cursor there (`zfjyj` / `zfjgUj` / `zfjzfG`), as vim's
