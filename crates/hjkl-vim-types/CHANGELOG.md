@@ -22,6 +22,9 @@ and this project adheres to
   `backspaces` and `deleted`: the `<BS>` / `<C-h>` presses that deleted past
   where an insert started, so `.` replays them before the typed text. Code
   building or destructuring either must add the fields.
+- `InsertSession` has a `wraps` field, and `InsertWrap` is new: the line breaks
+  `'formatoptions'` `t` made while typing, which the session takes back out when
+  it reads the typed text. Code building the struct must add the field.
 
 ### Added
 

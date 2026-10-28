@@ -169,7 +169,17 @@ fn typed_at_start<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
 ) -> Option<String> {
     let before = &session.before_rope;
-    let after = hjkl_engine::types::Query::rope(ed.buffer());
+    let mut after = hjkl_engine::types::Query::rope(ed.buffer());
+    // Undo the auto-wrap breaks, newest first, so the buffer reads as if
+    // the text had been typed without them.
+    for wrap in session.wraps.iter().rev() {
+        let end = wrap.at + 1 + wrap.indent;
+        if end > after.len_chars() || after.char(wrap.at) != '\n' {
+            return None;
+        }
+        after.remove(wrap.at..end);
+        after.insert(wrap.at, &wrap.blanks);
+    }
     let deleted = usize::try_from(session.deleted).ok()?;
     let typed =
         usize::try_from(after.len_chars() as isize - before.len_chars() as isize + session.deleted)
@@ -257,11 +267,7 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
                 for _ in 0..backspaces {
                     generic_backspace(ed);
                 }
-                let (row, col) = ed.cursor();
-                ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(row, col),
-                    text: inserted.clone(),
-                });
+                type_text(ed, &inserted);
             }
         }
     }
@@ -472,6 +478,7 @@ pub fn begin_insert_noundo<H: hjkl_engine::types::Host>(
         start_col: col,
         backspaces: 0,
         deleted: 0,
+        wraps: Vec::new(),
     });
     vim_mut(ed).mode = Mode::Insert;
     vim_mut(ed).insert_want_current = false;

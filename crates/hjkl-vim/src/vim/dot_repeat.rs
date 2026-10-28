@@ -321,7 +321,6 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             count,
             backspaces,
         } => {
-            use hjkl_buffer::{Edit, Position};
             ed.push_undo();
             match entry {
                 InsertEntry::I => {}
@@ -344,11 +343,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                 for _ in 0..backspaces {
                     generic_backspace(ed);
                 }
-                let cursor = ed.cursor();
-                ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(cursor.0, cursor.1),
-                    text: inserted.clone(),
-                });
+                type_text(ed, &inserted);
             }
             // The replay ends the way the typed insert did, with `<Esc>`
             // stepping back onto the last inserted character.

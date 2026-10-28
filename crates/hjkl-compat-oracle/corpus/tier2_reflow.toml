@@ -446,3 +446,81 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 textwidth = 10
+
+[[cases]]
+name = "autowrap_dot_rewraps"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "Aab cd ef<Esc>j."
+expected_buffer = "one twoab\ncd ef\nthreeab cd\nef"
+expected_cursor = [3, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_dot_after_break_before_start"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "Aabcdefgh<Esc>j."
+expected_buffer = "one\ntwoabcdefgh\nthreeabcdefgh"
+expected_cursor = [2, 12]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_dot_open_line"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "oaa bb cc dd ee<Esc>."
+expected_buffer = "one two\naa bb cc\ndd ee\naa bb cc\ndd ee\nthree"
+expected_cursor = [4, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_counted_insert"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "2Aab cd<Esc>"
+expected_buffer = "one twoab\ncdab cd\nthree"
+expected_cursor = [1, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_counted_dot"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "Aab cd<Esc>j2."
+expected_buffer = "one twoab\ncd\nthreeab\ncdab cd"
+expected_cursor = [3, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_dot_register_paste"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "Aab cd ef<Esc>\".p"
+expected_buffer = "one twoab\ncd efab cd\nef\nthree"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10

@@ -26,7 +26,10 @@ and this project adheres to
   non-blank character typed where it would end past `'textwidth'` breaks the
   line at the last blank run starting at or before the margin, dropping that run
   and copying the indent under `'autoindent'`. hjkl's default `formatoptions`
-  (`ro`) leaves `t` out, so nothing wraps unless it is set.
+  (`ro`) leaves `t` out, so nothing wraps unless it is set. `.`, a counted
+  insert and `".p` retype the text through the same check, so they wrap where
+  their own text reaches the margin, as vim's redo does, instead of replaying
+  the first insert's line breaks.
 - `apply_after_z` handles `F`: `[count]zF` adds a closed fold over `count` rows
   from the cursor (clamped to `last_content_row`) and parks on the top row's
   first non-blank, setting the curswant there, as vim's `nv_lineop` does for the

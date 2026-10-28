@@ -569,6 +569,22 @@ pub struct InsertSession {
     /// `'softtabstop'` delete put back — what the typed text's length is
     /// measured against when the session ends.
     pub deleted: isize,
+    /// The line breaks `'formatoptions'` `t` put in while typing, oldest
+    /// first. vim's redo holds the typed keys, not the breaks, so the
+    /// session takes them back out when it reads what was typed.
+    pub wraps: Vec<InsertWrap>,
+}
+
+/// One auto-wrap break made during an insert session: where its line break
+/// went, and what it replaced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InsertWrap {
+    /// Char offset of the inserted line break in the buffer at the time.
+    pub at: usize,
+    /// The run of blanks the break replaced.
+    pub blanks: String,
+    /// Characters of indent put in after the break.
+    pub indent: usize,
 }
 
 #[derive(Debug, Clone)]

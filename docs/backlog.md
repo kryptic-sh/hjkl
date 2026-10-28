@@ -1155,11 +1155,10 @@ pattern identified so far:
     `textwidth` is set. hjkl's defaults are `ro` and `textwidth` 79, so adding
     `t` would wrap every user's typing at 79. The oracle driver adds `t`
     whenever a case sets `textwidth`, to match nvim.
-  - `.` after a wrapped insert replays the line break where it first fell. vim's
-    redo holds the typed keys and wraps again: `Aab cd ef<Esc>j.` at `textwidth`
-    10 on `"one two\nthree"` gives `"threeab cd\nef"` in nvim and
-    `"threeab\ncd ef"` in hjkl. Fixing it means recording the typed text without
-    the wrap breaks and replaying through the wrap.
+  - `.` retypes through the wrap check only for `i` / `a` / `I` / `A` (and a
+    count, and `".p`). The `o` / `O` and change (`cw`, `C`, `s`, ...) replays
+    still insert the recorded text with the first insert's line breaks in it;
+    unmeasured how often that differs from nvim.
   - Comment leaders (`c`), `'formatexpr'`, and the `l` / `b` / `1` / `2` flags.
 
 Seen while measuring, not `gq`:

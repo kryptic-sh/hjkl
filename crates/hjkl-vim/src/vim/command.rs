@@ -844,23 +844,19 @@ fn paste_source<H: hjkl_engine::types::Host>(
 }
 /// `".p` / `".P`: vim pastes the last inserted text by typing it again, as
 /// an `a` / `i` would, so the cursor ends on its last character even when
-/// the text spans lines, where a charwise paste would leave it at the start.
+/// the text spans lines, where a charwise paste would leave it at the start,
+/// and the text wraps at `'textwidth'` as typing does.
 fn paste_as_typed<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     before: bool,
     text: &str,
 ) {
-    use hjkl_buffer::{Edit, Position};
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
     if !before {
         hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
     }
-    let (row, col) = ed.cursor();
-    ed.mutate_edit(Edit::InsertStr {
-        at: Position::new(row, col),
-        text: text.to_string(),
-    });
+    type_text(ed, text);
     if ed.cursor().1 > 0 {
         hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
     }

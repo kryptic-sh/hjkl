@@ -2836,6 +2836,7 @@ fn insert_session_round_trips() {
         start_col: 0,
         backspaces: 0,
         deleted: 0,
+        wraps: Vec::new(),
     }));
     assert_eq!(e.insert_session().map(|s| s.count), Some(3));
     let taken = e.take_insert_session();

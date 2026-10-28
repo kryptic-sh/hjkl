@@ -15,6 +15,29 @@ use hjkl_engine::buf_helpers::{
 };
 use hjkl_engine::tag::{is_html_filetype, scan_tag_opener, sync_paired_tag_on_exit};
 
+/// Insert `text` at the cursor the way typing it would: under
+/// `'formatoptions'` `t` each character goes through [`auto_wrap_before`]
+/// first, so a repeated insert wraps where its own text reaches the margin,
+/// as vim's redo does when it retypes the keys.
+pub fn type_text<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>, text: &str) {
+    use hjkl_buffer::{Edit, Position};
+    let wraps = ed.settings().textwidth > 0 && ed.settings().formatoptions.contains('t');
+    let chunks: Vec<String> = if wraps {
+        text.chars().map(String::from).collect()
+    } else {
+        vec![text.to_string()]
+    };
+    for chunk in chunks {
+        if let Some(ch) = chunk.chars().next().filter(|_| wraps) {
+            auto_wrap_before(ed, ch);
+        }
+        let (row, col) = ed.cursor();
+        ed.mutate_edit(Edit::InsertStr {
+            at: Position::new(row, col),
+            text: chunk,
+        });
+    }
+}
 /// vim's `internal_format` under `'formatoptions'` `t`: a non-blank `ch`
 /// typed where it would end past `'textwidth'` first breaks the line at the
 /// last run of blanks that starts at or before the margin (or, when every
@@ -23,7 +46,10 @@ use hjkl_engine::tag::{is_html_filetype, scan_tag_opener, sync_paired_tag_on_exi
 /// its indent is left long. Repeats while the cursor's line is still too long.
 /// Not ported: comment leaders (`c`), `'formatexpr'`, and the `l` / `b` /
 /// `1` / `2` flags.
-fn auto_wrap_before<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>, ch: char) {
+pub fn auto_wrap_before<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    ch: char,
+) {
     use hjkl_buffer::{Edit, Position};
     let textwidth = ed.settings().textwidth;
     if textwidth == 0 || ch.is_whitespace() || !ed.settings().formatoptions.contains('t') {
@@ -77,6 +103,16 @@ fn auto_wrap_before<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::Vi
             String::new()
         };
         let new_col = indent.chars().count() + col.saturating_sub(end);
+        let at = hjkl_engine::types::Query::rope(ed.buffer()).line_to_char(row) + start;
+        if !vim(ed).replaying
+            && let Some(session) = vim_mut(ed).insert_session.as_mut()
+        {
+            session.wraps.push(hjkl_vim_types::InsertWrap {
+                at,
+                blanks: chars[start..end].iter().collect(),
+                indent: indent.chars().count(),
+            });
+        }
         ed.mutate_edit(Edit::Replace {
             start: Position::new(row, start),
             end: Position::new(row, end),
