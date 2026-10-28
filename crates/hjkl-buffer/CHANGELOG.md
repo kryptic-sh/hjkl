@@ -8,6 +8,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `join_row_marks(from, to, col_add)`: move the marks on one row onto another,
+  shifting their columns, for a charwise delete that joins rows.
 - `cursor_visual_col(line, char_col, tab_width)`: the display column a Normal-
   or Visual-mode cursor is drawn in, vim's `curswant` — a tab's last cell, any
   other character's first.

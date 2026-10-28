@@ -271,3 +271,62 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+[[cases]]
+name = "mark_on_first_row_survives_charwise_join"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\n"
+initial_cursor = [0, 0]
+keys = "jjmbjjlmakkd`a`b"
+expected_buffer = "aa bb\ncc dd\nei jj\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "mark_on_last_row_joins_first_row"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\n"
+initial_cursor = [0, 0]
+keys = "jjlmbkld`b`b"
+expected_buffer = "aa bb\ncce ff\ngg hh\nii jj\n"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "mark_on_last_row_col_adds_kept_prefix"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\n"
+initial_cursor = [0, 0]
+keys = "jj3lmbkld`b`b"
+expected_buffer = "aa bb\ncc dff\ngg hh\nii jj\n"
+expected_cursor = [1, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "mark_on_last_row_backward_delete"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\n"
+initial_cursor = [0, 0]
+keys = "jjmbjj3lmakkd`a`a"
+expected_buffer = "aa bb\ncc dd\nee jj\n"
+expected_cursor = [2, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "mark_middle_row_dropped_last_row_joined"
+initial_buffer = "aa bb\ncc dd\nee ff\ngg hh\nii jj\n"
+initial_cursor = [0, 0]
+keys = "jj3lmbjmakkld`a`b"
+expected_buffer = "aa bb\ncc dhh\nii jj\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

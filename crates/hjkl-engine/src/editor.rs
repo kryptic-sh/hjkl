@@ -2700,13 +2700,33 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // The row marks, folds and jumps rebase from. A linewise delete removes
         // exactly its own rows, which start above the cursor when the motion
         // went upward (`dk`, `d'a`); every other edit rebases from the cursor.
+        // A charwise delete across rows joins its last row onto its first,
+        // which survives: only the rows between and the last one go.
+        let charwise_join = match &edit {
+            hjkl_buffer::Edit::DeleteRange {
+                start,
+                end,
+                kind: hjkl_buffer::MotionKind::Char,
+            } if start.row != end.row => {
+                let (top, bot) = if (start.row, start.col) <= (end.row, end.col) {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
+                Some((top.row, bot.row, top.col))
+            }
+            _ => None,
+        };
         let rebase_row = match &edit {
             hjkl_buffer::Edit::DeleteRange {
                 start,
                 end,
                 kind: hjkl_buffer::MotionKind::Line,
             } => start.row.min(end.row),
-            _ => pre_row,
+            _ => match charwise_join {
+                Some((top, _, _)) => top + 1,
+                None => pre_row,
+            },
         };
         // `U` (`:h U`) bookkeeping: remember `pre_row`'s text before the
         // first change lands on it, so `undo_line` can restore it later.
@@ -2827,10 +2847,35 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
         // delta the edit produced. Without this, every line-changing
         // edit silently invalidates `'a`-style positions.
         if delta != 0 {
+            if let Some((top, bot, top_col)) = charwise_join {
+                self.join_row_marks(bot, top, top_col);
+            }
             self.shift_marks_after_edit(rebase_row, delta);
         }
         self.mark_content_dirty();
         inverse
+    }
+
+    /// The marks and jumps on the last row of a charwise delete across rows
+    /// follow it onto the first row. vim's `do_join` adds the kept prefix's
+    /// length to their columns (`mark_col_adjust`) without subtracting what
+    /// the delete took off the joined row, so `d` from (1,2) to (2,1) moves a
+    /// mark at (2,3) to (1,5).
+    fn join_row_marks(&mut self, from: usize, to: usize, col_add: usize) {
+        self.buffer.join_row_marks(from, to, col_add);
+        let cur_bid = self.current_buffer_id;
+        for (bid, row, col) in self.global_marks.lock().unwrap().values_mut() {
+            if *bid == cur_bid && *row == from {
+                *row = to;
+                *col += col_add;
+            }
+        }
+        for (row, col) in self.jump_back.iter_mut().chain(self.jump_fwd.iter_mut()) {
+            if *row == from {
+                *row = to;
+                *col += col_add;
+            }
+        }
     }
 
     /// Migrate user marks + jumplist entries when an edit at row

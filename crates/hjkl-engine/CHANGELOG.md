@@ -19,6 +19,12 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A charwise delete across rows rebases marks and jumps the way vim's join does:
+  marks on its first row stay (they were dropped when the cursor was there),
+  marks on the rows between go, and marks on its last row move onto the first
+  with the kept prefix's length added to their column. Before, the band of
+  dropped rows started at the cursor, so `d` upward to a mark dropped the wrong
+  rows.
 - Undo and redo set the sticky column (curswant) from where the cursor lands, as
   vim's `u_undoredo` does, so a `j` / `k` after `u` aims for that column:
   `jjAzz<Esc>uk` went to the column left over from the insert.

@@ -1112,12 +1112,11 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
     `dd` / `>>` / `<<` / `cc` / `gUU` / `==` that this entry also listed now
     match nvim. Read `u_undoredo`'s cursor rule in nvim's source before
     guessing.
-  - **Mark rebasing after a CHARWISE multi-row delete still keys off the cursor
-    row.** `mutate_edit`'s `rebase_row` uses the edit's own top row only for a
-    linewise `DeleteRange`; a backward charwise delete across rows (``d`a``
-    upward) and `Replace` edits still rebase from the cursor, and the band
-    `[row, row + rows_removed)` drops the first row's marks though that row
-    survives a charwise delete. Not measured against nvim.
+  - **Mark rebasing after a `Replace` edit across rows still keys off the cursor
+    row.** `mutate_edit` rebases a charwise `DeleteRange` across rows the way
+    vim's join does since 2026-10-29 (`join_row_marks`), but an `Edit::Replace`
+    that changes the row count still drops and shifts from the cursor. Not
+    measured against nvim.
   - **Crate changelogs are not rolled at a release.** `hjkl-vim-types`'s
     `[Unreleased]` still lists `Motion::ChangeWordEnd`, which the root changelog
     records as shipped in 0.42.0. BCTP moves the root changelog only; whether
