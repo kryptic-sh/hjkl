@@ -15,6 +15,9 @@ and this project adheres to
   variant on any of them is not a breaking change. Building with
   `--cfg hjkl_exhaustive` drops the attribute, which `hjkl`'s CI uses to keep
   `hjkl-vim`'s matches exhaustive.
+- `LastChange::VisualOp` has a `levels` field: the shift count of a Visual `>` /
+  `<` (`Vj2>`), so `.` shifts as far again. Constructing or destructuring the
+  variant must add it.
 
 ### Added
 

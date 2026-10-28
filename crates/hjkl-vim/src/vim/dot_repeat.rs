@@ -175,6 +175,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             extent,
             inserted,
             register,
+            levels,
         } => {
             vim_mut(ed).pending_register = register;
             // B1: replay a visual-mode operator over a same-SIZE region
@@ -194,7 +195,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                     // count and clamps it to the buffer's last line; unlike
                     // `[count]dd` it never aborts for lack of lines.
                     let fit = last_content_row(ed).saturating_sub(ed.cursor().0) + 1;
-                    execute_line_op_from_cursor(ed, op, lines.min(fit));
+                    execute_line_op_from_cursor(ed, op, lines.min(fit), levels);
                     if let Some(text) = inserted {
                         replay_insert_and_finish(ed, &text);
                     }
@@ -217,7 +218,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                 // `c` re-inserts `inserted` itself (it never went through
                 // insert mode here), so DON'T also `replay_insert_and_finish`.
                 VisualExtent::Block { rows, cols, to_eol } => {
-                    replay_block_visual_op(ed, op, rows, cols, to_eol, inserted);
+                    replay_block_visual_op(ed, op, rows, cols, to_eol, inserted, levels);
                 }
             }
         }

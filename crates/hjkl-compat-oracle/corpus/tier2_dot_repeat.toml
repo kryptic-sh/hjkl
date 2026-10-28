@@ -617,3 +617,75 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "dot_repeats_counted_visual_line_shift"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "Vj2>."
+expected_buffer = "                ab\n                cd\nef"
+expected_cursor = [0, 16]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeats_counted_visual_char_shift"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "vj2>."
+expected_buffer = "                ab\n                cd\nef"
+expected_cursor = [0, 16]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeats_counted_visual_block_shift"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "<C-v>jl2>."
+expected_buffer = "                ab\n                cd\nef"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_counted_visual_shift_ignores_dot_count"
+initial_buffer = "ab\ncd\nef"
+initial_cursor = [0, 0]
+keys = "Vj2>3."
+expected_buffer = "                ab\n                cd\nef"
+expected_cursor = [0, 16]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeats_counted_visual_line_outdent"
+initial_buffer = "                    ab\n                    cd"
+initial_cursor = [0, 0]
+keys = "Vj3<."
+expected_buffer = "ab\ncd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeats_counted_visual_block_outdent"
+initial_buffer = "                    ab\n                    cd"
+initial_cursor = [0, 0]
+keys = "<C-v>j2<."
+expected_buffer = "    ab\n    cd"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

@@ -147,6 +147,7 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                             lines: bot - top + 1,
                         },
                         register,
+                        1,
                     );
                     vim_mut(ed).mode = Mode::Normal;
                 }
@@ -162,6 +163,7 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                             lines: bot - top + 1,
                         },
                         register,
+                        1,
                     );
                     change_linewise_rows(ed, top, bot);
                 }
@@ -178,6 +180,7 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                             lines: bot - top + 1,
                         },
                         register,
+                        1,
                     );
                 }
                 Operator::Indent | Operator::Outdent => {
@@ -194,6 +197,7 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                             lines: bot - top + 1,
                         },
                         register,
+                        levels,
                     );
                     vim_mut(ed).mode = Mode::Normal;
                 }
@@ -259,14 +263,14 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                     // A cut through the end of the line leaves the cursor past
                     // the new end; Normal mode puts it on the last character.
                     clamp_cursor_to_normal_mode(ed);
-                    record_visual_last_change(ed, op, charwise_extent(top, bot), register);
+                    record_visual_last_change(ed, op, charwise_extent(top, bot), register, 1);
                     vim_mut(ed).mode = Mode::Normal;
                 }
                 Operator::Change => {
                     ed.push_undo();
                     // Record BEFORE entering insert: `AfterChange` patches
                     // `inserted` into this entry when the user hits Esc.
-                    record_visual_last_change(ed, op, charwise_extent(top, bot), register);
+                    record_visual_last_change(ed, op, charwise_extent(top, bot), register, 1);
                     let (from, to, kind) = charwise_visual_range(ed, top, bot);
                     cut_vim_range(ed, from, to, kind);
                     begin_insert_noundo(ed, 1, InsertReason::AfterChange);
@@ -277,7 +281,7 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                 | Operator::Rot13 => {
                     let (from, to, kind) = charwise_visual_range(ed, top, bot);
                     apply_case_op_to_selection(ed, op, from, to, kind);
-                    record_visual_last_change(ed, op, charwise_extent(top, bot), register);
+                    record_visual_last_change(ed, op, charwise_extent(top, bot), register, 1);
                 }
                 Operator::Indent | Operator::Outdent => {
                     ed.push_undo();
@@ -296,6 +300,7 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                             lines: bot.0 - top.0 + 1,
                         },
                         register,
+                        levels,
                     );
                     vim_mut(ed).mode = Mode::Normal;
                 }
@@ -345,6 +350,7 @@ fn record_visual_last_change<H: hjkl_engine::types::Host>(
     op: Operator,
     extent: VisualExtent,
     register: Option<char>,
+    levels: usize,
 ) {
     if !vim(ed).replaying {
         vim_mut(ed).last_change = Some(LastChange::VisualOp {
@@ -352,6 +358,7 @@ fn record_visual_last_change<H: hjkl_engine::types::Host>(
             extent,
             inserted: None,
             register,
+            levels,
         });
     }
 }
@@ -596,6 +603,7 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
                 op,
                 block_extent(top, bot, left, right, to_eol),
                 register,
+                1,
             );
         }
         Operator::Change => {
@@ -608,6 +616,7 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
                 op,
                 block_extent(top, bot, left, right, to_eol),
                 register,
+                1,
             );
             // `c`'s replicated typed text always lands at the LEFT column
             // on every row (`:h v_b_c`) — unaffected by a ragged right
@@ -639,6 +648,7 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
                 op,
                 block_extent(top, bot, left, right, to_eol),
                 register,
+                1,
             );
         }
         Operator::Indent | Operator::Outdent => {
@@ -660,6 +670,7 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
                 op,
                 block_extent(top, bot, left, right, to_eol),
                 register,
+                count.max(1),
             );
         }
         Operator::Fold => unreachable!("Visual zf takes its own path"),
@@ -917,6 +928,7 @@ pub fn replay_block_visual_op<H: hjkl_engine::types::Host>(
     cols: usize,
     to_eol: bool,
     inserted: Option<String>,
+    levels: usize,
 ) {
     let (top, left) = ed.cursor();
     let bot = top + rows.saturating_sub(1);
@@ -959,11 +971,11 @@ pub fn replay_block_visual_op<H: hjkl_engine::types::Host>(
         }
         Operator::Indent => {
             ed.push_undo();
-            indent_block(ed, top, bot, left, 1);
+            indent_block(ed, top, bot, left, levels);
         }
         Operator::Outdent => {
             ed.push_undo();
-            outdent_block(ed, top, bot, left, 1);
+            outdent_block(ed, top, bot, left, levels);
         }
         Operator::Change => {
             ed.push_undo();

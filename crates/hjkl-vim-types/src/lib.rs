@@ -445,6 +445,9 @@ pub enum LastChange {
         /// The explicit register the original change used (`vll"ad`), if
         /// any. See [`LastChange::LineOp::register`].
         register: Option<char>,
+        /// Shift levels of a `>` / `<` (`Vj2>` shifts two `'shiftwidth'`s,
+        /// and so does its `.`); 1 for every other operator.
+        levels: usize,
     },
     /// Charwise (`v`) / linewise (`V`) `r{ch}` — dot-repeat re-replaces a
     /// same-SIZE region anchored at the cursor (`:h v_.`), mirroring

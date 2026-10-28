@@ -40,6 +40,8 @@ patch bumps.
 
 ### Fixed
 
+- `.` after a counted Visual shift (`Vj2>`, `v2<`, `<C-v>j2>`) shifts by the
+  same count, as in vim; hjkl shifted one level.
 - `n` / `N` repeat the last search's offset: after `/ab/e`, `n` lands on the end
   of the next match, as in vim; hjkl dropped the offset after the first search.
   `/<CR>` keeps it, `//<CR>` and `*` / `#` drop it, and `dn` after `/ab/e` is

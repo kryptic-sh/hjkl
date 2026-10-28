@@ -49,6 +49,8 @@ and this project adheres to
 
 ### Fixed
 
+- `.` after a counted Visual `>` / `<` (`Vj2>.`, `<C-v>j2<.`) shifts by the
+  saved count, recorded in `LastChange::VisualOp::levels`; it shifted one level.
 - `n` / `N` apply the last search's offset again (`/ab/e` then `n` lands on the
   next match's end), sharing the search prompt's offset handling. A bare `/<CR>`
   keeps the offset, `//<CR>` drops it, and `*` / `#` clear it. With an operator,

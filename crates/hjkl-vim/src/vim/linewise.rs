@@ -97,7 +97,7 @@ pub fn execute_line_op<H: hjkl_engine::types::Host>(
             buf_set_cursor_rc(ed.buffer_mut(), row, col);
         }
     }
-    execute_line_op_from_cursor(ed, op, count);
+    execute_line_op_from_cursor(ed, op, count, 1);
 }
 
 /// `op` over `count` lines from the cursor's row, starting where the cursor
@@ -106,15 +106,19 @@ pub fn execute_line_op_from_cursor<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     count: usize,
+    levels: usize,
 ) {
-    line_op_body(ed, op, count);
+    line_op_body(ed, op, count, levels);
     remember_operator_column(ed);
 }
 
+/// `levels` is the shift count for `>` / `<` (more than 1 only for the `.` of
+/// a counted Visual shift); other operators ignore it.
 fn line_op_body<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
     count: usize,
+    levels: usize,
 ) {
     // Folded counts (`2d3d` → 6) can exceed a single prefix's cap; re-clamp
     // at vim's count ceiling (`:h count`).
@@ -189,9 +193,9 @@ fn line_op_body<H: hjkl_engine::types::Host>(
             // `>>` / `N>>` / `<<` / `N<<` — linewise indent / outdent.
             ed.push_undo();
             if op == Operator::Indent {
-                indent_rows(ed, row, end_row, 1);
+                indent_rows(ed, row, end_row, levels);
             } else {
-                outdent_rows(ed, row, end_row, 1);
+                outdent_rows(ed, row, end_row, levels);
             }
             remember_cursor_column(ed);
             vim_mut(ed).mode = Mode::Normal;

@@ -325,7 +325,7 @@ fixed:
 - **What `#[non_exhaustive]` does not cover (2026-10-28).** The growing
   `hjkl-vim-types` enums, `PendingState`, `VimState` and `SearchBank` are
   marked; a new variant or field on those is no longer breaking. Still breaking:
-  a new field on an existing struct-like variant (`LastChange::VisualOp`, ...),
+  a new field on an existing struct-like variant (`LastChange::OpMotion`, ...),
   and any change to `InsertSession` / `LastVisual` or `EngineCmd`. The variants
   and those two structs are built by `hjkl-vim`, which a `#[non_exhaustive]`
   outside their crate would forbid; `EngineCmd` stays exhaustive because a new
@@ -1095,13 +1095,6 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
   class is not gated on typed keys: a `u` replayed by `@q` opens folds as well,
   because `settle_after_history_jump` lives in the engine, which does not know a
   macro is replaying (by code read; not measured).
-- **`.` after a counted Visual `>` / `<` shifts once.** vim's Visual redo keeps
-  the count: `Vj2>.` and `<C-v>j2>.` on `"ab\ncd"` @ (0,0) indent each line 16
-  columns in nvim 0.12.5 (two shifts of two), 12 in hjkl, because
-  `LastChange::VisualOp` stores no count and the replay (`replay_last_change`'s
-  `VisualOp` arm, `replay_block_visual_op`) shifts one level. A count field on
-  `VisualOp` is still a breaking change (see §1.5), so it waits for a minor
-  release.
 - **Visual `r<CR>` cannot be represented.** vim replaces every selected cell
   with a literal carriage return (`vr<CR>` on `"abcd"` gives `"\rbcd"` in nvim
   0.12.5), but the rope reads `\r` as a line break, so the buffer would split
