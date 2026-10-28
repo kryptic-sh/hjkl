@@ -75,6 +75,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `MotionKind::Home`, for `<Home>`: `LineStart` without opening a closed fold.
 - `SearchBank::offset`, with `Editor::last_search_offset` /
   `set_last_search_offset`: the last committed search's offset (`e` for
   `/pat/e`), for `n` / `N` to apply again.

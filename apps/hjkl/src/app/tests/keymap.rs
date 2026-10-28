@@ -3239,6 +3239,7 @@ fn all_phase3_keymap_motions_keep_window_synced() {
         MotionKind::WordEnd,
         MotionKind::BigWordEnd,
         MotionKind::LineStart,
+        MotionKind::Home,
         MotionKind::FirstNonBlank,
         MotionKind::LineEnd,
         MotionKind::GotoLine,

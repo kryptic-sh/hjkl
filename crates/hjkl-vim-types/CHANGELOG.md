@@ -21,6 +21,8 @@ and this project adheres to
 
 ### Added
 
+- `Motion::Home`, for `<Home>`: column 0 like `LineStart`, but it does not open
+  a closed fold.
 - `Motion::ScreenLineStart`, `Motion::ScreenLineFirstNonBlank` and
   `Motion::ScreenLineEnd`, for `g0` / `g^` / `g$`. More variants on the
   exhaustive `Motion` enum: an external `match` over it breaks.

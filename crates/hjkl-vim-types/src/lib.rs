@@ -204,6 +204,10 @@ pub enum Motion {
     /// `gE` — backward WORD end.
     BigWordEndBack,
     LineStart,
+    /// `<Home>` — column 0, as `0` (`LineStart`), except that it does not
+    /// open a closed fold: vim's `nv_home` runs `nv_pipe`, which has no
+    /// `'foldopen'` check.
+    Home,
     FirstNonBlank,
     LineEnd,
     FileTop,

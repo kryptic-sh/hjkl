@@ -40,6 +40,8 @@ patch bumps.
 
 ### Fixed
 
+- `<Home>` no longer opens a closed fold, as in vim (`zfj<Home>dd` deletes the
+  whole fold); only `0` does.
 - `.` after a counted Visual shift (`Vj2>`, `v2<`, `<C-v>j2>`) shifts by the
   same count, as in vim; hjkl shifted one level.
 - `n` / `N` repeat the last search's offset: after `/ab/e`, `n` lands on the end

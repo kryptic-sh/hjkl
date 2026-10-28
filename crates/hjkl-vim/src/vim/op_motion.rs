@@ -185,6 +185,7 @@ fn change_survives_in_place(motion: &Motion, count: usize) -> bool {
                 | Motion::BackspaceBack
                 | Motion::SpaceFwd
                 | Motion::LineStart
+                | Motion::Home
                 | Motion::FirstNonBlank
                 | Motion::ScreenLineStart
                 | Motion::ScreenLineFirstNonBlank

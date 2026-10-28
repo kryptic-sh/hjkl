@@ -49,6 +49,9 @@ and this project adheres to
 
 ### Fixed
 
+- `<Home>` parses to `Motion::Home` and `MotionKind::Home` runs it, so it leaves
+  a closed fold closed, as vim's `nv_home` does; it shared `0`'s `'foldopen'`
+  `hor` handling.
 - `.` after a counted Visual `>` / `<` (`Vj2>.`, `<C-v>j2<.`) shifts by the
   saved count, recorded in `LastChange::VisualOp::levels`; it shifted one level.
 - `n` / `N` apply the last search's offset again (`/ab/e` then `n` lands on the

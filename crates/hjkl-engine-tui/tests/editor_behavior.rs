@@ -923,6 +923,27 @@ fn apply_motion_line_start_from_beginning_stays_at_col_zero() {
 }
 
 #[test]
+fn apply_motion_home_leaves_closed_fold_closed() {
+    // vim's `<Home>` is not a `'foldopen'` `hor` motion, unlike `0`.
+    let mut e = fresh_editor("abc def\nxyz\nlast\n");
+    e.buffer_mut().add_fold(0, 1, true);
+    e.jump_cursor(0, 2);
+    e.apply_motion(hjkl_engine::MotionKind::Home, 1);
+    assert_eq!(e.cursor(), (0, 0), "Home lands at col 0");
+    assert!(e.buffer().is_row_hidden(1), "Home keeps the fold closed");
+}
+
+#[test]
+fn apply_motion_line_start_opens_closed_fold() {
+    let mut e = fresh_editor("abc def\nxyz\nlast\n");
+    e.buffer_mut().add_fold(0, 1, true);
+    e.jump_cursor(0, 2);
+    e.apply_motion(hjkl_engine::MotionKind::LineStart, 1);
+    assert_eq!(e.cursor(), (0, 0), "LineStart lands at col 0");
+    assert!(!e.buffer().is_row_hidden(1), "LineStart opens the fold");
+}
+
+#[test]
 fn apply_motion_first_non_blank_lands_on_first_non_blank() {
     // "  foo bar  \n": `^` from col 0 → col 2 ('f').
     let mut e = fresh_editor("  foo bar  \n");

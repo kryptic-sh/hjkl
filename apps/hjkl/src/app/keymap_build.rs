@@ -331,7 +331,7 @@ pub fn build_app_keymap(leader: char) -> Keymap<AppAction, hjkl_vim::Mode> {
         ("E", hjkl_engine::MotionKind::BigWordEnd, "BIG word end"),
         // Phase 3c: line-anchor motions.
         ("0", hjkl_engine::MotionKind::LineStart, "line start"),
-        ("<Home>", hjkl_engine::MotionKind::LineStart, "line start"),
+        ("<Home>", hjkl_engine::MotionKind::Home, "line start"),
         (
             "^",
             hjkl_engine::MotionKind::FirstNonBlank,

@@ -459,6 +459,7 @@ pub fn update_block_vcol<H: hjkl_engine::types::Host>(
         | Motion::WordEndBack
         | Motion::BigWordEndBack
         | Motion::LineStart
+        | Motion::Home
         | Motion::FirstNonBlank
         | Motion::LastNonBlank
         | Motion::LineMiddle

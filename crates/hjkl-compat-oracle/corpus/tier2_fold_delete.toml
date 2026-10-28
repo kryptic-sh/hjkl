@@ -1802,3 +1802,39 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "home_leaves_closed_fold_closed"
+initial_buffer = "abc def\nxyz\nlast"
+initial_cursor = [0, 2]
+keys = "zfj<Home>dd"
+expected_buffer = "last"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "home_then_j_skips_closed_fold"
+initial_buffer = "abc def\nxyz\nlast"
+initial_cursor = [0, 2]
+keys = "zfj<Home>j"
+expected_buffer = "abc def\nxyz\nlast"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "zero_opens_closed_fold"
+initial_buffer = "abc def\nxyz\nlast"
+initial_cursor = [0, 2]
+keys = "zfj0dd"
+expected_buffer = "xyz\nlast"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

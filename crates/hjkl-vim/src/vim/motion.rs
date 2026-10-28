@@ -48,7 +48,8 @@ pub fn parse_motion(input: &Input) -> Option<Motion> {
         Key::Char('B') => Some(Motion::BigWordBack),
         Key::Char('e') => Some(Motion::WordEnd),
         Key::Char('E') => Some(Motion::BigWordEnd),
-        Key::Char('0') | Key::Home => Some(Motion::LineStart),
+        Key::Char('0') => Some(Motion::LineStart),
+        Key::Home => Some(Motion::Home),
         Key::Char('^') => Some(Motion::FirstNonBlank),
         Key::Char('$') | Key::End => Some(Motion::LineEnd),
         Key::Char('G') => Some(Motion::FileBottom),
@@ -321,9 +322,13 @@ pub fn apply_motion_kind<H: hjkl_engine::types::Host>(
             execute_motion_with_block_vcol(ed, Motion::BigWordEnd, count);
         }
         hjkl_engine::MotionKind::LineStart => {
-            // `0` / `<Home>`: first column of the current line.
+            // `0`: first column of the current line.
             // count is ignored — matches vim `0` semantics.
             execute_motion_with_block_vcol(ed, Motion::LineStart, 1);
+        }
+        hjkl_engine::MotionKind::Home => {
+            // `<Home>`: as `0`, but leaves a closed fold closed.
+            execute_motion_with_block_vcol(ed, Motion::Home, 1);
         }
         hjkl_engine::MotionKind::FirstNonBlank => {
             // `^`: first non-blank column on the current line.
@@ -510,6 +515,7 @@ fn motion_class(motion: &Motion) -> MotionClass {
         | Motion::WordEndBack
         | Motion::BigWordEndBack
         | Motion::LineStart
+        | Motion::Home
         | Motion::FirstNonBlank
         | Motion::LineEnd
         | Motion::Find { .. }
@@ -604,6 +610,7 @@ fn motion_opens_fold(motion: &Motion, count: usize, succeeded: bool) -> bool {
         | Motion::FirstNonBlankNextLine
         | Motion::FirstNonBlankPrevLine
         | Motion::FirstNonBlankLine
+        | Motion::Home
         | Motion::GotoColumn => false,
         #[cfg(not(hjkl_exhaustive))]
         _ => false,
@@ -823,7 +830,7 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             let iskeyword = ed.settings().iskeyword.clone();
             hjkl_engine::motions::move_word_end_back(ed.buffer_mut(), true, count, &iskeyword);
         }
-        Motion::LineStart => {
+        Motion::LineStart | Motion::Home => {
             hjkl_engine::motions::move_line_start(ed.buffer_mut());
         }
         Motion::FirstNonBlank => {

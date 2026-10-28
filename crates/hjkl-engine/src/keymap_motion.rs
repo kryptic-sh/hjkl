@@ -45,9 +45,12 @@ pub enum MotionKind {
     /// `E` — move the cursor forward to the end of the current or next BIG
     /// word (whitespace-delimited). Counts repeat; wraps across lines.
     BigWordEnd,
-    /// `0` / `<Home>` — move the cursor to the first column of the current
-    /// line (column 0). Count is ignored (vim `0` is always a plain motion).
+    /// `0` — move the cursor to the first column of the current line
+    /// (column 0). Count is ignored (vim `0` is always a plain motion).
     LineStart,
+    /// `<Home>` — as `LineStart`, but a closed fold under the cursor stays
+    /// closed (vim's `<Home>` is not a `'foldopen'` `hor` motion).
+    Home,
     /// `^` — move the cursor to the first non-blank character on the current
     /// line. On a blank/all-whitespace line, lands at column 0.
     FirstNonBlank,
