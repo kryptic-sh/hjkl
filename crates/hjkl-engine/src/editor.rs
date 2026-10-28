@@ -4727,25 +4727,24 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
                 self.cap_undo();
                 self.restore_rope(&entry.rope, entry.cursor);
                 self.restore_marks(&entry.marks);
-                // vim's `u_undoredo` cursor: the first changed line — or the
-                // line above it when that is where the change started (the
-                // `o` / `p` case) — at the change's starting column when the
-                // change started on it, else at its first non-blank. `start`
-                // is where the change started, read before the step.
+                // vim's `u_undoredo` cursor: where the change started, when
+                // that lies in the changed block — from the line above it
+                // (the `o` / `p` case) through the line after its new end —
+                // else the first changed line's first non-blank. `start` is
+                // where the change started, read before the step: a linewise
+                // change over several lines saves it on the second line.
                 let after = crate::types::Query::rope(&self.buffer);
                 if let Some((first_row, _)) = first_diff_pos(&before, &after) {
-                    let row = if start.0 + 1 == first_row {
-                        start.0
-                    } else {
-                        first_row
-                    };
+                    let new_rows = changed_rows(&before, &after, first_row);
+                    let in_block = start.0 + 1 >= first_row && start.0 <= first_row + new_rows;
+                    let row = if in_block { start.0 } else { first_row };
                     let last_row = self.buffer.last_content_row();
                     if row > last_row {
                         // The change removed the buffer's last line(s): vim
                         // ends on the new last line's first non-blank.
                         buf_set_cursor_rc(&mut self.buffer, last_row, 0);
                         crate::motions::move_first_non_blank(&mut self.buffer);
-                    } else if row == start.0 {
+                    } else if in_block {
                         buf_set_cursor_rc(&mut self.buffer, row, start.1);
                     } else {
                         buf_set_cursor_rc(&mut self.buffer, row, 0);
@@ -5695,6 +5694,21 @@ fn first_diff_pos(a: &ropey::Rope, b: &ropey::Rope) -> Option<(usize, usize)> {
         }
     }
     None
+}
+
+/// How many lines from `first_row` on `b` differs from `a` in: its length
+/// past `first_row` less the lines the two share at their ends.
+fn changed_rows(a: &ropey::Rope, b: &ropey::Rope, first_row: usize) -> usize {
+    let (na, nb) = (a.len_lines(), b.len_lines());
+    let mut shared = 0;
+    while shared < nb.saturating_sub(first_row)
+        && shared < na.saturating_sub(first_row)
+        && hjkl_buffer::rope_line_str(a, na - 1 - shared)
+            == hjkl_buffer::rope_line_str(b, nb - 1 - shared)
+    {
+        shared += 1;
+    }
+    nb.saturating_sub(first_row) - shared
 }
 
 /// Visual column of the character at `char_col` in `line`.

@@ -191,7 +191,7 @@ fn line_op_body<H: hjkl_engine::types::Host>(
             // `cc` / `3cc`: delegate to the shared linewise-change helper
             // which preserves the first line's indent, leaves one row open,
             // and enters insert mode.
-            change_linewise_rows(ed, row, end_row);
+            change_linewise_rows(ed, row, end_row, col);
         }
         Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase | Operator::Rot13 => {
             // `gUU` / `guu` / `g~~` / `g??` — linewise case/rot13 transform over

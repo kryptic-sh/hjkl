@@ -1105,13 +1105,6 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
   Normal mode only (`keymap_build.rs`); what Visual `/` does there was not
   tried.
 - **Left by the operator + mark work (2026-10-18):**
-  - **Undo after a linewise change lands one row high.** On
-    `"aa bb\n  cc dd\nee ff\ngg hh\n"` @ (0,3), `jjc2kx<Esc>u` puts nvim 0.12.5
-    on (1,3) and hjkl on (0,3) (re-measured 2026-10-29; `change_linewise_rows`
-    pushes its own undo step). The redo after `jjd2k` and the undo column after
-    `dd` / `>>` / `<<` / `cc` / `gUU` / `==` that this entry also listed now
-    match nvim. Read `u_undoredo`'s cursor rule in nvim's source before
-    guessing.
   - **Mark columns after a charwise `Edit::Replace` across rows are a guess.**
     Since 2026-10-29 `mutate_edit` rebases it like a charwise delete: the first
     row's marks stay, the last row's move onto it with the kept prefix's length

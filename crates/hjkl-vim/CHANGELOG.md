@@ -54,6 +54,11 @@ and this project adheres to
 
 ### Fixed
 
+- Undo after a linewise change over more than one line (`c2j`, `2cc`, `Vjc`)
+  lands on the range's second line at the column the change started at, as vim's
+  does: `op_change` deletes the lines after the first before saving the first,
+  so that is where its undo step holds the cursor. hjkl landed on the first
+  line.
 - `J` keeps the current line's marks and moves the next line's onto it the way
   vim's `do_join` does: shifted to where its text lands, less the indent the
   join strips, and onto the join point from inside that indent. Before, `lmaJ`

@@ -712,14 +712,23 @@ pub fn motion_kind(motion: &Motion) -> RangeKind {
 /// to the yank + delete registers and sets `change_mark_start` for the
 /// `[`/`]` deferral. Calls `push_undo` internally — callers must NOT also
 /// call it.
+///
+/// `col` is the column the change started at. vim's `op_change` deletes the
+/// lines after the first before it saves the first, so over more than one
+/// line its undo step holds the cursor on the second line at that column,
+/// and `u` lands there.
 pub fn change_linewise_rows<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top_row: usize,
     end_row: usize,
+    col: usize,
 ) {
     use hjkl_buffer::{Edit, MotionKind as BufKind, Position};
     // Vim `:h '[`: stash change start for `]` deferral on insert-exit.
     vim_mut(ed).change_mark_start = Some((top_row, 0));
+    if end_row > top_row {
+        buf_set_cursor_rc(ed.buffer_mut(), top_row + 1, col);
+    }
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
     // Read the cut payload first so yank reflects every original line.
@@ -902,7 +911,7 @@ fn operator_over_range_body<H: hjkl_engine::types::Host>(
                 // Linewise change (`cj`/`ck`/`cip`/`cap`/…): preserve the
                 // first line's indent and leave exactly one row open for
                 // insert. The helper handles push_undo + insert entry.
-                change_linewise_rows(ed, top.0, bot.0);
+                change_linewise_rows(ed, top.0, bot.0, top.1);
             } else {
                 // Charwise change: cut the range and enter insert. The undo
                 // step saves the range's start, so `u` returns there even when

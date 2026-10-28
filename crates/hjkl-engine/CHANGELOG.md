@@ -19,6 +19,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- Redo puts the cursor where the change started whenever that lies in the
+  changed block, from the line above it through the line after its new end, as
+  vim's `u_undoredo` does; before, only a start on the first changed line (or
+  the line above it) counted, so a redo of `c2jx` went to the first line's first
+  non-blank.
 - `gJ` (`Edit::JoinLines`) and a charwise `Edit::Replace` across rows keep the
   first row's marks and move each joined row's marks to where its text lands.
   Both rebased from the cursor row before, which dropped the first row's marks

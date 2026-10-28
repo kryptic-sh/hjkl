@@ -192,7 +192,7 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                         register,
                         1,
                     );
-                    change_linewise_rows(ed, top, bot);
+                    change_linewise_rows(ed, top, bot, ed.cursor().1);
                 }
                 Operator::Uppercase
                 | Operator::Lowercase
