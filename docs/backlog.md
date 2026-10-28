@@ -369,7 +369,7 @@ goes to row 1.
 keys. A corpus case would need the ex layer driven some other way.
 
 **The differential fuzzer's standing counts.** After the insert-backspace replay
-fix (2026-10-29) `difffuzz 2000 424242` reports 37 distinct divergences (77 at
+fix (2026-10-29) `difffuzz 2000 424242` reports 41 distinct divergences (77 at
 `c24057ca`, 2026-10-27); `difffuzz 400 777` reported 23 at `c24057ca` (69 when
 the seed-777 count was first recorded, 2026-08-04). Each slice compares the
 sorted divergence list before and after rather than the count, since the
