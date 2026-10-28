@@ -40,6 +40,13 @@ patch bumps.
 
 ### Fixed
 
+- `.` repeats `gU` / `gu` / `g~` / `g?`, `=`, `gq` and `gw` over a motion or
+  text object (`gUw`, `g~iw`, `gqj`), as in vim; hjkl repeated only `d`, `c`,
+  `>` and `<`.
+- An operator over a motion that cannot move but does not cancel it (`gU0` or
+  `>h` at column 0) runs as in vim: `>` / `<` / `=` / `gq` act on the line, and
+  the case operators change the character under the cursor on the first line and
+  the whole line on later ones.
 - `<Home>` no longer opens a closed fold, as in vim (`zfj<Home>dd` deletes the
   whole fold); only `0` does.
 - `.` after a counted Visual shift (`Vj2>`, `v2<`, `<C-v>j2>`) shifts by the

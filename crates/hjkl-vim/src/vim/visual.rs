@@ -364,7 +364,22 @@ pub fn try_goto_mark<H: hjkl_engine::types::Host>(
 }
 /// `true` when `op` records a `last_change` entry for dot-repeat purposes.
 /// Promoted to `pub` in Phase 6.6e so `hjkl-vim::normal` can use it without
-/// duplicating the logic.
+/// duplicating the logic. vim redoes every operator but a yank and the fold
+/// operators (`do_pending_operator`); `!` and `gc` are left out because their
+/// replay through the motion path was not verified.
 pub fn op_is_change(op: Operator) -> bool {
-    matches!(op, Operator::Delete | Operator::Change)
+    matches!(
+        op,
+        Operator::Delete
+            | Operator::Change
+            | Operator::Uppercase
+            | Operator::Lowercase
+            | Operator::ToggleCase
+            | Operator::Rot13
+            | Operator::Indent
+            | Operator::Outdent
+            | Operator::AutoIndent
+            | Operator::Reflow
+            | Operator::ReflowKeepCursor
+    )
 }

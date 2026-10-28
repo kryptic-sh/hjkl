@@ -49,6 +49,13 @@ and this project adheres to
 
 ### Fixed
 
+- `op_is_change` covers every operator vim redoes: the case operators, `=`, `gq`
+  and `gw` join `d` / `c` / `>` / `<`, so `gUw`, `g?iw` and `gqj` are recorded
+  for `.`. `!` and `gc` stay out, unverified.
+- `apply_op_with_motion` runs the operator over an empty range when the motion
+  stays put without cancelling it (`0`, `^`, `h` at column 0, ...): the case
+  operators change the cursor's character on the first line and the whole line
+  on a later one, and `>` / `<` / `=` / `gq` / `gw` act on the cursor's line.
 - `<Home>` parses to `Motion::Home` and `MotionKind::Home` runs it, so it leaves
   a closed fold closed, as vim's `nv_home` does; it shared `0`'s `'foldopen'`
   `hor` handling.

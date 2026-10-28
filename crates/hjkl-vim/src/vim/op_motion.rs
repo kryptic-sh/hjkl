@@ -146,23 +146,49 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
     if matches!(motion, Motion::Right) && start.1 + 1 == buf_line_chars(ed.buffer(), start.0) {
         in_place = true;
     }
-    // `c` over a motion that stayed put without cancelling the operator: the
-    // empty range still starts Insert at the cursor (`run_operator_over_range`
-    // does that for an empty exclusive range), where every other operator has
-    // nothing to act on.
-    if op == Operator::Change
-        && start == end
-        && kind != RangeKind::Linewise
-        && change_survives_in_place(motion, count)
-    {
-        run_operator_over_range(ed, op, start, end, RangeKind::Exclusive);
-        return;
+    // An operator over a motion that stayed put without cancelling it still
+    // runs, on an empty range (measured against nvim 0.12.5). `c` starts
+    // Insert at the cursor (`run_operator_over_range` does that for an empty
+    // exclusive range). The row-wise operators act on the cursor's line
+    // (`>0` / `<h` shift it, `=h` / `gqh` reindent and format it). The case
+    // operators change the cursor's character on the first line and the
+    // whole line on any later one (`gU0` from column 0 of row 1 uppercases
+    // that row). `d` / `y` / `gc` / `zf` have nothing to act on.
+    if start == end && kind != RangeKind::Linewise && op_survives_in_place(motion, count) {
+        let row = start.0;
+        let len = buf_line_chars(ed.buffer(), row);
+        match op {
+            Operator::Change => {
+                run_operator_over_range(ed, op, start, end, RangeKind::Exclusive);
+                return;
+            }
+            Operator::Indent
+            | Operator::Outdent
+            | Operator::AutoIndent
+            | Operator::Reflow
+            | Operator::ReflowKeepCursor => {
+                run_operator_over_range(ed, op, start, end, RangeKind::Linewise);
+                return;
+            }
+            Operator::Uppercase | Operator::Lowercase | Operator::ToggleCase | Operator::Rot13
+                if start.1 < len =>
+            {
+                let (from, to) = if row == 0 {
+                    (start, (row, start.1 + 1))
+                } else {
+                    ((row, 0), (row, len))
+                };
+                run_operator_over_range(ed, op, from, to, RangeKind::Exclusive);
+                return;
+            }
+            _ => {}
+        }
     }
     operate_over_motion_range(ed, op, start, end, kind, Some(motion), !in_place);
 }
 
 /// The motions that leave a pending operator in place when they cannot move,
-/// measured with `c` against nvim 0.12.5: `h` / `<BS>` at column 0, `l` on an
+/// measured with `c` (and the case and shift operators) against nvim 0.12.5: `h` / `<BS>` at column 0, `l` on an
 /// empty line, `0`, `^`, `g0`, `g^`, `|`, `(` and `{` at the buffer start,
 /// and `w` / `W` / `e` / `E` / `$` / `g$` / `)` / `}` on an empty last line
 /// (vim clears the operator only for a failed `w` or `e` without one). A
@@ -170,7 +196,7 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
 /// paragraph motions, which a count they cannot satisfy fails (`2C` on the
 /// last line, `2c(` at the buffer start). `b`, `ge`, `j`, `k`, a missed `f` /
 /// `t`, a `%` with no bracket and the line motions do cancel it.
-fn change_survives_in_place(motion: &Motion, count: usize) -> bool {
+fn op_survives_in_place(motion: &Motion, count: usize) -> bool {
     match motion {
         Motion::SentencePrev
         | Motion::ParagraphPrev

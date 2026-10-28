@@ -368,8 +368,8 @@ goes to row 1.
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
 keys. A corpus case would need the ex layer driven some other way.
 
-**The differential fuzzer's standing counts.** After the `zfjzfG` fix
-(2026-10-28) `difffuzz 2000 424242` reports 45 distinct divergences (77 at
+**The differential fuzzer's standing counts.** After the `gu02$.` fix
+(2026-10-28) `difffuzz 2000 424242` reports 44 distinct divergences (77 at
 `c24057ca`, 2026-10-27); `difffuzz 400 777` reported 23 at `c24057ca` (69 when
 the seed-777 count was first recorded, 2026-08-04). Each slice compares the
 sorted divergence list before and after rather than the count, since the
@@ -1256,6 +1256,18 @@ Seen while measuring, not `gq`:
     on `"ab  "`: nvim `"ab x"`, hjkl `"abx"`, as vim itself gives under
     `:set sts=4`). A deliberate default, noted so a differential case after text
     is not read as a regression; the oracle does not pin `softtabstop`.
+- **`.` after `!{motion}` and `gc{motion}` is not recorded (2026-10-28).**
+  `op_is_change` (`hjkl-vim` `visual.rs`) now admits every operator vim redoes
+  except these two. Neither was measured: the oracle's nvim has no
+  `'commentstring'`, so `gc` changes nothing there, and the corpus driver cannot
+  type the `!` command line. Replaying them through `replay_last_change`'s
+  `OpMotion` arm was not checked either.
+- **Why a case operator over an empty range changes the whole line is not
+  understood.** `gU0` from column 0 uppercases the cursor's character on line 1
+  and the whole line on any later one (seven shapes measured against nvim
+  0.12.5, `apply_op_with_motion` in `op_motion.rs`). The rule is copied from the
+  measurements, not from vim's `op_tilde`, so a case outside them (multibyte, a
+  closed fold, a count past the line) may still differ.
 - **The read-only registers `".` and `"/` cannot be named in Normal mode.**
   `set_pending_register` (`hjkl-vim` `editor_ext.rs`) accepts only
   `[a-zA-Z0-9"+*_-]`, so `".` is swallowed and `".p` becomes a plain `p`;

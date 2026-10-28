@@ -689,3 +689,160 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "dot_repeats_case_op_over_motion"
+initial_buffer = "abc DEF\nxyz abc\nlast one\nmore two"
+initial_cursor = [0, 0]
+keys = "gUwj."
+expected_buffer = "ABC DEF\nXYZ abc\nlast one\nmore two"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeats_rot13_over_motion"
+initial_buffer = "abc DEF\nxyz abc\nlast one\nmore two"
+initial_cursor = [0, 0]
+keys = "g?wj."
+expected_buffer = "nop DEF\nklm abc\nlast one\nmore two"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeats_case_op_over_text_object"
+initial_buffer = "abc DEF\nxyz abc\nlast one\nmore two"
+initial_cursor = [0, 0]
+keys = "g~iwj."
+expected_buffer = "ABC DEF\nXYZ abc\nlast one\nmore two"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeats_reflow_over_motion"
+initial_buffer = "abc DEF\nxyz abc\nlast one\nmore two"
+initial_cursor = [0, 0]
+keys = "gqjj."
+expected_buffer = "abc DEF xyz abc\nlast one more two"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_repeats_reflow_keep_cursor_over_motion"
+initial_buffer = "abc DEF\nxyz abc\nlast one\nmore two"
+initial_cursor = [0, 0]
+keys = "gwjj."
+expected_buffer = "abc DEF xyz abc\nlast one more two"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "case_op_in_place_on_first_row_changes_cursor_char"
+initial_buffer = "abc DEF\n    XYZ abc\nlast"
+initial_cursor = [0, 0]
+keys = "gU0"
+expected_buffer = "Abc DEF\n    XYZ abc\nlast"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "case_op_in_place_on_later_row_changes_whole_line"
+initial_buffer = "abc DEF\n        XYZ abc def ghi jkl mno pqr\nlast"
+initial_cursor = [1, 0]
+keys = "gU0"
+expected_buffer = "abc DEF\n        XYZ ABC DEF GHI JKL MNO PQR\nlast"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "case_op_failed_h_at_col0_still_runs"
+initial_buffer = "abc DEF\n    XYZ abc\nlast"
+initial_cursor = [0, 0]
+keys = "gUhj$."
+expected_buffer = "Abc DEF\n    XYZ aBc\nlast"
+expected_cursor = [1, 9]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "shift_in_place_shifts_cursor_line"
+initial_buffer = "abc DEF\n        XYZ abc def ghi jkl mno pqr\nlast"
+initial_cursor = [1, 0]
+keys = ">0"
+expected_buffer = "abc DEF\n            XYZ abc def ghi jkl mno pqr\nlast"
+expected_cursor = [1, 12]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "outdent_in_place_shifts_cursor_line"
+initial_buffer = "abc DEF\n        XYZ abc def ghi jkl mno pqr\nlast"
+initial_cursor = [1, 0]
+keys = "<h"
+expected_buffer = "abc DEF\n    XYZ abc def ghi jkl mno pqr\nlast"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "autoindent_in_place_reindents_cursor_line"
+initial_buffer = "abc DEF\n        XYZ abc def ghi jkl mno pqr\nlast"
+initial_cursor = [1, 0]
+keys = "=h"
+expected_buffer = "abc DEF\nXYZ abc def ghi jkl mno pqr\nlast"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reflow_in_place_formats_cursor_line"
+initial_buffer = "abc DEF\n        XYZ abc def ghi jkl mno pqr\nlast"
+initial_cursor = [1, 0]
+keys = "gqh"
+expected_buffer = "abc DEF\n        XYZ abc def\nghi jkl mno pqr\nlast"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 20
+
+[[cases]]
+name = "dot_repeats_case_op_in_place"
+initial_buffer = "abc DEF\n    XYZ abc\nlast"
+initial_cursor = [0, 0]
+keys = "g~0j$."
+expected_buffer = "Abc DEF\n    xyz ABc\nlast"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

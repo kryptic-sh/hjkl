@@ -1104,11 +1104,8 @@ fn handle_after_op<H: Host>(
         if let Motion::Find { ch, forward, till } = &motion {
             ed.set_last_find(Some((*ch, *forward, *till)));
         }
-        // Record for dot-repeat: change ops (d/c) plus the buffer-mutating
-        // indent ops (`>j` / `<j` etc.).
-        if !ed.is_replaying()
-            && (op_is_change(op) || matches!(op, Operator::Indent | Operator::Outdent))
-        {
+        // Record for dot-repeat: every operator `.` redoes.
+        if !ed.is_replaying() && op_is_change(op) {
             ed.set_last_change(Some(LastChange::OpMotion {
                 op,
                 motion,
