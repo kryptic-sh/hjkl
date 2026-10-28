@@ -15,6 +15,76 @@ use hjkl_engine::buf_helpers::{
 };
 use hjkl_engine::tag::{is_html_filetype, scan_tag_opener, sync_paired_tag_on_exit};
 
+/// vim's `internal_format` under `'formatoptions'` `t`: a non-blank `ch`
+/// typed where it would end past `'textwidth'` first breaks the line at the
+/// last run of blanks that starts at or before the margin (or, when every
+/// run starts past it, at the leftmost), dropping that run and giving the new
+/// line the old one's indent under `'autoindent'`. A line with no blank after
+/// its indent is left long. Repeats while the cursor's line is still too long.
+/// Not ported: comment leaders (`c`), `'formatexpr'`, and the `l` / `b` /
+/// `1` / `2` flags.
+fn auto_wrap_before<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>, ch: char) {
+    use hjkl_buffer::{Edit, Position};
+    let textwidth = ed.settings().textwidth;
+    if textwidth == 0 || ch.is_whitespace() || !ed.settings().formatoptions.contains('t') {
+        return;
+    }
+    let tabstop = ed.settings().tabstop;
+    let is_blank = |c: char| c == ' ' || c == '\t';
+    loop {
+        let (row, col) = ed.cursor();
+        let line = buf_line(ed.buffer(), row).unwrap_or_default();
+        let chars: Vec<char> = line.chars().collect();
+        let col = col.min(chars.len());
+        let typed: String = chars[..col].iter().chain(std::iter::once(&ch)).collect();
+        if hjkl_buffer::char_col_to_visual_col(&typed, col + 1, tabstop) <= textwidth {
+            return;
+        }
+        let margin = hjkl_buffer::visual_col_to_char_col(&line, textwidth, tabstop);
+        // Walk back from the cursor for the start of a blank run.
+        let mut found = None;
+        let mut at = col;
+        loop {
+            if chars.get(at).copied().is_some_and(is_blank) {
+                let mut start = at;
+                while start > 0 && is_blank(chars[start - 1]) {
+                    start -= 1;
+                }
+                if start == 0 {
+                    break;
+                }
+                found = Some(start);
+                if start <= margin {
+                    break;
+                }
+                at = start;
+            }
+            if at == 0 {
+                break;
+            }
+            at -= 1;
+        }
+        let Some(start) = found else {
+            return;
+        };
+        let mut end = start;
+        while end < chars.len() && is_blank(chars[end]) {
+            end += 1;
+        }
+        let indent: String = if ed.settings().autoindent {
+            chars.iter().take_while(|&&c| is_blank(c)).collect()
+        } else {
+            String::new()
+        };
+        let new_col = indent.chars().count() + col.saturating_sub(end);
+        ed.mutate_edit(Edit::Replace {
+            start: Position::new(row, start),
+            end: Position::new(row, end),
+            with: format!("\n{indent}"),
+        });
+        buf_set_cursor_rc(ed.buffer_mut(), row + 1, new_col);
+    }
+}
 /// Insert a single character at the cursor. Handles replace-mode overstrike
 /// (when `InsertSession::reason` is `Replace`) and smart-indent dedent of
 /// closing brackets (}/)]/). Also handles autopair insertion and skip-over.
@@ -49,6 +119,9 @@ pub fn insert_char_bridge<H: hjkl_engine::types::Host>(
     // cursor position) but before any actual buffer mutation so the snapshot
     // captures the pre-char state.
     maybe_word_undo_break(ed, ch);
+    if !in_replace {
+        auto_wrap_before(ed, ch);
+    }
 
     // Read cursor (after any abbreviation expansion that may have changed the buffer).
     let cursor = buf_cursor_pos(ed.buffer());

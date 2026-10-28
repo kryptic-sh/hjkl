@@ -329,3 +329,120 @@ tabstop = 4
 expandtab = false
 autoindent = true
 textwidth = 20
+
+[[cases]]
+name = "autowrap_breaks_at_last_blank"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "Aab cd ef<Esc>"
+expected_buffer = "one twoab\ncd ef\nthree"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_breaks_before_insert_start"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "Aabcdefgh<Esc>"
+expected_buffer = "one\ntwoabcdefgh\nthree"
+expected_cursor = [1, 10]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_typed_blank_does_not_wrap"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "ixx yy zz <Esc>"
+expected_buffer = "xx yy zz one two\nthree"
+expected_cursor = [0, 8]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_open_line"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "oaa bb cc dd<Esc>"
+expected_buffer = "one two\naa bb cc\ndd\nthree"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_repeats_on_new_line"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "oaa bb cc dd ee ff gg hh ii<Esc>"
+expected_buffer = "one two\naa bb cc\ndd ee ff\ngg hh ii\nthree"
+expected_cursor = [3, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_drops_blank_run"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "A  xx    yy zz<Esc>"
+expected_buffer = "one two\nxx    yy\nzz\nthree"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_skips_indent_only_blank"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "o    aa bb cc dd<Esc>"
+expected_buffer = "one two\n    aa bb\ncc dd\nthree"
+expected_cursor = [2, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_with_tab"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "Ox<Tab>yy zz ww<Esc>"
+expected_buffer = "x   yy zz\nww\none two\nthree"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_long_word_left_long"
+initial_buffer = "one two\nthree"
+initial_cursor = [0, 0]
+keys = "oaaaaaaaaaaaaaa bb<Esc>"
+expected_buffer = "one two\naaaaaaaaaaaaaa\nbb\nthree"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10

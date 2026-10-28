@@ -96,6 +96,9 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     }
     if let Some(tw) = case.textwidth {
         editor.settings_mut().textwidth = tw;
+        // nvim's default `'formatoptions'` (`tcqj`) wraps typed text at the
+        // margin; hjkl's default leaves `t` out.
+        editor.settings_mut().formatoptions.push('t');
     }
     if let Some(ts) = case.tabstop {
         editor.settings_mut().tabstop = ts;

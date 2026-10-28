@@ -368,8 +368,8 @@ nothing, nvim uppercases the line) is a separate open fuzz case.
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
 keys. A corpus case would need the ex layer driven some other way.
 
-**The differential fuzzer's standing counts.** After the insert-backspace replay
-fix (2026-10-29) `difffuzz 2000 424242` reports 41 distinct divergences (77 at
+**The differential fuzzer's standing counts.** After the Insert-mode auto-wrap
+port (2026-10-29) `difffuzz 2000 424242` reports 37 distinct divergences (77 at
 `c24057ca`, 2026-10-27); `difffuzz 400 777` reported 23 at `c24057ca` (69 when
 the seed-777 count was first recorded, 2026-08-04). Each slice compares the
 sorted divergence list before and after rather than the count, since the
@@ -1154,8 +1154,20 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
 after the indent rebuild; none regressed at any step. Of the 19 left, the one
 pattern identified so far:
 
-- **Insert-mode auto-wrap at `textwidth`** (`gq}Aab cd`) — hjkl does not wrap
-  while typing; the fuzzer pins `textwidth` only for `gq` cases for that reason.
+- **Insert-mode auto-wrap: what the 2026-10-29 port leaves out.**
+  `auto_wrap_before` (`hjkl-vim` `insert_bridges.rs`) covers `'formatoptions'`
+  `t` for plain text. Not covered:
+  - **Whether `t` should be on by default needs a decision.** nvim's default
+    `formatoptions` is `tcqj` with `textwidth` 0, so it never wraps until
+    `textwidth` is set. hjkl's defaults are `ro` and `textwidth` 79, so adding
+    `t` would wrap every user's typing at 79. The oracle driver adds `t`
+    whenever a case sets `textwidth`, to match nvim.
+  - `.` after a wrapped insert replays the line break where it first fell. vim's
+    redo holds the typed keys and wraps again: `Aab cd ef<Esc>j.` at `textwidth`
+    10 on `"one two\nthree"` gives `"threeab cd\nef"` in nvim and
+    `"threeab\ncd ef"` in hjkl. Fixing it means recording the typed text without
+    the wrap breaks and replaying through the wrap.
+  - Comment leaders (`c`), `'formatexpr'`, and the `l` / `b` / `1` / `2` flags.
 
 Seen while measuring, not `gq`:
 
