@@ -10,6 +10,12 @@ patch bumps.
 
 ### Fixed
 
+- `it` / `at` in Visual mode follow vim's `current_tagblock`: repeating them
+  grows the selection to the enclosing tag pair (`vitit` takes the whole
+  `<b>…</b>`, `vatat` the pair around it), a count walks outward (`v2it`), and a
+  selection spanning tags takes the pair around it. A counted `2dit` / `2dat`
+  operates on the outer pair too. All of these acted on the innermost pair
+  again.
 - `.` after a change (`c{motion}`, `cc`, `s`, Visual `c`, `cgn`, ...) whose
   insert used `<BS>`, `<C-w>`, `<C-u>` or `<Del>` types those keys again, as
   vim's redo does, instead of the net text: after `cwq<Del><Esc>`, `.` deletes

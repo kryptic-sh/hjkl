@@ -1272,8 +1272,11 @@ Seen while measuring, not `gq`:
   a position (the same gap as the sentence objects, §1.16). The one-cell case
   still goes through `bracket_text_object`, whose forward fallback ignores
   nesting where the Visual port's `find_open_after` counts it; unmeasured
-  whether they differ. The tag objects (`it` / `at`, vim's `current_tagblock`)
-  were not ported.
+  whether they differ. The tag objects follow `current_tagblock` through
+  `tag_visual` for a selection bigger than one cell or a count; an uncounted
+  `vit` on one cell still takes `tag_text_object`, and on an empty pair
+  (`<a><b></b></a>` @ (0, 4)) `vitd` deletes `><` where nvim 0.12.5 deletes the
+  `<` after the open tag. vim's `in_html_tag` cursor adjustment was not ported.
 - **`.` after `!{motion}` and `gc{motion}` is not recorded (2026-10-28).**
   `op_is_change` (`hjkl-vim` `visual.rs`) now admits every operator vim redoes
   except these two. Neither was measured: the oracle's nvim has no

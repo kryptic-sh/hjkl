@@ -1843,6 +1843,22 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             }
             return;
         }
+        // Tag objects likewise follow vim's `current_tagblock`: the pair
+        // around the selection, charwise, or nothing when none fits. A
+        // one-cell selection takes this path only with a count; without one
+        // it is `it` / `at` on the tag under the cursor.
+        if obj == TextObject::XmlTag
+            && let Some(anchor) = bracket_anchor
+            && (anchor != self.cursor() || count > 1)
+        {
+            if let Some((start, (row, col))) = crate::vim::tag_visual(self, anchor, inner, count) {
+                crate::vim_state::vim_mut(self).mode = FsmMode::Visual;
+                crate::vim_state::vim_mut(self).current_mode = VimMode::Visual;
+                crate::vim_state::vim_mut(self).visual_anchor = start;
+                self.jump_cursor(row, col);
+            }
+            return;
+        }
         // Sentences and words follow vim's `current_sent` / `current_word`
         // with Visual active: select the object charwise, or extend the
         // selection keeping anchor and mode. Visual-line keeps only its

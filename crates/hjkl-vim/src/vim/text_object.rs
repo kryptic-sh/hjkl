@@ -58,6 +58,19 @@ pub fn text_object_range<H: hjkl_engine::types::Host>(
         TextObject::Paragraph => {
             paragraph_text_object(ed, inner, count).map(|(s, e)| (s, e, RangeKind::Linewise))
         }
+        // A count walks outward as Visual mode's does (vim's
+        // `current_tagblock`), whose inclusive end is made exclusive here.
+        TextObject::XmlTag if count > 1 => {
+            tag_visual(ed, ed.cursor(), inner, count).map(|(s, (row, col))| {
+                let len = buf_line(ed.buffer(), row).map_or(0, |l| l.chars().count());
+                let end = if col < len {
+                    (row, col + 1)
+                } else {
+                    (row + 1, 0)
+                };
+                (s, end, RangeKind::Exclusive)
+            })
+        }
         TextObject::XmlTag => tag_text_object(ed, inner).map(|(s, e)| (s, e, RangeKind::Exclusive)),
         TextObject::Sentence => {
             sentence_text_object(ed, inner, count).map(|(s, e)| (s, e, RangeKind::Exclusive))
@@ -905,15 +918,33 @@ fn tag_text_object_full<H: hjkl_engine::types::Host>(
     }
     let cursor_idx = pos_to_idx(ed.cursor());
 
-    // Walk `<...>` tokens. Track open tags on a stack; on a matching
-    // close pop and consider the pair a candidate when the cursor lies
-    // inside its content range. Innermost wins (replace whenever a
-    // tighter range turns up). Also track the first complete pair that
-    // starts at or after the cursor so we can fall back to a forward
-    // scan (targets.vim-style) when the cursor isn't inside any tag.
+    // The innermost pair whose whole span holds the cursor — ON the open or
+    // close tag included, as vim `it`/`at` operate on the tag under the
+    // cursor; nested pairs, so the shortest is the innermost. With none, the
+    // first pair (in close order) starting at or after the cursor: a forward
+    // scan, targets.vim-style.
+    let pairs = tag_pairs(&chars);
+    let (open_start, content_start, content_end, close_end) = pairs
+        .iter()
+        .copied()
+        .filter(|&(os, _, _, ce)| cursor_idx >= os && cursor_idx < ce)
+        .min_by_key(|&(os, _, _, ce)| ce - os)
+        .or_else(|| pairs.iter().copied().find(|&(os, ..)| os >= cursor_idx))?;
+    if inner {
+        Some((idx_to_pos(content_start), idx_to_pos(content_end)))
+    } else {
+        Some((idx_to_pos(open_start), idx_to_pos(close_end)))
+    }
+}
+
+/// Every complete tag pair in `chars`, in the order their closes appear, as
+/// `(open_start, content_start, content_end, close_end)` flat indices:
+/// `content_start` is just past the open tag's `>`, `content_end` is the
+/// close tag's `<`, `close_end` just past its `>`. Comments, declarations
+/// (`<!…>`, `<?…>`) and self-closing tags pair with nothing.
+fn tag_pairs(chars: &[char]) -> Vec<(usize, usize, usize, usize)> {
     let mut stack: Vec<(usize, usize, String)> = Vec::new(); // (open_start, content_start, name)
-    let mut innermost: Option<(usize, usize, usize, usize)> = None;
-    let mut next_after: Option<(usize, usize, usize, usize)> = None;
+    let mut pairs = Vec::new();
     let mut i = 0;
     while i < chars.len() {
         if chars[i] != '<' {
@@ -941,25 +972,7 @@ fn tag_text_object_full<H: hjkl_engine::types::Host>(
             {
                 let (open_start, content_start, _) = stack[stack_idx].clone();
                 stack.truncate(stack_idx);
-                let content_end = i;
-                let candidate = (open_start, content_start, content_end, close_end);
-                // A pair encloses the cursor when the cursor lies anywhere
-                // within the whole pair span — including ON the open or close
-                // tag itself (vim `it`/`at` operate on the tag under the
-                // cursor, not just its content). Innermost (tightest span)
-                // wins; closes are seen innermost-first so the first enclosing
-                // candidate is already the tightest.
-                if cursor_idx >= open_start && cursor_idx < close_end {
-                    innermost = match innermost {
-                        Some((os, _, _, ce)) if os <= open_start && close_end <= ce => {
-                            Some(candidate)
-                        }
-                        None => Some(candidate),
-                        existing => existing,
-                    };
-                } else if open_start >= cursor_idx && next_after.is_none() {
-                    next_after = Some(candidate);
-                }
+                pairs.push((open_start, content_start, i, close_end));
             }
         } else if !trimmed.ends_with('/') {
             let name: String = trimmed
@@ -973,12 +986,81 @@ fn tag_text_object_full<H: hjkl_engine::types::Host>(
         }
         i = close_end;
     }
+    pairs
+}
 
-    let (open_start, content_start, content_end, close_end) = innermost.or(next_after)?;
-    if inner {
-        Some((idx_to_pos(content_start), idx_to_pos(content_end)))
-    } else {
-        Some((idx_to_pos(open_start), idx_to_pos(close_end)))
+/// Visual-mode `it` / `at` from `anchor` to the cursor: vim's
+/// `current_tagblock` with Visual active. From the selection's start it takes
+/// the `count`-th tag pair around it, outward, not counting a pair that opens
+/// right there; a pair whose close tag starts before the selection ends is
+/// skipped for the next one out. An inner object that would select exactly the current
+/// selection selects the whole pair instead (vim retries with `do_include`).
+/// Returns the new selection's anchor and cursor, which vim makes charwise,
+/// or `None` when no pair qualifies and the selection stays.
+pub fn tag_visual<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    anchor: Pos,
+    inner: bool,
+    count: usize,
+) -> Option<(Pos, Pos)> {
+    let rope = hjkl_engine::types::Query::rope(ed.buffer());
+    let line_lens: Vec<usize> = (0..rope.len_lines())
+        .map(|r| rope_line_to_str(&rope, r).chars().count())
+        .collect();
+    let pos_to_idx = |pos: Pos| -> usize {
+        let idx: usize = line_lens.iter().take(pos.0).map(|&len| len + 1).sum();
+        idx + pos.1
+    };
+    let idx_to_pos = |mut idx: usize| -> Pos {
+        for (r, &len) in line_lens.iter().enumerate() {
+            if idx <= len {
+                return (r, idx);
+            }
+            idx -= len + 1;
+        }
+        let last = line_lens.len().saturating_sub(1);
+        (last, line_lens.get(last).copied().unwrap_or(0))
+    };
+    let chars: Vec<char> = rope.chars().collect();
+    let mut pairs = tag_pairs(&chars);
+    // Innermost first: a pair around another opens after it.
+    pairs.sort_by_key(|&(os, ..)| std::cmp::Reverse(os));
+    let cursor = pos_to_idx(ed.cursor());
+    let anchor = pos_to_idx(anchor);
+    let (old_start, old_end) = (anchor.min(cursor), anchor.max(cursor));
+    // vim's backward search for an unclosed open tag, which does not match
+    // at its start: a pair is around `at` when it opens before it and its
+    // close tag starts at or after it.
+    let around = |at: usize| {
+        pairs
+            .iter()
+            .copied()
+            .filter(move |&(os, _, ce, _)| os < at && at <= ce)
+    };
+    let mut include = !inner;
+    let mut from = old_start;
+    let mut nth = count.max(1);
+    loop {
+        let (os, cs, ce, end) = around(from).nth(nth - 1)?;
+        // Its close tag starts before the selection ends: try the next pair
+        // out, as vim's does when the matching end is before the old end.
+        if ce < old_end {
+            from = os;
+            nth = 1;
+            continue;
+        }
+        let (start, last) = if include {
+            (os, end - 1)
+        } else {
+            (cs, ce.saturating_sub(1).max(cs))
+        };
+        if !include && (start, last) == (old_start, old_end) {
+            include = true;
+            from = old_start;
+            nth = count.max(1);
+            continue;
+        }
+        return Some((idx_to_pos(start), idx_to_pos(last)));
     }
 }
 

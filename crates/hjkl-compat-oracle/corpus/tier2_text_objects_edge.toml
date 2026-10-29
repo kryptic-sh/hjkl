@@ -274,3 +274,183 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "visual_it_again_selects_the_whole_pair"
+initial_buffer = "<a><b>xy</b> z</a>\n"
+initial_cursor = [0, 7]
+keys = "vititd"
+expected_buffer = "<a> z</a>\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_at_again_grows_to_the_outer_pair"
+initial_buffer = "<a><b>xy</b> z</a>\n"
+initial_cursor = [0, 7]
+keys = "vatatd"
+expected_buffer = "\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_at_then_it_takes_outer_content"
+initial_buffer = "<a><b>xy</b> z</a>\n"
+initial_cursor = [0, 7]
+keys = "vatit<Esc>"
+expected_buffer = "<a><b>xy</b> z</a>\n"
+expected_cursor = [0, 13]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_it_three_times_grows_twice"
+initial_buffer = "<a><b>xy</b> z</a>\n"
+initial_cursor = [0, 7]
+keys = "vititit<Esc>"
+expected_buffer = "<a><b>xy</b> z</a>\n"
+expected_cursor = [0, 13]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_it_from_two_cells_takes_inner"
+initial_buffer = "<a><b>xy</b> z</a>\n"
+initial_cursor = [0, 7]
+keys = "vlitd"
+expected_buffer = "<a><b></b> z</a>\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_counted_it_walks_outward"
+initial_buffer = "<a><b>xy</b> z</a>\n"
+initial_cursor = [0, 7]
+keys = "v2itd"
+expected_buffer = "<a></a>\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_counted_at_walks_outward"
+initial_buffer = "<a><b>xy</b> z</a>\n"
+initial_cursor = [0, 7]
+keys = "v2atd"
+expected_buffer = "\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_counted_it_past_outermost_keeps_selection"
+initial_buffer = "<a><b>xy</b> z</a>\n"
+initial_cursor = [0, 7]
+keys = "v3itd"
+expected_buffer = "<a><b>x</b> z</a>\n"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_block_it_selects_charwise"
+initial_buffer = "<a><b>xy</b> z</a>\n"
+initial_cursor = [0, 7]
+keys = "<C-v>litd"
+expected_buffer = "<a><b></b> z</a>\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_it_across_rows_takes_enclosing_pair"
+initial_buffer = "<a>\n  <b>x</b>\n  <c>yy</c>\n</a>\n"
+initial_cursor = [1, 5]
+keys = "vjitd"
+expected_buffer = "<a></a>\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_it_on_empty_pair_takes_outer_content"
+initial_buffer = "<a><b></b></a>\n"
+initial_cursor = [0, 3]
+keys = "vlitd"
+expected_buffer = "<a></a>\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_dit_walks_outward"
+initial_buffer = "<a><b>xy</b> z</a>\n"
+initial_cursor = [0, 7]
+keys = "2dit"
+expected_buffer = "<a></a>\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_dat_walks_outward"
+initial_buffer = "<a><b>xy</b> z</a>\n"
+initial_cursor = [0, 7]
+keys = "2dat"
+expected_buffer = "\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_dit_past_outermost_does_nothing"
+initial_buffer = "<a><b>xy</b> z</a>\n"
+initial_cursor = [0, 7]
+keys = "3dit"
+expected_buffer = "<a><b>xy</b> z</a>\n"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "counted_dat_across_rows"
+initial_buffer = "<a>\n  <b>x</b>\n  <c>yy</c>\n</a>\n"
+initial_cursor = [2, 5]
+keys = "2dat"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
