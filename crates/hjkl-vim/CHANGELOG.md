@@ -57,6 +57,10 @@ and this project adheres to
 
 ### Fixed
 
+- `buffer_selection` gives a Visual block's corners in display columns
+  (`block_corners`), so the highlight matches the cells the block operators act
+  on over a line with a tab; `selection_highlight` converts them to the top and
+  bottom rows' characters.
 - Visual-block `>` / `<` shift in display columns, as vim's `shift_block` does:
   `>` rewrites the whitespace around the block's left edge (the run before it, a
   tab the edge cuts, and the run starting there) as one stretch a shiftwidth

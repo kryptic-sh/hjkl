@@ -695,7 +695,10 @@ impl<R: StyleResolver> Widget for BufferView<'_, R> {
             let line_owned = line_at(doc_row);
             let line: &str = &line_owned;
             let row_spans = spans.get(doc_row).map_or(&[][..], Vec::as_slice);
-            let sel_range = self.selection.and_then(|s| s.row_span(doc_row));
+            let tab_width = self.viewport.effective_tab_width();
+            let sel_range = self
+                .selection
+                .and_then(|s| s.row_span_on(doc_row, line, tab_width));
             let is_cursor_row = doc_row == cursor_line_row;
             if let Some(fold) = folded_at_start {
                 if let Some(gutter) = self.gutter {
@@ -1142,7 +1145,10 @@ impl<R: StyleResolver> BufferView<'_, R> {
                     let line_owned = hjkl_buffer::rope_line_str(&rope, dr);
                     let line: &str = line_owned.as_str();
                     let row_spans = self.spans.get(dr).map_or(&[][..], Vec::as_slice);
-                    let sel_range = self.selection.and_then(|s| s.row_span(dr));
+                    let tab_width = self.viewport.effective_tab_width();
+                    let sel_range = self
+                        .selection
+                        .and_then(|s| s.row_span_on(dr, line, tab_width));
                     let is_cursor_row = dr == cursor.row;
                     if let Some(gutter) = self.gutter {
                         self.paint_gutter(term_buf, inner, screen_row, dr, gutter);

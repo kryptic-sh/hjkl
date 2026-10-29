@@ -18,7 +18,10 @@ pub enum Selection {
     Line { anchor_row: usize, head_row: usize },
     /// `Ctrl-V` — block-wise. Covers the inclusive rectangle whose
     /// corners are anchor and head. Row range is `min..=max`; column
-    /// range is `min..=max` independently of the corner diagonals.
+    /// range is `min..=max` independently of the corner diagonals. The
+    /// columns are display columns, which [`Selection::row_span_on`] turns
+    /// into each row's characters (the same on a line without tabs or wide
+    /// characters).
     Block { anchor: Position, head: Position },
 }
 
@@ -107,6 +110,49 @@ impl Selection {
         }
     }
 
+    /// [`Selection::row_span`] as characters of `line`, the text of `row`.
+    /// A `Block`'s columns are display columns (vim's blockwise Visual covers
+    /// the same screen columns on every row), so on `line` it covers every
+    /// character with a cell between them, a tab or wide character cut by an
+    /// edge included; past the line's end it counts one character per cell,
+    /// as the other variants' columns do there. `Char` and `Line` are
+    /// [`Selection::row_span`] unchanged.
+    pub fn row_span_on(self, row: usize, line: &str, tab_width: usize) -> RowSpan {
+        let Self::Block { .. } = self else {
+            return self.row_span(row);
+        };
+        let (left, right) = self.row_span(row)?;
+        let mut first = None;
+        let mut last = None;
+        let mut vcol = 0;
+        let mut count = 0;
+        let tab_width = tab_width.max(1);
+        for (i, ch) in line.chars().enumerate() {
+            let next = if ch == '\t' {
+                vcol + tab_width - vcol % tab_width
+            } else {
+                vcol + crate::geom::char_col_to_visual_col(ch.encode_utf8(&mut [0; 4]), 1, 1)
+            };
+            if vcol <= right && next > left {
+                first.get_or_insert(i);
+                last = Some(i);
+            }
+            vcol = next;
+            count = i + 1;
+        }
+        let past = |col: usize| count + col.saturating_sub(vcol);
+        let lo = first.unwrap_or_else(|| past(left));
+        let hi = if right == usize::MAX {
+            usize::MAX
+        } else {
+            match last {
+                Some(i) if right < vcol => i,
+                _ => past(right),
+            }
+        };
+        Some((lo, hi))
+    }
+
     /// Inclusive `(top_row, bottom_row)` covered by the selection.
     pub fn row_bounds(self) -> (usize, usize) {
         match self {
@@ -131,6 +177,40 @@ fn order(a: Position, b: Position) -> (Position, Position) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn block(top: usize, left: usize, bot: usize, right: usize) -> Selection {
+        Selection::Block {
+            anchor: Position::new(top, left),
+            head: Position::new(bot, right),
+        }
+    }
+
+    #[test]
+    fn block_row_span_on_plain_text_is_row_span() {
+        let sel = block(0, 1, 1, 3);
+        assert_eq!(sel.row_span_on(0, "abcdef", 4), sel.row_span(0));
+    }
+
+    #[test]
+    fn block_row_span_on_maps_display_columns_through_a_tab() {
+        // `\tab` at tab width 4: the tab covers cells 0-3, `a` 4, `b` 5.
+        let sel = block(0, 2, 1, 4);
+        assert_eq!(sel.row_span_on(0, "\tab", 4), Some((0, 1)));
+        assert_eq!(sel.row_span_on(1, "abcdefgh", 4), Some((2, 4)));
+    }
+
+    #[test]
+    fn block_row_span_on_past_the_line_counts_cells() {
+        // Cells 6-9 lie past the end of `\tab` (width 6).
+        let sel = block(0, 6, 1, 9);
+        assert_eq!(sel.row_span_on(0, "\tab", 4), Some((3, 6)));
+    }
+
+    #[test]
+    fn block_row_span_on_dollar_runs_to_the_end() {
+        let sel = block(0, 1, 0, usize::MAX);
+        assert_eq!(sel.row_span_on(0, "\tab", 4), Some((0, usize::MAX)));
+    }
 
     #[test]
     fn char_single_row_inclusive() {

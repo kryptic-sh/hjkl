@@ -8,6 +8,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `Selection::row_span_on(row, line, tab_width)`: a selection's span on `row` as
+  characters of that row's text. A `Selection::Block`'s columns are now display
+  columns, which this converts per row.
 - `join_row_marks(from, to, col)`: move the marks on one row onto another,
   mapping their columns through `col`, for an edit that joins rows.
 - `cursor_visual_col(line, char_col, tab_width)`: the display column a Normal-

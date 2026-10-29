@@ -4669,6 +4669,24 @@ fn macro_capital_q_appends_to_lowercase_register() {
 }
 
 #[test]
+fn buffer_selection_block_uses_display_columns() {
+    // `a` after `\tab`'s tab sits in display column 4, which on the row below
+    // is character 4; the corners carry display columns, not `a`'s character
+    // column 1.
+    use hjkl_buffer::{Position, Selection};
+    let mut e = editor_with("\tab\nxyzwvu");
+    e.settings_mut().tabstop = 4;
+    run_keys(&mut e, "l<C-v>j");
+    assert_eq!(
+        e.buffer_selection(),
+        Some(Selection::Block {
+            anchor: Position::new(0, 4),
+            head: Position::new(1, 4),
+        })
+    );
+}
+
+#[test]
 fn buffer_selection_block_in_visual_block_mode() {
     use hjkl_buffer::{Position, Selection};
     let mut e = editor_with("aaaa\nbbbb\ncccc");

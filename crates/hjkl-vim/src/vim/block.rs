@@ -162,6 +162,33 @@ fn char_cells(line: &str, col: usize, tabstop: usize) -> (usize, usize) {
     }
 }
 
+/// The block's anchor and cursor corners in display columns, as
+/// `((row, col), (row, col))` with each column on the block's left or right
+/// edge the way the anchor and cursor sit (`usize::MAX` for the cursor after
+/// `$`). What `buffer_selection` hands the renderer.
+pub fn block_corners<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+) -> ((usize, usize), (usize, usize)) {
+    let tabstop = ed.settings().tabstop;
+    let (ar, ac) = vim(ed).block_anchor;
+    let cr = ed.cursor().0;
+    let anchor = char_cells(&buf_line(ed.buffer(), ar).unwrap_or_default(), ac, tabstop);
+    let cursor = char_cells(
+        &buf_line(ed.buffer(), cr).unwrap_or_default(),
+        vim(ed).block_vcol,
+        tabstop,
+    );
+    let (left, right) = (anchor.0.min(cursor.0), anchor.1.max(cursor.1));
+    if vim(ed).block_to_eol {
+        return ((ar, left), (cr, usize::MAX));
+    }
+    if anchor.0 <= cursor.0 {
+        ((ar, left), (cr, right))
+    } else {
+        ((ar, right), (cr, left))
+    }
+}
+
 /// The current VisualBlock selection as rows and display columns: the cells
 /// of the anchor's character and of the cursor's (`block_vcol` on the
 /// cursor's row), as vim's `do_pending_operator` takes them, or every row to

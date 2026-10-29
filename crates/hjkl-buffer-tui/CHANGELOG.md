@@ -10,6 +10,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- A Visual-block selection over a line with a tab or a wide character paints the
+  screen columns the block covers, through `Selection::row_span_on`, instead of
+  the same character columns on every row.
 - The `cursorcolumn` bar lands on the cursor's cell on lines with CJK, emoji or
   combining marks. It routes through `hjkl_buffer::char_col_to_visual_col`,
   which now measures with `unicode-width` like `paint_row` does; previously the

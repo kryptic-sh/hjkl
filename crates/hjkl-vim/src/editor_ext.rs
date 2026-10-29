@@ -1211,27 +1211,16 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 head_row: cr,
             }),
             VimMode::VisualBlock => {
-                let (ar, ac) = crate::vim_state::vim(self).block_anchor;
-                let vcol = crate::vim_state::vim(self).block_vcol;
-                if crate::vim_state::vim(self).block_to_eol {
-                    // Ragged (`$` — `:h v_b_$`): `Selection::Block::row_span`
-                    // only ever resolves one fixed `(left, right)` pair for
-                    // every row. Reuse the SAME `usize::MAX` "cap at the
-                    // row's actual length" convention `Selection::Line`
-                    // already uses (see `hjkl_buffer::selection::RowSpan`)
-                    // by forcing the right corner's col to `usize::MAX` —
-                    // the renderer then extends every row to its own EOL.
-                    // Normalise which corner carries `MAX` so it's always
-                    // the "right" one regardless of anchor/cursor order.
-                    let left = ac.min(vcol);
-                    return Some(Selection::Block {
-                        anchor: Position::new(ar, left),
-                        head: Position::new(cr, usize::MAX),
-                    });
-                }
+                // The corners are display columns, which the renderer turns
+                // into each row's characters (`Selection::row_span_on`). Ragged
+                // (`$` — `:h v_b_$`) puts `usize::MAX` on the right corner, the
+                // same "cap at the row's actual length" convention
+                // `Selection::Line` uses (see `hjkl_buffer::selection::RowSpan`),
+                // so every row extends to its own EOL.
+                let ((ar, ac), (cr, cc)) = crate::vim::block_corners(self);
                 Some(Selection::Block {
                     anchor: Position::new(ar, ac),
-                    head: Position::new(cr, vcol),
+                    head: Position::new(cr, cc),
                 })
             }
             _ => None,
@@ -1264,12 +1253,15 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 } else {
                     (head.row, anchor.row)
                 };
-                let (left, right) = if anchor.col <= head.col {
-                    (anchor.col, head.col)
-                } else {
-                    (head.col, anchor.col)
+                // The corners are display columns: the range runs from the
+                // block's first character on the top row to its last on the
+                // bottom row.
+                let tab_width = self.settings().tabstop;
+                let span = |row: usize| {
+                    let line = self.line(row).unwrap_or_default();
+                    sel.row_span_on(row, &line, tab_width).unwrap_or((0, 0))
                 };
-                ((top, left), (bot, right))
+                ((top, span(top).0), (bot, span(bot).1))
             }
         };
         Some(Highlight {

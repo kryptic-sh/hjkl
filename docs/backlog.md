@@ -382,9 +382,6 @@ now take display columns through `block_rect` / `block_row` (`hjkl-vim`
   recorded character width (`LastChange::VisualBlockInsert` / `VisualOp`'s
   `extent`), not a display width: `<C-v>AX<Esc>j.` over `\tab` puts `X` at
   `"xyzX"` where nvim gives `"xyz   X"`.
-- The app's block highlight (`block_highlight`, `apps/hjkl`) still paints
-  `block_bounds`' character columns, so over a tab line it shows a different
-  rectangle from the one the operators now act on.
 - `<C-v>1MU` on `(hello)` (hjkl does nothing, nvim uppercases the line) is the
   separate Visual-block `H` / `M` / `L` decision below.
 
