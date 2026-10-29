@@ -1272,10 +1272,7 @@ Seen while measuring, not `gq`:
   selection bigger than one cell or a count; an uncounted `vit` on one cell
   still takes `tag_text_object`, and on an empty pair (`<a><b></b></a>` @ (0,
   4)) `vitd` deletes `><` where nvim 0.12.5 deletes the `<` after the open tag.
-  vim's `in_html_tag` cursor adjustment was not ported. In `V`, `it` on one row
-  (`"<a>\n  <b>x</b>\n</a>"` @ (1, 5), `Vitd`) deletes `x` where nvim deletes
-  `<b>x</b>` charwise: vim widens a one-cell inner object equal to the selection
-  to `at`, which the `V` path does not reach.
+  vim's `in_html_tag` cursor adjustment was not ported.
 - **Block `O` across a tab leaves the cursor one column early after an
   operator.** `<C-v>jlOld` on `"a\tbc\nxyzwvut"` @ (0, 1) matches nvim's buffer
   and register, but the cursor ends on (0, 1) where nvim's is on (0, 2). The `O`

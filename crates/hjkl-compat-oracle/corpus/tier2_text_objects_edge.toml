@@ -454,3 +454,63 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "visual_it_on_one_char_content_selects_the_pair"
+initial_buffer = "<a><b>x</b> z</a>\n"
+initial_cursor = [0, 6]
+keys = "vitd"
+expected_buffer = "<a> z</a>\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_it_on_one_char_content_goes_charwise"
+initial_buffer = "<a>\n  <b>x</b>\n</a>\n"
+initial_cursor = [1, 5]
+keys = "Vitd"
+expected_buffer = "<a>\n  \n</a>\n"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_it_on_one_char_content_goes_charwise"
+initial_buffer = "<a>\n  <b>x</b>\n</a>\n"
+initial_cursor = [1, 5]
+keys = "<C-v>itd"
+expected_buffer = "<a>\n  \n</a>\n"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_it_cursor_on_pair_end"
+initial_buffer = "<a>\n  <b>x</b>\n</a>\n"
+initial_cursor = [1, 5]
+keys = "Vit<Esc>"
+expected_buffer = "<a>\n  <b>x</b>\n</a>\n"
+expected_cursor = [1, 9]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_it_twice_on_one_char_content"
+initial_buffer = "<a><b>x</b> z</a>\n"
+initial_cursor = [0, 6]
+keys = "vitit<Esc>"
+expected_buffer = "<a><b>x</b> z</a>\n"
+expected_cursor = [0, 12]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

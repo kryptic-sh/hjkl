@@ -67,6 +67,10 @@ and this project adheres to
 
 ### Fixed
 
+- Visual `it` on a tag pair whose content is the one character under the cursor
+  selects the whole pair charwise (`vit` on the `x` of `<b>x</b>`), as vim's
+  does when the inner text equals the selection, in `v`, `V` and `<C-v>` alike.
+  It selected the `x` again.
 - Visual mode keeps one anchor position across `v`, `V` and `<C-v>`, as vim's
   `VIsual` does. Switching between them kept only the cursor (`vkV` dropped the
   anchor's row, `Vj<C-v>` stayed linewise), `o` in `V` and `gv` landed in column

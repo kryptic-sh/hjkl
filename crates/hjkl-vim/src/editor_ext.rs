@@ -1849,6 +1849,29 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             }
             return;
         }
+        // A one-cell `it` whose inner text is that very cell selects the
+        // whole pair instead, charwise: vim's `current_tagblock` retries with
+        // `do_include` when the inner range equals the selection.
+        let one_cell = match crate::vim_state::vim(self).mode {
+            FsmMode::Visual | FsmMode::VisualLine => {
+                crate::vim_state::vim(self).visual_anchor == self.cursor()
+            }
+            FsmMode::VisualBlock => crate::vim_state::vim(self).block_anchor == self.cursor(),
+            _ => false,
+        };
+        if obj == TextObject::XmlTag && inner && count == 1 && one_cell {
+            let (row, col) = self.cursor();
+            if crate::vim::tag_text_object(self, true) == Some(((row, col), (row, col + 1)))
+                && let Some((start, end)) = crate::vim::tag_text_object(self, false)
+            {
+                crate::vim_state::vim_mut(self).mode = FsmMode::Visual;
+                crate::vim_state::vim_mut(self).current_mode = VimMode::Visual;
+                crate::vim_state::vim_mut(self).visual_anchor = start;
+                let (er, ec) = crate::vim::retreat_one(self, end);
+                self.jump_cursor(er, ec);
+                return;
+            }
+        }
         // Tag objects likewise follow vim's `current_tagblock`: the pair
         // around the selection, charwise, or nothing when none fits. A
         // one-cell selection takes this path only with a count; without one
