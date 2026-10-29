@@ -57,6 +57,16 @@ and this project adheres to
 
 ### Fixed
 
+- Visual-block operators work in display columns, as vim's do (`block_prep`, now
+  `hjkl_vim`'s `block` module): over a line with a tab or a double-width
+  character, `d`, `y`, `c`, the case operators, `r`, `I`, `A` and a block paste
+  take the same screen columns on every row. A tab cut by an edge keeps its
+  outside cells as spaces on a delete and gives its inside cells as spaces to a
+  yank, and `r` turns each cell of a tab into the replacement. Before, each row
+  took the top row's character columns, so `<C-v>kd` from the end of
+  `abcdefghij` below `\tab` cut `defghij` where nvim cuts `ghij`.
+- Block `A` / `I` on a single row leave the cursor on the block's left edge, as
+  on a taller block.
 - Undo after a linewise change over more than one line (`c2j`, `2cc`, `Vjc`)
   lands on the range's second line at the column the change started at, as vim's
   does: `op_change` deletes the lines after the first before saving the first,

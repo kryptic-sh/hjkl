@@ -302,8 +302,9 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
             let repeated = inserted.repeat(session.count.max(1));
             if top < bot {
                 replicate_block_text(ed, &repeated, top, bot, col, pad, to_eol);
-                buf_set_cursor_rc(ed.buffer_mut(), top, cursor_col);
             }
+            // A one-row block lands on its left edge too.
+            buf_set_cursor_rc(ed.buffer_mut(), top, cursor_col);
             // Record for dot-repeat (`:h v_.`, block `I`/`A`). `cols` is the
             // block width `A` appends past: `cursor_col == left + 1` and
             // (non-ragged) `col == right + 1`, so `cols == col + 1 -

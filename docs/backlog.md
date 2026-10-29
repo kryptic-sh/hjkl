@@ -349,27 +349,51 @@ in both post-mutation sync paths (`App::drain_engine_errors`). An empty register
 is still silent (vim says nothing there either), and nothing rate-limits the
 queue, so code that pushes per-iteration would flood the toast bar.
 
-**A block operator after `k` onto a line with a tab uses the wrong column.**
-From the last column of `abcdefghij` below `\tab`, `<C-v>kd` deletes `defghij`
-where nvim deletes `ghij` (re-measured 2026-10-29 against nvim 0.12.5, whose
-oracle `tabstop` is 4). vim's block is display columns: `k` keeps curswant 9,
-and in Visual mode the cursor may stand on the NUL past `ab` (display column 6),
-so the block is display columns 6–9, which on the tab line is empty. hjkl's
-`block_bounds` (`visual_ops.rs`) treats `block_anchor` / `block_vcol` as
-character columns on every row, so `j` / `k` onto a line with a tab sets the
-right edge to that line's character column (3) and cuts columns 3–9 below.
-`<C-v>kU` from column 5 shows the same shape. The fix is a display-column block
-model — each row converting the block's display columns to its own character
-range — through `block_bounds`, `block_yank`, `apply_block_operator`, block `I`
-/ `A` and the highlight; not started. `<C-v>1MU` on `(hello)` (hjkl does
-nothing, nvim uppercases the line) is a separate open fuzz case.
+**`=` without a filetype is vim's C-indenting; hjkl uses its own heuristic
+(needs a decision).** With no `'indentexpr'`, nvim's `=` falls back to the
+built-in `cindent` (`cindent.c`); five of the fuzzer's remaining divergences
+involve `=` (`=M`, `3=as`, `2$=W`, `gqq==`, `3==`), and the first three were
+seen to be this difference. hjkl's `auto_indent_rows` (`text_object_ops.rs`) is
+a bracket-depth heuristic. Measured against nvim 0.12.5 with `=G` (`shiftwidth`
+4):
+
+- `"a\nb\nc"`, `"a;\nb\nc;\nd"`, `"a:\nb"`, `"# x\ny"`: unchanged in both.
+- `"a {\nb\nc;\n}"`: nvim indents `c;` to 8 (a continuation of `b`), hjkl to 4.
+- `"x = 1,\ny"`: nvim indents `y` by 2, hjkl leaves it.
+- `"foo(a,\nb)\nc"`: nvim puts `b)` at 8 and `c` at 4, hjkl `b)` at 4 and `c`
+  at 0.
+- `"if (x)\ny;\nz;"`: nvim indents both `y;` and `z;` to 4; hjkl leaves both.
+
+Matching it means porting `cindent.c` with its `'cinoptions'` defaults: a large,
+separate project, not a fix to the heuristic. Whether hjkl's `=` on a buffer
+with no filetype should copy C-indenting at all (the cases above are not C) is
+the owner's call; until then the fuzzer keeps reporting them.
+
+**What the display-column block port leaves out (2026-10-29).** Block operators
+now take display columns through `block_rect` / `block_row` (`hjkl-vim`
+`block.rs`, vim's `block_prep`). Not ported:
+
+- `I` / `A` split a tab the block's edge cuts into spaces on the rows they
+  replicate to, as vim does. A cut tab on the top row is not handled and was not
+  traced: on `"\tx\nabcdefgh"` @ (1,1), `<C-v>klIX<Esc>` gives
+  `"X\tx\nabcdefgh"` in nvim 0.12.5 (it inserts before the tab and skips row 1)
+  and `"X\tx\nXabcdefgh"` in hjkl.
+- `.` after a block `I` / `A` / `d` / `c` / case op rebuilds the block from the
+  recorded character width (`LastChange::VisualBlockInsert` / `VisualOp`'s
+  `extent`), not a display width: `<C-v>AX<Esc>j.` over `\tab` puts `X` at
+  `"xyzX"` where nvim gives `"xyz   X"`.
+- Block `>` / `<` (`indent_block` / `outdent_block`) and the app's block
+  highlight (`block_highlight`, `apps/hjkl`) still use `block_bounds`' character
+  columns.
+- `<C-v>1MU` on `(hello)` (hjkl does nothing, nvim uppercases the line) is the
+  separate Visual-block `H` / `M` / `L` decision below.
 
 **The `:s` curswant fix has no oracle case.** It is covered by two unit tests in
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
 keys. A corpus case would need the ex layer driven some other way.
 
-**The differential fuzzer's standing counts.** After the Insert-mode auto-wrap
-port (2026-10-29) `difffuzz 2000 424242` reports 37 distinct divergences (77 at
+**The differential fuzzer's standing counts.** After the display-column block
+port (2026-10-29) `difffuzz 2000 424242` reports 36 distinct divergences (77 at
 `c24057ca`, 2026-10-27); `difffuzz 400 777` reported 23 at `c24057ca` (69 when
 the seed-777 count was first recorded, 2026-08-04). Each slice compares the
 sorted divergence list before and after rather than the count, since the

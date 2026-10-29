@@ -309,7 +309,8 @@ pub fn step_normal<H: Host>(
                 return true;
             }
             Key::Char('I') => {
-                let (top, bot, left, _right) = ed.visual_block_bounds();
+                let (top, bot, cols) = crate::vim::block_rect(ed);
+                let left = crate::vim::block_start_col(ed, top, cols);
                 // `[count]I` repeats the typed text `count` times on every
                 // row (`:h v_b_I` + count) — verified against nvim v0.12.4:
                 // `<C-v>jj2Ix` → "xx" on each row.
@@ -329,11 +330,19 @@ pub fn step_normal<H: Host>(
                 // row's own EOL instead, so the top row's insertion column
                 // is that row's own current length rather than a fixed
                 // `right + 1`.
-                let (top, bot, left, right) = ed.visual_block_bounds();
+                // The block is display columns: the top row's character
+                // just past its right edge, or past the row's end by however
+                // many cells the row is short of it (padded on entry).
+                let (top, bot, cols) = crate::vim::block_rect(ed);
+                let left = crate::vim::block_start_col(ed, top, cols);
                 let col = if ed.block_to_eol() {
                     ed.line_char_count(top)
                 } else {
-                    right + 1
+                    let line = ed.line(top).unwrap_or_default();
+                    match crate::vim::char_at_vcol(&line, cols.right + 1, ed.settings().tabstop) {
+                        Ok(c) => c,
+                        Err(short) => ed.line_char_count(top) + short,
+                    }
                 };
                 // `[count]A` repeats the typed text `count` times on every
                 // row (`:h v_b_A` + count) — verified against nvim v0.12.4:

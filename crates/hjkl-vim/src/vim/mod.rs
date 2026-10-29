@@ -18,6 +18,7 @@
 //! The most recent mutating command is stored in
 //! [`VimState::last_change`] so `.` can replay it.
 
+pub(crate) mod block;
 pub(crate) mod bridges;
 pub mod command;
 pub(crate) mod comment;
@@ -52,6 +53,7 @@ pub use hjkl_vim_types::{
 
 // Flat intra-crate namespace: the FSM was one file until #267, and its
 // helpers still call each other freely across these module lines.
+pub(crate) use block::*;
 pub(crate) use bridges::*;
 pub(crate) use command::*;
 pub(crate) use comment::*;

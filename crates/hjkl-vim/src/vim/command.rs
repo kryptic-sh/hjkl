@@ -1104,34 +1104,37 @@ fn do_block_paste<H: hjkl_engine::types::Host>(
             text: "\n".repeat(last_row + 1 - content_rows),
         });
     }
-    // Build one chunk per row. `do_insert_block` space-pads a row shorter
-    // than `insert_col` itself and records the pad width on the inverse, so
-    // the ragged-row case needs no rewriting of the row here.
-    let chunks: Vec<String> = segments
-        .iter()
-        .enumerate()
-        .map(|(i, seg)| {
-            // Pad the segment to the block width only when it is followed by
-            // text on this row — at EOL vim adds no trailing spaces.
-            let tail_is_empty = buf_line_chars(ed.buffer(), start_row + i) <= insert_col;
-            if tail_is_empty {
-                return seg.repeat(count);
-            }
-            let seg_len = seg.chars().count();
-            let mut padded = String::with_capacity(seg.len() + width.saturating_sub(seg_len));
-            padded.push_str(seg);
-            if seg_len < width {
-                padded.extend(std::iter::repeat_n(' ', width - seg_len));
-            }
-            padded.repeat(count)
-        })
-        .collect();
-    ed.mutate_edit(Edit::InsertBlock {
-        at: Position::new(start_row, insert_col),
-        chunks,
-    });
-    // Cursor lands on the top-left cell of the pasted block.
-    ed.jump_cursor(start_row, insert_col);
+    // Every row takes the block at the display column it starts at on the
+    // first row, which a tab puts at a different character; a row short of
+    // it is padded with spaces first.
+    let tabstop = ed.settings().tabstop;
+    let start_line = buf_line(ed.buffer(), start_row).unwrap_or_default();
+    let vcol = hjkl_buffer::char_col_to_visual_col(&start_line, insert_col, tabstop);
+    for (i, seg) in segments.iter().enumerate() {
+        let row = start_row + i;
+        let line = buf_line(ed.buffer(), row).unwrap_or_default();
+        let (col, pad) = match crate::vim::char_at_vcol(&line, vcol, tabstop) {
+            Ok(c) => (c, 0),
+            Err(short) => (line.chars().count(), short),
+        };
+        // Pad the segment to the block width only when it is followed by
+        // text on this row — at EOL vim adds no trailing spaces.
+        let seg_width = hjkl_buffer::char_col_to_visual_col(seg, usize::MAX, tabstop);
+        let mut chunk = seg.to_string();
+        if col < line.chars().count() && seg_width < width {
+            chunk.push_str(&" ".repeat(width - seg_width));
+        }
+        let text = " ".repeat(pad) + &chunk.repeat(count);
+        if !text.is_empty() {
+            ed.mutate_edit(Edit::InsertStr {
+                at: Position::new(row, col),
+                text,
+            });
+        }
+    }
+    // Cursor lands on the top-left cell of the pasted block, on the row.
+    let row_len = buf_line_chars(ed.buffer(), start_row);
+    ed.jump_cursor(start_row, insert_col.min(row_len.saturating_sub(1)));
     // `[` / `]` span the pasted block's top-left .. bottom-left column.
     let bot_row = start_row + segments.len().saturating_sub(1);
     ed.set_mark('[', (start_row, insert_col));
@@ -1263,20 +1266,12 @@ pub fn visual_paste<H: hjkl_engine::types::Host>(
             //     column on EVERY row of the (now-deleted) block.
             //   - multi-line charwise reg → a plain inline charwise paste at
             //     the block's top-left (cursor parks at the paste start).
-            let (top, bot, left, right) = block_bounds(ed);
-            let to_eol = vim(ed).block_to_eol;
+            let (top, bot, cols) = block_rect(ed);
+            let left = block_start_col(ed, top, cols);
             // Snapshot the rectangle for the `p` swap register.
-            let deleted = block_yank(ed, top, bot, left, right, to_eol);
-            let del_width = if to_eol {
-                deleted
-                    .split('\n')
-                    .map(|s| s.chars().count())
-                    .max()
-                    .unwrap_or(0)
-            } else {
-                right + 1 - left
-            };
-            delete_block_contents(ed, top, bot, left, right, to_eol);
+            let deleted = block_yank(ed, top, bot, cols);
+            let del_width = block_register_width(&deleted, cols);
+            delete_block_contents(ed, top, bot, cols);
             // `p` swaps the deleted block into the unnamed register (blockwise);
             // `P` preserves the source register (restored below via
             // `saved_unnamed`).

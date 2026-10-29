@@ -1118,3 +1118,267 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "block_tab_k_delete_past_tab_line"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 9]
+keys = "<C-v>kd"
+expected_buffer = "\tab\nabcdef\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_delete_mid"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 5]
+keys = "<C-v>kd"
+expected_buffer = "\ta\nabcdeghij\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_delete_through_tab"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 0]
+keys = "<C-v>kd"
+expected_buffer = "ab\nefghij\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_j_delete_through_tab"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jd"
+expected_buffer = "ab\nefghij\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_yank_mid"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 5]
+keys = "<C-v>ky"
+expected_buffer = "\tab\nabcdefghij\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_yank_through_tab"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 0]
+keys = "<C-v>ky"
+expected_buffer = "\tab\nabcdefghij\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_yank_past_tab_line"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 9]
+keys = "<C-v>ky"
+expected_buffer = "\tab\nabcdefghij\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_uppercase"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 9]
+keys = "<C-v>kU"
+expected_buffer = "\tab\nabcdefGHIJ\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_change"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 5]
+keys = "<C-v>kcZ<Esc>"
+expected_buffer = "\taZ\nabcdeZghij\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_insert"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 5]
+keys = "<C-v>kIX<Esc>"
+expected_buffer = "\taXb\nabcdeXfghij\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_insert_past_tab_line"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 9]
+keys = "<C-v>kIX<Esc>"
+expected_buffer = "\tabX\nabcdefXghij\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_append"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 5]
+keys = "<C-v>kAX<Esc>"
+expected_buffer = "\tabX\nabcdefXghij\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_replace_through_tab"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 0]
+keys = "<C-v>krx"
+expected_buffer = "xxxxab\nxxxxefghij\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_replace_past_tab_line"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 9]
+keys = "<C-v>krx"
+expected_buffer = "\tab\nabcdefxxxx\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_yank_put_before"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 5]
+keys = "<C-v>kyP"
+expected_buffer = "\tabb\nabcdeffghij\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_k_yank_put_past_tab_line"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 9]
+keys = "<C-v>kyP"
+expected_buffer = "\ta    b\nabcdeghijfghij\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_dollar_delete"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 9]
+keys = "<C-v>k$d"
+expected_buffer = "\tab\nabcdef\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_tab_one_row_append"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [0, 0]
+keys = "<C-v>AX<Esc>"
+expected_buffer = "\tXab\nabcdefghij\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_insert_splits_cut_tab"
+initial_buffer = "abcdefgh\n\tx\nabcdefgh\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jjlIX<Esc>"
+expected_buffer = "aXbcdefgh\n X   x\naXbcdefgh\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_append_splits_cut_tab"
+initial_buffer = "abcdefgh\n\tx\nabcdefgh\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jjlAX<Esc>"
+expected_buffer = "abcXdefgh\n   X x\nabcXdefgh\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_delete_cut_tab_keeps_spaces"
+initial_buffer = "abcdefgh\n\tx\nabcdefgh\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jjld"
+expected_buffer = "adefgh\n  x\nadefgh\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_yank_cut_tab_gives_spaces"
+initial_buffer = "abcdefgh\n\tx\nabcdefgh\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jjly"
+expected_buffer = "abcdefgh\n\tx\nabcdefgh\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
