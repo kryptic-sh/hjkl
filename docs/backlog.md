@@ -1098,12 +1098,6 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
   mode (2026-10-27); Visual `r<CR>` stays a no-op that keeps Visual mode, which
   also differs from nvim. Not attempted: a line model that stores `\r` inside a
   line.
-- **The TUI's Visual `/` / `?` were not checked.** The 2026-10-27 fix wires them
-  in `hjkl_vim::dispatch_input` (`step_normal`, `normal.rs`), which the oracle,
-  `--nvim-api`, the headless mode and embedding use. The interactive app routes
-  keys through its own keymap, which binds `/` / `?` (`OpenSearchPrompt`) in
-  Normal mode only (`keymap_build.rs`); what Visual `/` does there was not
-  tried.
 - **Left by the operator + mark work (2026-10-18):**
   - **Mark columns after a charwise `Edit::Replace` across rows are a guess.**
     Since 2026-10-29 `mutate_edit` rebases it like a charwise delete: the first

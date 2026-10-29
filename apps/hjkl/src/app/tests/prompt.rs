@@ -1036,3 +1036,45 @@ fn other_argument_popups_do_not_preview_a_theme() {
     );
     assert!(app.theme_preview_restore.is_none());
 }
+
+/// Feed `keys` through the app's own key handling, as the event loop does,
+/// with `\r` standing for `<CR>`.
+fn feed_keys(app: &mut App, keys: &str) {
+    for c in keys.chars() {
+        let code = if c == '\r' {
+            KeyCode::Enter
+        } else {
+            KeyCode::Char(c)
+        };
+        app.handle_key_event(key(code));
+    }
+}
+
+#[test]
+fn visual_search_extends_the_selection() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "foo bar baz qux");
+    feed_keys(&mut app, "v/baz\rd");
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
+    assert_eq!(lines[0], "az qux");
+}
+
+#[test]
+fn visual_backward_search_extends_the_selection() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "foo bar baz qux");
+    feed_keys(&mut app, "$v?bar\rd");
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
+    assert_eq!(lines[0], "foo ");
+}
+
+#[test]
+fn visual_line_search_extends_the_selection() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "foo\nbar\nbaz\nend");
+    feed_keys(&mut app, "V/baz");
+    app.handle_key_event(key(KeyCode::Enter));
+    feed_keys(&mut app, "d");
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
+    assert_eq!(lines, vec!["end"]);
+}

@@ -10,6 +10,10 @@ patch bumps.
 
 ### Fixed
 
+- In the app, `/` and `?` in Visual, Visual-line and Visual-block mode open the
+  search prompt and extend the selection to the match. They reached the engine's
+  own prompt instead, while the app's keymap went on taking the typed keys, so
+  the search never ran.
 - `'autoindent'` builds the new line's indent from the previous line's width
   under the current `expandtab` / `tabstop`, as vim does, instead of copying its
   tabs and spaces: with `expandtab`, `o` on a tab-indented line indents with

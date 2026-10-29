@@ -112,6 +112,18 @@ pub fn build_app_keymap(leader: char) -> Keymap<AppAction, hjkl_vim::Mode> {
         }
     }
 
+    // `/` / `?` extend a Visual selection to the match, through the same
+    // prompt as Normal mode. Left to the engine, its own prompt opened
+    // while the app's keymap kept taking the typed keys.
+    for (key, dir, desc) in [
+        ("/", SearchDir::Forward, "search forward"),
+        ("?", SearchDir::Backward, "search backward"),
+    ] {
+        if let Err(e) = km.add(Mode::Visual, key, AppAction::OpenSearchPrompt(dir), desc) {
+            eprintln!("hjkl: keymap.add({key} Visual) failed: {e}");
+        }
+    }
+
     // ── pending-state chords ───────────────────────────────────────────────
     // `r<x>` — begin Replace pending state. Bound in both Normal and Visual so
     // the trie intercepts `r` before the engine FSM sees it.
