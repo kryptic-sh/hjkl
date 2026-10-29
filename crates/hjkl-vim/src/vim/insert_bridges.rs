@@ -870,7 +870,16 @@ pub fn insert_ctrl_w_bridge<H: hjkl_engine::types::Host>(
         1,
         &iskeyword,
     );
-    let word_start = buf_cursor_pos(ed.buffer());
+    let mut word_start = buf_cursor_pos(ed.buffer());
+    // vim's `<C-w>` stops at the insert's start before deleting further, as
+    // `<C-u>` does: `Ay<C-w>` takes the `y` and nothing before it.
+    if let Some(session) = vim(ed).insert_session.as_ref()
+        && session.start_row == cursor.row
+        && cursor.col > session.start_col
+        && word_start < hjkl_buffer::Position::new(cursor.row, session.start_col)
+    {
+        word_start = hjkl_buffer::Position::new(cursor.row, session.start_col);
+    }
     if word_start == cursor {
         return true;
     }

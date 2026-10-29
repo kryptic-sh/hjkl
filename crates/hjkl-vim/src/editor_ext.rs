@@ -2130,30 +2130,35 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     // ─── Insert-mode primitives ────────────────────────────────────────────
 
     fn insert_char(&mut self, ch: char) {
+        crate::vim::record_insert_key(self, Some(hjkl_vim_types::InsertKey::Char(ch)));
         if crate::vim::insert_char_bridge(self, ch) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_newline(&mut self) {
+        crate::vim::record_insert_key(self, Some(hjkl_vim_types::InsertKey::Newline));
         if crate::vim::insert_newline_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_tab(&mut self) {
+        crate::vim::record_insert_key(self, Some(hjkl_vim_types::InsertKey::Tab));
         if crate::vim::insert_tab_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_backspace(&mut self) {
+        crate::vim::record_insert_key(self, Some(hjkl_vim_types::InsertKey::Backspace));
         if crate::vim::insert_backspace_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_delete(&mut self) {
+        crate::vim::record_insert_key(self, Some(hjkl_vim_types::InsertKey::Delete));
         if crate::vim::insert_delete_bridge(self) {
             after_insert_mutation(self);
         }
@@ -2185,32 +2190,38 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     }
 
     fn insert_ctrl_w(&mut self) {
+        crate::vim::record_insert_key(self, Some(hjkl_vim_types::InsertKey::CtrlW));
         if crate::vim::insert_ctrl_w_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_ctrl_u(&mut self) {
+        crate::vim::record_insert_key(self, Some(hjkl_vim_types::InsertKey::CtrlU));
         if crate::vim::insert_ctrl_u_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_ctrl_h(&mut self) {
+        crate::vim::record_insert_key(self, Some(hjkl_vim_types::InsertKey::Backspace));
         if crate::vim::insert_ctrl_h_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_ctrl_o_arm(&mut self) {
+        crate::vim::record_insert_key(self, None);
         crate::vim::insert_ctrl_o_bridge(self);
     }
 
     fn insert_ctrl_r_arm(&mut self) {
+        crate::vim::record_insert_key(self, None);
         crate::vim::insert_ctrl_r_bridge(self);
     }
 
     fn insert_ctrl_t(&mut self) {
+        crate::vim::record_insert_key(self, None);
         // Indent-only: no scrolloff re-check (the cursor row does not move).
         let mutated = crate::vim::insert_ctrl_t_bridge(self);
         if mutated {
@@ -2221,6 +2232,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     }
 
     fn insert_ctrl_d(&mut self) {
+        crate::vim::record_insert_key(self, None);
         let mutated = crate::vim::insert_ctrl_d_bridge(self);
         if mutated {
             self.mark_content_dirty();
@@ -2230,30 +2242,35 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     }
 
     fn insert_ctrl_a(&mut self) {
+        crate::vim::record_insert_key(self, None);
         if crate::vim::insert_ctrl_a_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_ctrl_e(&mut self) {
+        crate::vim::record_insert_key(self, None);
         if crate::vim::insert_ctrl_e_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_ctrl_y(&mut self) {
+        crate::vim::record_insert_key(self, None);
         if crate::vim::insert_ctrl_y_bridge(self) {
             after_insert_mutation(self);
         }
     }
 
     fn insert_paste_register(&mut self, reg: char) {
+        crate::vim::record_insert_key(self, None);
         crate::vim::insert_paste_register_bridge(self, reg);
         let (row, _) = self.cursor();
         crate::vim_state::vim_mut(self).widen_insert_row(row);
     }
 
     fn insert_ctrl_bracket(&mut self) {
+        crate::vim::record_insert_key(self, None);
         if crate::vim::check_and_apply_abbrev(self, AbbrevTrigger::CtrlBracket) {
             after_insert_mutation(self);
         }

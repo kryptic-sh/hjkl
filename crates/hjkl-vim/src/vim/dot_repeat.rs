@@ -2,7 +2,9 @@
 //!
 //! Split out of the monolithic `vim.rs` (#267 follow-up).
 
-use hjkl_vim_types::{InsertEntry, LastChange, Mode, VisualExtent};
+use hjkl_vim_types::{
+    InsertEntry, InsertKey, InsertReason, InsertSession, LastChange, Mode, VisualExtent,
+};
 
 use super::*;
 use crate::vim_state::{vim, vim_mut};
@@ -315,6 +317,17 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             let text = inserted.clone() + &open_line_repeats(&leader, &inserted, scaled(count));
             replay_insert_and_finish(ed, &text);
         }
+        LastChange::InsertKeys { entry, keys, count } => {
+            ed.push_undo();
+            move_to_insert_entry(ed, entry);
+            for _ in 0..scaled(count).max(1) {
+                replay_insert_keys(ed, &keys);
+            }
+            if ed.cursor().1 > 0 {
+                hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
+            }
+            remember_cursor_column(ed);
+        }
         LastChange::InsertAt {
             entry,
             inserted,
@@ -322,23 +335,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             backspaces,
         } => {
             ed.push_undo();
-            match entry {
-                InsertEntry::I => {}
-                InsertEntry::ShiftI => move_to_insert_start(ed),
-                InsertEntry::GShiftI => {
-                    let row = ed.cursor().0;
-                    ed.jump_cursor(row, 0);
-                }
-                InsertEntry::A => {
-                    hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
-                }
-                InsertEntry::ShiftA => {
-                    hjkl_engine::motions::move_line_end(ed.buffer_mut());
-                    hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
-                }
-                #[cfg(not(hjkl_exhaustive))]
-                _ => {}
-            }
+            move_to_insert_entry(ed, entry);
             for _ in 0..scaled(count).max(1) {
                 for _ in 0..backspaces {
                     generic_backspace(ed);
@@ -356,6 +353,78 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
         _ => {}
     }
     vim_mut(ed).replaying = false;
+}
+/// Put the cursor where `entry` starts an insert: `I` on the first
+/// non-blank, `gI` on column 0, `a` past the cursor, `A` past the line.
+fn move_to_insert_entry<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    entry: InsertEntry,
+) {
+    match entry {
+        InsertEntry::I => {}
+        InsertEntry::ShiftI => move_to_insert_start(ed),
+        InsertEntry::GShiftI => {
+            let row = ed.cursor().0;
+            ed.jump_cursor(row, 0);
+        }
+        InsertEntry::A => {
+            hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
+        }
+        InsertEntry::ShiftA => {
+            hjkl_engine::motions::move_line_end(ed.buffer_mut());
+            hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
+        }
+        #[cfg(not(hjkl_exhaustive))]
+        _ => {}
+    }
+}
+/// Type `keys` at the cursor through the Insert-mode bridges, in a session
+/// of their own so `<C-w>` / `<C-u>` stop at its start as the typed ones did.
+fn replay_insert_keys<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    keys: &[InsertKey],
+) {
+    let (row, col) = ed.cursor();
+    vim_mut(ed).insert_session = Some(InsertSession {
+        count: 1,
+        row_min: row,
+        row_max: row,
+        before_rope: hjkl_engine::types::Query::rope(ed.buffer()),
+        reason: InsertReason::ReplayOnly,
+        start_row: row,
+        start_col: col,
+        backspaces: 0,
+        deleted: 0,
+        wraps: Vec::new(),
+    });
+    for &key in keys {
+        match key {
+            InsertKey::Char(ch) => {
+                insert_char_bridge(ed, ch);
+            }
+            InsertKey::Newline => {
+                insert_newline_bridge(ed);
+            }
+            InsertKey::Tab => {
+                insert_tab_bridge(ed);
+            }
+            InsertKey::Backspace => {
+                insert_backspace_bridge(ed);
+            }
+            InsertKey::CtrlW => {
+                insert_ctrl_w_bridge(ed);
+            }
+            InsertKey::CtrlU => {
+                insert_ctrl_u_bridge(ed);
+            }
+            InsertKey::Delete => {
+                insert_delete_bridge(ed);
+            }
+            #[cfg(not(hjkl_exhaustive))]
+            _ => {}
+        }
+    }
+    vim_mut(ed).insert_session = None;
 }
 /// The substring of `after` that differs from `before` (first-diff to
 /// last-diff). Unlike [`extract_inserted`] this works for equal-length or

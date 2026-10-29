@@ -31,6 +31,8 @@ and this project adheres to
 
 ### Added
 
+- `LastChange::InsertKeys` and `InsertKey`: an insert `.` replays key by key,
+  for one that used `<C-w>`, `<C-u>` or `<Del>`.
 - `Motion::Home`, for `<Home>`: column 0 like `LineStart`, but it does not open
   a closed fold.
 - `Motion::ScreenLineStart`, `Motion::ScreenLineFirstNonBlank` and

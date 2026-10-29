@@ -57,6 +57,10 @@ pub struct VimState {
     /// `start_arrow`): what is typed from there is a fresh `i`, and if
     /// nothing is, `.` keeps the change finished at the move.
     pub insert_restarted: bool,
+    /// The keys typed in the current insert session, for `.` to replay when
+    /// the net text cannot stand for them (`<C-w>`, `<C-u>`, `<Del>`).
+    /// `None` once a key outside [`hjkl_vim_types::InsertKey`] was used.
+    pub insert_keys: Option<Vec<hjkl_vim_types::InsertKey>>,
     /// Most-recent mutating command for `.` dot-repeat.
     pub last_change: Option<LastChange>,
     /// Captured on insert-mode entry: count, buffer snapshot, entry kind.

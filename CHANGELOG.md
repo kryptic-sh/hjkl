@@ -10,6 +10,11 @@ patch bumps.
 
 ### Fixed
 
+- `<C-w>` in Insert mode stops at the insert's start before deleting further, as
+  vim's does (`Ay<C-w>` takes only the `y`).
+- `.` after an `i` / `a` / `I` / `A` that used `<C-w>`, `<C-u>` or `<Del>` types
+  the keys again, as vim's redo does, instead of the net text: after
+  `A<C-w>x<Esc>`, `j.` replaces the next line's last word too.
 - A cursor move inside Insert mode (`<Left>`, `<Home>`, `<Down>`, …) ends the
   change typed so far, as vim's `start_arrow` does: `.` then repeats only what
   was typed after the move, as an `i` at the cursor and without the insert's

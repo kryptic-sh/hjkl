@@ -274,6 +274,26 @@ fn typed_at_start<H: hjkl_engine::types::Host>(
         && before.slice(start + deleted..) == after.slice(end..))
     .then(|| after.slice(start..end).to_string())
 }
+/// Note an Insert-mode key for [`LastChange::InsertKeys`]; `None` is a key
+/// that list cannot replay, which makes the session fall back to its net
+/// text. Keys replayed by `.` itself are not recorded.
+pub fn record_insert_key<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    key: Option<hjkl_vim_types::InsertKey>,
+) {
+    if vim(ed).replaying {
+        return;
+    }
+    let state = vim_mut(ed);
+    match key {
+        Some(key) => {
+            if let Some(keys) = state.insert_keys.as_mut() {
+                keys.push(key);
+            }
+        }
+        None => state.insert_keys = None,
+    }
+}
 /// vim's `start_arrow`: a cursor move inside Insert mode finishes the text
 /// typed so far as its own change, and what is typed from there on is a
 /// fresh `i` at the cursor, without the entry's count. `.` then repeats only
@@ -315,6 +335,7 @@ pub fn restart_insert_at_cursor<H: hjkl_engine::types::Host>(
         wraps: Vec::new(),
     });
     vim_mut(ed).insert_restarted = true;
+    vim_mut(ed).insert_keys = Some(Vec::new());
 }
 pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     let Some(session) = vim_mut(ed).insert_session.take() else {
@@ -520,7 +541,27 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
     if restarted && inserted.is_empty() && backspaces == 0 {
         return;
     }
+    let keys = vim_mut(ed).insert_keys.take();
     match session.reason {
+        // Keys the net text cannot stand for: `.` types them again.
+        InsertReason::Enter(entry)
+            if keys.as_ref().is_some_and(|keys| {
+                keys.iter().any(|k| {
+                    matches!(
+                        k,
+                        hjkl_vim_types::InsertKey::CtrlW
+                            | hjkl_vim_types::InsertKey::CtrlU
+                            | hjkl_vim_types::InsertKey::Delete
+                    )
+                })
+            }) =>
+        {
+            vim_mut(ed).last_change = Some(LastChange::InsertKeys {
+                entry,
+                keys: keys.unwrap_or_default(),
+                count: session.count,
+            });
+        }
         InsertReason::Enter(entry) => {
             vim_mut(ed).last_change = Some(LastChange::InsertAt {
                 entry,
@@ -614,6 +655,7 @@ pub fn begin_insert_noundo<H: hjkl_engine::types::Host>(
         deleted: 0,
         wraps: Vec::new(),
     });
+    vim_mut(ed).insert_keys = Some(Vec::new());
     vim_mut(ed).mode = Mode::Insert;
     vim_mut(ed).insert_want_current = false;
     // Phase 6.3: keep current_mode in sync for callers that bypass step().

@@ -1134,3 +1134,99 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "dot_insert_replays_ctrl_w"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "A<C-w>x<Esc>j."
+expected_buffer = "abc x\nghi jkl x\npqr stu\nxyz w\n"
+expected_cursor = [1, 8]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_replays_ctrl_u"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "A<C-u>x<Esc>j."
+expected_buffer = "x\nx\npqr stu\nxyz w\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_replays_delete"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "ix<Del><Esc>j."
+expected_buffer = "abx def\nghx jkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_replays_deletes_before_text"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "i<Del><Del>x<Esc>j."
+expected_buffer = "abxdef\nghxjkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_replays_ctrl_w_twice"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "Ay<C-w><C-w>x<Esc>j."
+expected_buffer = "abc x\nghi jkl x\npqr stu\nxyz w\n"
+expected_cursor = [1, 8]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_replays_ctrl_w_counted"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "2A<C-w>x<Esc>j."
+expected_buffer = "abc x\nghi jkl x\npqr stu\nxyz w\n"
+expected_cursor = [1, 8]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "ctrl_w_stops_at_insert_start"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "Ay<C-w>x<Esc>"
+expected_buffer = "abc defx\nghi jkl mno\npqr stu\nxyz w\n"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "ctrl_w_after_typed_blank_stops_at_start"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "A <C-w>x<Esc>j."
+expected_buffer = "abc defx\nghi jkl mnox\npqr stu\nxyz w\n"
+expected_cursor = [1, 11]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

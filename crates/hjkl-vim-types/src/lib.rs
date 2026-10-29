@@ -413,6 +413,14 @@ pub enum LastChange {
         /// `[count]o` opens `count` lines, each with `inserted`.
         count: usize,
     },
+    /// `i`/`I`/`a`/`A` whose insert used keys the net text cannot stand for
+    /// (`<C-w>`, `<C-u>`, `<Del>`): `.` types `keys` again, as vim's redo
+    /// buffer does, once per counted copy.
+    InsertKeys {
+        entry: InsertEntry,
+        keys: Vec<InsertKey>,
+        count: usize,
+    },
     /// `i`/`I`/`a`/`A` + inserted text.
     InsertAt {
         entry: InsertEntry,
@@ -513,6 +521,19 @@ pub enum VisualExtent {
         cols: usize,
         to_eol: bool,
     },
+}
+
+/// An Insert-mode key, as [`LastChange::InsertKeys`] replays it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(hjkl_exhaustive), non_exhaustive)]
+pub enum InsertKey {
+    Char(char),
+    Newline,
+    Tab,
+    Backspace,
+    CtrlW,
+    CtrlU,
+    Delete,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
