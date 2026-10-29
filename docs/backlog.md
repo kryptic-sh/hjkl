@@ -1289,8 +1289,17 @@ Seen while measuring, not `gq`:
 - **What the read-only register support leaves out (2026-10-29).**
   `refuse_read_only_register` (`hjkl-vim` `command.rs`) covers `".`, `"/`, `"%`
   and `":`. Not covered:
-  - A refused Visual `c` records no `LastChange`. nvim's `.` after
-    `iab<Esc>vl".cX<Esc>` and `j` ends in Insert mode; not ported.
+  - A refused Visual `c` records no `LastChange`. Measured against nvim 0.12.5
+    on `abc def / ghi jkl mno / …`, cursor (0, 2):
+    - `iab<Esc>vl".cX<Esc>j.` leaves line 1 alone and ends in Insert mode at (1,
+      3); a following `Y<Esc>` types `Y` there. The refused `c` is what `.`
+      repeats, and the typed `X` is not part of it.
+    - `iab<Esc>vl".c<Esc>j.` likewise ends in Insert mode, at (1, 2).
+    - `iab<Esc><C-v>j".cX<Esc>` inserts `X` on BOTH rows even though the change
+      was refused: nvim still runs the block insert. hjkl inserts on the first
+      row only. Recording the refused `c` as a `VisualOp` is not enough: the
+      insert that follows overwrites `last_change`, and replay must end in
+      Insert mode.
 
 ## 2. Blocked on platform access
 
