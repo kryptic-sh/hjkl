@@ -67,6 +67,10 @@ and this project adheres to
 
 ### Fixed
 
+- `"%` and `":` name the file name and the last command line in Normal mode, as
+  in vim: `"%p` and `":p` paste them, and a delete, yank or change naming either
+  is refused with E354 and leaves the text alone, where hjkl ignored the
+  register and deleted into `""`.
 - A Visual `d` or `dgn` refused for naming `".` or `"/` is what `.` repeats
   next, as vim's redo keeps it, so `.` refuses again instead of repeating the
   change before it.

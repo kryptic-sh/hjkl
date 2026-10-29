@@ -81,6 +81,9 @@ pub struct Registers {
     /// Pre-built `Slot` for the `%` register. Kept in sync with `filename`
     /// by [`Registers::set_filename`] so `read('%')` can return `&Slot`.
     filename_slot: Option<Slot>,
+    /// `":` — synthetic read-only register: the last command line run.
+    /// Set by the host through [`Registers::set_last_command`].
+    last_command_slot: Option<Slot>,
 }
 
 impl Registers {
@@ -202,6 +205,7 @@ impl Registers {
             '+' | '*' => Some(&self.clip),
             // `%` is a synthetic read-only register: current buffer filename.
             '%' => self.filename_slot.as_ref(),
+            ':' => self.last_command_slot.as_ref(),
             _ => None,
         }
     }
@@ -211,6 +215,11 @@ impl Registers {
     pub fn set_filename(&mut self, name: Option<String>) {
         self.filename.clone_from(&name);
         self.filename_slot = name.map(|n| Slot::new(n, false));
+    }
+
+    /// Host hook: set the `":` register to the command line just run.
+    pub fn set_last_command(&mut self, cmd: Option<String>) {
+        self.last_command_slot = cmd.map(|c| Slot::new(c, false));
     }
 
     /// Replace the clipboard slot's contents — host hook for syncing
@@ -426,5 +435,13 @@ mod tests {
         r.set_filename(Some("foo.txt".into()));
         r.set_filename(None);
         assert!(r.read('%').is_none());
+    }
+
+    #[test]
+    fn colon_register_holds_the_last_command() {
+        let mut r = Registers::default();
+        assert!(r.read(':').is_none());
+        r.set_last_command(Some("set nu".into()));
+        assert_eq!(r.read(':').map(|s| s.text.as_str()), Some("set nu"));
     }
 }

@@ -1287,10 +1287,8 @@ Seen while measuring, not `gq`:
   measurements, not from vim's `op_tilde`, so a case outside them (multibyte, a
   closed fold, a count past the line) may still differ.
 - **What the read-only register support leaves out (2026-10-29).**
-  `refuse_read_only_register` (`hjkl-vim` `command.rs`) covers `".` and `"/`.
-  Not covered:
-  - `"%` and `":` are still not accepted by `set_pending_register`; `"%` reads
-    from the register store but cannot be named in Normal mode.
+  `refuse_read_only_register` (`hjkl-vim` `command.rs`) covers `".`, `"/`, `"%`
+  and `":`. Not covered:
   - A refused Visual `c` records no `LastChange`. nvim's `.` after
     `iab<Esc>vl".cX<Esc>` and `j` ends in Insert mode; not ported.
 

@@ -818,3 +818,75 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "reg_percent_delete_refused"
+initial_buffer = "abc def\nghi jkl mno\n"
+initial_cursor = [0, 2]
+keys = "\"%dw"
+expected_buffer = "abc def\nghi jkl mno\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_percent_yank_refused"
+initial_buffer = "abc def\nghi jkl mno\n"
+initial_cursor = [0, 2]
+keys = "\"%yw\"%p"
+expected_buffer = "abc def\nghi jkl mno\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_colon_delete_refused"
+initial_buffer = "abc def\nghi jkl mno\n"
+initial_cursor = [0, 2]
+keys = "\":dw"
+expected_buffer = "abc def\nghi jkl mno\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_colon_delete_refused_dot_refuses"
+initial_buffer = "abc def\nghi jkl mno\n"
+initial_cursor = [0, 2]
+keys = "iab<Esc>\":dwj."
+expected_buffer = "ababc def\nghi jkl mno\n"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_colon_change_refused"
+initial_buffer = "abc def\nghi jkl mno\n"
+initial_cursor = [0, 2]
+keys = "iab<Esc>\":cwX<Esc>"
+expected_buffer = "abaXbc def\nghi jkl mno\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_percent_x_refused"
+initial_buffer = "abc def\nghi jkl mno\n"
+initial_cursor = [0, 2]
+keys = "iab<Esc>\"%x"
+expected_buffer = "ababc def\nghi jkl mno\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

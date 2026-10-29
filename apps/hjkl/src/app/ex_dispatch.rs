@@ -261,6 +261,10 @@ impl App {
         // The literal user text is stored; replay re-runs through dispatch_ex so
         // behavior is identical.
         self.last_ex_command = Some(raw.to_string());
+        self.registers
+            .lock()
+            .unwrap()
+            .set_last_command(Some(raw.to_string()));
         // Phase 1 (#37): push to ex history ring.
         let raw_owned = raw.to_string();
         Self::push_history(&mut self.ex_history, &raw_owned);

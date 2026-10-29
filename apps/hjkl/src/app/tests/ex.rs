@@ -4361,3 +4361,31 @@ fn disk_change_no_prompt_for_background_dirty_slot() {
     let _ = std::fs::remove_file(&a);
     let _ = std::fs::remove_file(&b);
 }
+
+#[test]
+fn colon_register_pastes_the_last_command() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(
+        &mut app, "ab
+",
+    );
+    app.dispatch_ex("set nu");
+    drive_chars(&mut app, "\":p");
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
+    assert_eq!(lines[0], "aset nub");
+}
+
+#[test]
+fn colon_register_refuses_a_delete() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(
+        &mut app, "ab cd
+",
+    );
+    app.dispatch_ex("set nu");
+    drive_chars(&mut app, "\":dw");
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
+    assert_eq!(lines[0], "ab cd");
+    app.drain_engine_errors();
+    assert!(app.bus.last_body_or_empty().contains("E354"));
+}

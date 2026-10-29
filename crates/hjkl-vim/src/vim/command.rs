@@ -206,10 +206,11 @@ pub fn delete_to_eol<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
     buf_set_cursor_pos(ed.buffer_mut(), cursor);
 }
 /// Whether `reg` is one of the read-only registers a Normal-mode command can
-/// name: `".` (the last inserted text) and `"/` (the last search pattern).
-/// They paste like any other register but cannot be written.
+/// name: `".` (the last inserted text), `"/` (the last search pattern), `"%`
+/// (the file name) and `":` (the last command line). They paste like any
+/// other register but cannot be written.
 pub fn is_read_only_register(reg: char) -> bool {
-    matches!(reg, '.' | '/')
+    matches!(reg, '.' | '/' | '%' | ':')
 }
 /// vim's `op_delete` and `op_yank` refuse a read-only register (E354) before
 /// touching the text, so a delete, yank or change naming `".` or `"/` leaves

@@ -144,6 +144,7 @@ pub fn read_only_register_text<H: hjkl_engine::types::Host>(
     let text = match reg {
         '/' => ed.last_search_pattern(),
         '.' => vim(ed).last_insert_text.clone(),
+        '%' | ':' => ed.with_registers(|r| r.read(reg).map(|slot| slot.text.clone())),
         _ => None,
     };
     text.filter(|s| !s.is_empty())
@@ -166,7 +167,7 @@ pub fn insert_register_text<H: hjkl_engine::types::Host>(
         type_last_insert(ed, &text);
         return;
     }
-    // The read-only registers (`/`, `.`) have no slot in the register store.
+    // `/` and `.` have no slot in the register store.
     let text = match selector {
         '/' | '.' => match read_only_register_text(ed, selector) {
             Some(s) => s,

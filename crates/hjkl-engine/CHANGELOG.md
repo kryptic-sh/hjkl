@@ -98,6 +98,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `Registers::set_last_command`, and `read(':')`: the `":` register, set by the
+  host after each command line.
 - `Settings::comments` / `Options::comments` (`:set comments` / `:set com`):
   comment leaders in vim's format, default nvim's
   (`s1:/*,mb:*,ex:*/,://,b:#,:%,:XCOMM,n:>,fb:-`), which auto-wrap under
