@@ -1078,3 +1078,30 @@ fn visual_line_search_extends_the_selection() {
     let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
     assert_eq!(lines, vec!["end"]);
 }
+
+#[test]
+fn macro_records_and_replays_a_search() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "a g b g c g d");
+    feed_keys(&mut app, "qq/g\rq");
+    assert_eq!(app.active_editor().cursor(), (0, 2));
+    let reg = app
+        .active_editor()
+        .with_registers(|r| r.read('q').map(|s| s.text.clone()));
+    assert_eq!(reg.as_deref(), Some("/g<CR>"));
+    feed_keys(&mut app, "0@q");
+    assert!(
+        app.search_field.is_none(),
+        "the replayed <CR> closes the prompt"
+    );
+    assert_eq!(app.active_editor().cursor(), (0, 2));
+}
+
+#[test]
+fn macro_records_and_replays_a_command_line() {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "a\nb\nc");
+    feed_keys(&mut app, "qq:s/^/x/\rjq@q");
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
+    assert_eq!(lines, vec!["xa", "xb", "c"]);
+}

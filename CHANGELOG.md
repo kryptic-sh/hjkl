@@ -10,6 +10,10 @@ patch bumps.
 
 ### Fixed
 
+- In the app, a macro holds what is typed into the `/` / `?` search, `:` command
+  line and `!` filter prompts, and `@q` types it there again. Only the key that
+  opened the prompt was recorded, so `qq/g<CR>q@q` left the search prompt open
+  and `qq:s/^/x/<CR>jq@q` substituted nothing.
 - In the app, `/` and `?` in Visual, Visual-line and Visual-block mode open the
   search prompt and extend the selection to the match. They reached the engine's
   own prompt instead, while the app's keymap went on taking the typed keys, so

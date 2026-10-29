@@ -547,6 +547,35 @@ impl App {
     ///
     /// Returns [`KeyOutcome::FallThrough`] when the key reached the engine
     /// dispatch; only [`KeyOutcome::Break`] needs handling by the caller.
+    /// Append `key` to the macro being recorded, for keys a prompt or the
+    /// Insert-mode block consumes before the engine's own recorder sees them.
+    /// Played-back keys are not recorded again.
+    fn record_prompt_key(&mut self, key: KeyEvent) {
+        if self.active_editor().is_recording_macro() && !self.active_editor().is_replaying_macro() {
+            let input = hjkl_engine_tui::crossterm_to_input(key);
+            if input.key != hjkl_engine::Key::Null {
+                self.active_editor_mut().record_input(input);
+            }
+        }
+    }
+
+    /// Whether a prompt that takes typed keys is open: the `:` command line,
+    /// the `!` filter command or the `/` / `?` search.
+    pub(crate) fn prompt_is_open(&self) -> bool {
+        self.command_field.is_some() || self.filter_field.is_some() || self.search_field.is_some()
+    }
+
+    /// Hand `key` to the open prompt (see [`Self::prompt_is_open`]).
+    pub(crate) fn feed_open_prompt(&mut self, key: KeyEvent) {
+        if self.command_field.is_some() {
+            self.handle_command_field_key(key);
+        } else if self.filter_field.is_some() {
+            self.handle_filter_field_key(key);
+        } else if self.search_field.is_some() {
+            self.handle_search_field_key(key);
+        }
+    }
+
     pub(crate) fn handle_key_event(&mut self, key: KeyEvent) -> KeyOutcome {
         if key.kind == KeyEventKind::Release {
             return KeyOutcome::Continue;
@@ -725,24 +754,12 @@ impl App {
             return KeyOutcome::Continue;
         }
 
-        // ── Command palette (`:` prompt) ─────────────────────────
-        if self.command_field.is_some() {
-            self.handle_command_field_key(key);
-            if self.exit_requested {
-                return KeyOutcome::Break;
-            }
-            return KeyOutcome::Continue;
-        }
-
-        // ── Filter prompt (`!` operator) ──────────────────────────
-        if self.filter_field.is_some() {
-            self.handle_filter_field_key(key);
-            return KeyOutcome::Continue;
-        }
-
-        // ── Search prompt (`/` `?`) ──────────────────────────────
-        if self.search_field.is_some() {
-            self.handle_search_field_key(key);
+        // ── `:` / `!` / `/` `?` prompts ──────────────────────────
+        // A macro holds what is typed into a prompt and its `<CR>`, as vim's
+        // does, or `@q` replays only the key that opened it.
+        if self.prompt_is_open() {
+            self.record_prompt_key(key);
+            self.feed_open_prompt(key);
             if self.exit_requested {
                 return KeyOutcome::Break;
             }
@@ -1061,14 +1078,7 @@ impl App {
             // inputs don't append to the active recording. Keys that
             // fall through this block to dispatch_insert_key get their
             // recording from dispatch_insert_key's own hook.
-            if self.active_editor().is_recording_macro()
-                && !self.active_editor().is_replaying_macro()
-            {
-                let input = hjkl_engine_tui::crossterm_to_input(key);
-                if input.key != hjkl_engine::Key::Null {
-                    self.active_editor_mut().record_input(input);
-                }
-            }
+            self.record_prompt_key(key);
 
             // <C-x><C-o> manual omni-completion trigger.
             if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('x') {

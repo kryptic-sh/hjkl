@@ -186,7 +186,11 @@ impl App {
                 if ct_key.code == KeyCode::Null {
                     continue;
                 }
-                if !self.route_chord_key(ct_key) {
+                // A replayed `/`, `:` or `!` opened the app's prompt: the
+                // keys after it are typed there, as live ones are.
+                if self.prompt_is_open() {
+                    self.feed_open_prompt(ct_key);
+                } else if !self.route_chord_key(ct_key) {
                     hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_key);
                 }
                 // A nested `@{reg}` splice may have tripped a cap — abort the
