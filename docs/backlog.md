@@ -1251,11 +1251,9 @@ Seen while measuring, not `gq`:
   cursor one column right, inserts containing `<CR>` replaying nothing, and `o`
   / `O` replaying an empty line). On `"abc def\n  q r\nxyz w\nlast\n"` @ (0,2),
   each also wrong before those fixes:
-  - A cursor move inside the insert (`<Left>`, `<Home>`, ...) should start a new
-    redo, as vim's `start_arrow` does: `A<BS><BS>x<Left>y<Esc>j.` gives
-    `"  q yr"` in nvim, `"  q ry"` in hjkl. The backspace count recorded since
-    2026-10-29 (`InsertSession::backspaces`) is reset by such a move
-    (`after_insert_motion`), so it falls back to the old text diff instead.
+  - A mouse click in Insert mode restarts the insert like `<Left>` does
+    (`mouse_click_doc_bridge` calls `restart_insert_at_cursor`, 2026-10-29), but
+    no test drives a click, and nvim was not measured for one.
   - `<C-w>`, `<C-u>` and `<Del>` past the insert's start are not recorded for
     `.` (only `<BS>` / `<C-h>` are); unmeasured against nvim.
   - **hjkl's `softtabstop` defaults to 4; nvim's is 0, with `smarttab` on.** The

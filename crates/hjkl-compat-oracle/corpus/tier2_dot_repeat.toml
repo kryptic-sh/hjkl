@@ -1014,3 +1014,123 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "dot_insert_after_left_repeats_new_text"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "Ax<Left>y<Esc>j."
+expected_buffer = "abc defyx\n  q yr\nxyz w\nlast\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_after_left_nothing_typed"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "Ax<Left><Esc>j."
+expected_buffer = "abc defx\n  q rx\nxyz w\nlast\n"
+expected_cursor = [1, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_after_home"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "Ax<Home>y<Esc>j."
+expected_buffer = "yabc defx\ny  q r\nxyz w\nlast\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_after_two_moves"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "Ax<Left>y<Left>z<Esc>j."
+expected_buffer = "abc defzyx\n  q zr\nxyz w\nlast\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_after_down"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "Ax<Down>y<Esc>j."
+expected_buffer = "abc defx\n  q ry\nxyz yw\nlast\n"
+expected_cursor = [2, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_insert_after_move_drops_count"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "3ix<Left>y<Esc>j."
+expected_buffer = "abyxc def\n  yq r\nxyz w\nlast\n"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_open_line_after_left"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "ox<Left>y<Esc>j."
+expected_buffer = "abc def\nyx\ny  q r\nxyz w\nlast\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_change_after_left_repeats_insert"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "cwab<Left>c<Esc>j."
+expected_buffer = "abacb def\n  qc r\nxyz w\nlast\n"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_change_after_left_nothing_typed"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "cwab<Left><Esc>j."
+expected_buffer = "abab def\n  ab r\nxyz w\nlast\n"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "undo_after_insert_move_takes_last_run"
+initial_buffer = "abc def\n  q r\nxyz w\nlast\n"
+initial_cursor = [0, 2]
+keys = "Ax<Left>y<Esc>u"
+expected_buffer = "abc defx\n  q r\nxyz w\nlast\n"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

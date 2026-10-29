@@ -8,6 +8,14 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- A cursor move inside Insert mode (`<Left>`, `<Home>`, `<Down>`, …) ends the
+  change typed so far, as vim's `start_arrow` does: `.` then repeats only what
+  was typed after the move, as an `i` at the cursor and without the insert's
+  count, or the change before the move when nothing was typed after it.
+  `Ax<Left>y<Esc>j.` inserts `y` before the cursor, where hjkl appended it.
+
 ## [0.44.0] - 2026-10-29
 
 ### Added

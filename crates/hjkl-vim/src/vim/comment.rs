@@ -274,10 +274,53 @@ fn typed_at_start<H: hjkl_engine::types::Host>(
         && before.slice(start + deleted..) == after.slice(end..))
     .then(|| after.slice(start..end).to_string())
 }
+/// vim's `start_arrow`: a cursor move inside Insert mode finishes the text
+/// typed so far as its own change, and what is typed from there on is a
+/// fresh `i` at the cursor, without the entry's count. `.` then repeats only
+/// that, or the finished change if nothing is typed after the move
+/// (`Ax<Left>y<Esc>j.` inserts `y`; `Ax<Left><Esc>j.` appends `x`). Block
+/// and Replace sessions are left as they are.
+pub fn restart_insert_at_cursor<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+) {
+    let Some(session) = vim(ed).insert_session.as_ref() else {
+        return;
+    };
+    if vim(ed).replaying
+        || !matches!(
+            session.reason,
+            InsertReason::Enter(_)
+                | InsertReason::AfterChange
+                | InsertReason::DeleteToEol
+                | InsertReason::Open { .. }
+        )
+    {
+        return;
+    }
+    if let Some(session) = vim_mut(ed).insert_session.as_mut() {
+        session.count = 1;
+    }
+    finish_insert_session(ed);
+    let (row, col) = ed.cursor();
+    vim_mut(ed).insert_session = Some(InsertSession {
+        count: 1,
+        row_min: row,
+        row_max: row,
+        before_rope: hjkl_engine::types::Query::rope(ed.buffer()),
+        reason: InsertReason::Enter(InsertEntry::I),
+        start_row: row,
+        start_col: col,
+        backspaces: 0,
+        deleted: 0,
+        wraps: Vec::new(),
+    });
+    vim_mut(ed).insert_restarted = true;
+}
 pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     let Some(session) = vim_mut(ed).insert_session.take() else {
         return;
     };
+    let restarted = std::mem::take(&mut vim_mut(ed).insert_restarted);
     let after_rope = hjkl_engine::types::Query::rope(ed.buffer());
     // Clamp both slices to their respective bounds — the buffer may have
     // grown (Enter splits rows) or shrunk (Backspace joins rows) during
@@ -472,6 +515,11 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
     if vim(ed).replaying {
         return;
     }
+    // A segment restarted by a cursor move that typed nothing leaves the
+    // change finished at the move in place.
+    if restarted && inserted.is_empty() && backspaces == 0 {
+        return;
+    }
     match session.reason {
         InsertReason::Enter(entry) => {
             vim_mut(ed).last_change = Some(LastChange::InsertAt {
@@ -602,10 +650,10 @@ pub fn begin_insert<H: hjkl_engine::types::Host>(
 /// in normal mode reverts only the post-break run, leaving the
 /// pre-break edits in place — matching vim's behaviour.
 ///
-/// Implementation: snapshot the current buffer onto the undo stack
-/// (the new break point) and reset the active `InsertSession`'s
-/// `before_lines` so `finish_insert_session`'s diff window only
-/// captures the post-break run for `last_change` / dot-repeat.
+/// Implementation: snapshot the current buffer onto the undo stack (the new
+/// break point). What `.` repeats after the move is
+/// [`restart_insert_at_cursor`]'s business, which every caller runs once
+/// the cursor has moved.
 ///
 /// During replay we skip the break — replay shouldn't pollute the
 /// undo stack with intra-replay snapshots.
@@ -622,13 +670,6 @@ pub fn break_undo_group_in_insert<H: hjkl_engine::types::Host>(
         return;
     }
     ed.push_undo();
-    let before_rope = hjkl_engine::types::Query::rope(ed.buffer());
-    let row = hjkl_engine::types::Cursor::cursor(ed.buffer()).line as usize;
-    if let Some(ref mut session) = vim_mut(ed).insert_session {
-        session.before_rope = before_rope;
-        session.row_min = row;
-        session.row_max = row;
-    }
 }
 /// Word-boundary undo break for [`hjkl_engine::UndoGranularity::Word`].
 ///

@@ -58,14 +58,8 @@ fn after_insert_mutation<H: Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
 /// change content (arrows, Home/End, PageUp/Down). Skips the dirty mark.
 fn after_insert_motion<H: Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     let (row, _) = ed.cursor();
-    let vim = crate::vim_state::vim_mut(ed);
-    vim.widen_insert_row(row);
-    // The recorded backspaces only line up with a start the cursor has not
-    // moved away from; after a move, `.` falls back to the text diff.
-    if let Some(session) = vim.insert_session.as_mut() {
-        session.backspaces = 0;
-        session.deleted = 0;
-    }
+    crate::vim_state::vim_mut(ed).widen_insert_row(row);
+    crate::vim::restart_insert_at_cursor(ed);
     ed.ensure_cursor_in_scrolloff();
 }
 

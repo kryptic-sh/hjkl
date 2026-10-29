@@ -67,6 +67,11 @@ and this project adheres to
 
 ### Fixed
 
+- A cursor move inside Insert mode (`<Left>`, `<Home>`, `<Down>`, …) ends the
+  change typed so far, as vim's `start_arrow` does: `.` then repeats only what
+  was typed after the move, as an `i` at the cursor and without the insert's
+  count, or the change before the move when nothing was typed after it.
+  `Ax<Left>y<Esc>j.` inserts `y` before the cursor, where hjkl appended it.
 - Auto-wrap while typing in the middle of a line keeps the text after the cursor
   as it was: the break drops only the blanks before the cursor, and the
   character being typed (not the one under the cursor) decides where the break

@@ -53,6 +53,10 @@ pub struct VimState {
     /// cursor on any other cursor change, so a clear flag means the next
     /// vertical key takes its want from the cursor (`step_insert`).
     pub insert_want_current: bool,
+    /// True while the insert session was restarted by a cursor move (vim's
+    /// `start_arrow`): what is typed from there is a fresh `i`, and if
+    /// nothing is, `.` keeps the change finished at the move.
+    pub insert_restarted: bool,
     /// Most-recent mutating command for `.` dot-repeat.
     pub last_change: Option<LastChange>,
     /// Captured on insert-mode entry: count, buffer snapshot, entry kind.
