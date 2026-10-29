@@ -627,6 +627,9 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
             });
         }
         InsertReason::AfterChange => {
+            if !vim(ed).replaying {
+                vim_mut(ed).change_insert_keys = has_deletion.then_some(keys).flatten();
+            }
             if let Some(
                 LastChange::OpMotion { inserted: ins, .. }
                 | LastChange::OpTextObj { inserted: ins, .. }

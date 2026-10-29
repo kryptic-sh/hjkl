@@ -67,6 +67,13 @@ and this project adheres to
 
 ### Fixed
 
+- `.` after a change (`c{motion}`, `cc`, `s`, Visual `c`, `cgn`, ...) whose
+  insert used `<BS>`, `<C-w>`, `<C-u>` or `<Del>` types those keys again, as
+  vim's redo does, instead of the net text: after `cwq<Del><Esc>`, `.` deletes
+  the character after the change too, and `<BS>` past the change's start acts
+  again.
+- `.` after `cgn` with no match left does nothing, as in vim, instead of typing
+  the change's text at the cursor.
 - `'autoindent'` builds the new line's indent from the previous line's width
   under the current `expandtab` / `tabstop`, as vim does, instead of copying its
   tabs and spaces: with `expandtab`, `o` on a tab-indented line indents with

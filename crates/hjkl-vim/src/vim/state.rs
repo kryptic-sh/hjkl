@@ -70,6 +70,10 @@ pub struct VimState {
     /// a key is typed there. Leaving the row unused (`<Esc>`, `<CR>`, a cursor
     /// move, `<C-o>`) removes that indent again.
     pub auto_indent_row: Option<usize>,
+    /// The keys of the last change's insert (`c`, `s`, `cc`, Visual `c`, ...)
+    /// when it used `<BS>`, `<C-w>`, `<C-u>` or `<Del>`: `.` types them
+    /// again, as vim's redo does, where the net text would lose them.
+    pub change_insert_keys: Option<Vec<hjkl_vim_types::InsertKey>>,
     /// Most-recent mutating command for `.` dot-repeat.
     pub last_change: Option<LastChange>,
     /// Captured on insert-mode entry: count, buffer snapshot, entry kind.

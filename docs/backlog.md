@@ -1251,11 +1251,14 @@ Seen while measuring, not `gq`:
   - A mouse click in Insert mode restarts the insert like `<Left>` does
     (`mouse_click_doc_bridge` calls `restart_insert_at_cursor`, 2026-10-29), but
     no test drives a click, and nvim was not measured for one.
-  - `.` replays an insert key by key (`LastChange::InsertKeys`) only for an `i`
-    / `a` / `I` / `A` that used `<C-w>`, `<C-u>` or `<Del>`, and only while
-    every key of the session is one `InsertKey` names; a session that also used
+  - `.` replays an insert key by key only when it used `<C-w>`, `<C-u>` or
+    `<Del>` (`LastChange::InsertKeys` for `i` / `a` / `I` / `A`; for a change,
+    `<BS>` too, through `VimState::change_insert_keys`), and only while every
+    key of the session is one `InsertKey` names; a session that also used
     `<C-r>`, `<C-a>`, `<C-t>`, completion or a pasted chunk falls back to the
-    net text. `o` / `O` and change inserts always use the net text.
+    net text. `o` / `O` and `C` always use the net text; the shapes measured for
+    them (`oab cd<C-w>x`, `Oab cd<C-w>x`, `oab<C-u>x`, `Cab<C-w>q`) already
+    match nvim.
   - **hjkl's `softtabstop` defaults to 4; nvim's is 0, with `smarttab` on.** The
     two agree on `<BS>` inside an indent (`shiftwidth=4` there), but after text
     nvim deletes one space where hjkl deletes back to a stop of 4 (`A<BS>x<Esc>`

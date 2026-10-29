@@ -10,6 +10,13 @@ patch bumps.
 
 ### Fixed
 
+- `.` after a change (`c{motion}`, `cc`, `s`, Visual `c`, `cgn`, ...) whose
+  insert used `<BS>`, `<C-w>`, `<C-u>` or `<Del>` types those keys again, as
+  vim's redo does, instead of the net text: after `cwq<Del><Esc>`, `.` deletes
+  the character after the change too, and `<BS>` past the change's start acts
+  again.
+- `.` after `cgn` with no match left does nothing, as in vim, instead of typing
+  the change's text at the cursor.
 - In the app, a macro holds what is typed into the `/` / `?` search, `:` command
   line and `!` filter prompts, and `@q` types it there again. Only the key that
   opened the prompt was recorded, so `qq/g<CR>q@q` left the search prompt open

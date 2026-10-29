@@ -24,6 +24,25 @@ pub fn replay_insert_and_finish<H: hjkl_engine::types::Host>(
     if !text.is_empty() {
         vim_mut(ed).auto_indent_row = None;
     }
+    finish_replayed_insert(ed);
+}
+/// Replay the insert a change typed: its keys when it deleted with them
+/// (`change_insert_keys`), its text otherwise.
+fn replay_change_insert<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    text: &str,
+) {
+    match vim(ed).change_insert_keys.clone() {
+        Some(keys) => {
+            replay_insert_keys(ed, &keys);
+            vim_mut(ed).auto_indent_row = None;
+            finish_replayed_insert(ed);
+        }
+        None => replay_insert_and_finish(ed, text),
+    }
+}
+/// Leave a replayed insert as the typed `<Esc>` did.
+fn finish_replayed_insert<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
     drop_unused_auto_indent(ed);
     if vim_mut(ed).insert_session.take().is_some() {
         if ed.cursor().1 > 0 {
@@ -78,7 +97,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             );
             apply_op_with_motion(ed, op, &motion, total);
             if let Some(text) = inserted {
-                replay_insert_and_finish(ed, &text);
+                replay_change_insert(ed, &text);
             }
         }
         LastChange::OpTextObj {
@@ -93,7 +112,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             vim_mut(ed).pending_register = register;
             apply_op_with_text_object(ed, op, obj, inner, 1);
             if let Some(text) = inserted {
-                replay_insert_and_finish(ed, &text);
+                replay_change_insert(ed, &text);
             }
         }
         LastChange::OpMark {
@@ -106,7 +125,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             vim_mut(ed).pending_register = register;
             apply_op_mark(ed, op, ch, linewise);
             if let Some(text) = inserted {
-                replay_insert_and_finish(ed, &text);
+                replay_change_insert(ed, &text);
             }
         }
         LastChange::LineOp {
@@ -123,7 +142,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             vim_mut(ed).pending_register = register;
             execute_line_op(ed, op, total);
             if let Some(text) = inserted {
-                replay_insert_and_finish(ed, &text);
+                replay_change_insert(ed, &text);
             }
         }
         LastChange::CharDel {
@@ -168,8 +187,12 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
         } => {
             vim_mut(ed).pending_register = register;
             gn_operate(ed, Some(op), forward, 1);
-            if let Some(text) = inserted {
-                replay_insert_and_finish(ed, &text);
+            // With no match left `cgn` fails and its insert never starts, as
+            // in vim: only a change that opened Insert mode types again.
+            if let Some(text) = inserted
+                && vim(ed).insert_session.is_some()
+            {
+                replay_change_insert(ed, &text);
             }
         }
         LastChange::VisualOp {
@@ -199,7 +222,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                     let fit = last_content_row(ed).saturating_sub(ed.cursor().0) + 1;
                     execute_line_op_from_cursor(ed, op, lines.min(fit), levels);
                     if let Some(text) = inserted {
-                        replay_insert_and_finish(ed, &text);
+                        replay_change_insert(ed, &text);
                     }
                 }
                 VisualExtent::Char { lines, width } => {
@@ -212,7 +235,7 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
                     let (from, to, kind) = charwise_visual_range(ed, (r, c), end);
                     run_operator_over_range(ed, op, from, to, kind);
                     if let Some(text) = inserted {
-                        replay_insert_and_finish(ed, &text);
+                        replay_change_insert(ed, &text);
                     }
                 }
                 // B-block (`:h v_.` for blocks): reconstruct a same-SIZE

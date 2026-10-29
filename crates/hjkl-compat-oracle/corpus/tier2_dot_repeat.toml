@@ -1230,3 +1230,99 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "dot_change_replays_delete_key"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "cwq<Del><Esc>j."
+expected_buffer = "abqdef\nghqjkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_change_replays_ctrl_w_past_start"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "cw<C-w>x<Esc>j."
+expected_buffer = "x defx jkl mno\npqr stu\nxyz w\n"
+expected_cursor = [0, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_change_replays_backspace_past_start"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "cw<BS>x<Esc>j."
+expected_buffer = "ax def\nx jkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_change_replays_two_backspaces"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "wcw<BS><BS>x<Esc>jw."
+expected_buffer = "abx\nghx mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_visual_change_replays_delete_key"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "vlcq<Del><Esc>j."
+expected_buffer = "abqef\nghqkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_change_text_object_replays_delete_key"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "ciwq<Del><Esc>j."
+expected_buffer = "qdef\nqjkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_cgn_without_match_does_nothing"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "/def<CR>cgnq<Esc>j0."
+expected_buffer = "abc q\nghi jkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "dot_cgn_without_match_types_nothing"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "/def<CR>cgnq<Esc>."
+expected_buffer = "abc q\nghi jkl mno\npqr stu\nxyz w\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
