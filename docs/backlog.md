@@ -1166,15 +1166,11 @@ pattern identified so far:
 Seen while measuring, not `gq`:
 
 - **The sentence port (`VimBuf`'s sentence methods in `hjkl-vim`
-  `text_object.rs`; the buffer reader itself is `vim_buf.rs`) leaves two pieces
-  of vim out.** `startPS` recognises an empty line or a form feed, not the nroff
-  `'paragraphs'` / `'sections'` macros (`.PP`, `.SH`, …). And Visual-line keeps
-  only its anchor's row (`visual_line_anchor`), where vim keeps a position, so
-  `current_sent`'s Visual path (`sentence_visual`) runs for Visual-line only
-  while the selection is one row; a taller `V` selection still takes hjkl's own
-  path, and so does a Visual block taller than one row (a one-row block goes
-  through `sentence_visual` since 2026-10-27). Unmeasured how far those differ
-  from vim.
+  `text_object.rs`; the buffer reader itself is `vim_buf.rs`) leaves the nroff
+  macros out.** `startPS` recognises an empty line or a form feed, not the nroff
+  `'paragraphs'` / `'sections'` macros (`.PP`, `.SH`, …). A Visual block taller
+  than one row still takes hjkl's own sentence path, not `sentence_visual`;
+  unmeasured how far that differs from vim.
 - **A counted `_` past the end does nothing; a test pins it. Needs a decision.**
   vim's `_` (`nv_lineop`) moves with `cursor_down`, which fails only on the last
   line and otherwise stops there: measured in nvim 0.12.5, `10_` on `"a\nb"` @
@@ -1268,15 +1264,24 @@ Seen while measuring, not `gq`:
 - **Visual bracket objects: what `bracket_visual` does not cover (2026-10-28).**
   The port of vim's `current_block` (`hjkl-vim` `text_object.rs`) runs for
   charwise and block selections bigger than one cell. Visual-line still takes
-  hjkl's own path, because `visual_line_anchor` keeps only a row where vim keeps
-  a position (the same gap as the sentence objects, §1.16). The one-cell case
-  still goes through `bracket_text_object`, whose forward fallback ignores
-  nesting where the Visual port's `find_open_after` counts it; unmeasured
-  whether they differ. The tag objects follow `current_tagblock` through
-  `tag_visual` for a selection bigger than one cell or a count; an uncounted
-  `vit` on one cell still takes `tag_text_object`, and on an empty pair
-  (`<a><b></b></a>` @ (0, 4)) `vitd` deletes `><` where nvim 0.12.5 deletes the
-  `<` after the open tag. vim's `in_html_tag` cursor adjustment was not ported.
+  hjkl's own path, though `visual_anchor` now holds its full position (measured
+  `Vjib` / `Vkib` / `Vjab` shapes match nvim 0.12.5). The one-cell case still
+  goes through `bracket_text_object`, whose forward fallback ignores nesting
+  where the Visual port's `find_open_after` counts it; unmeasured whether they
+  differ. The tag objects follow `current_tagblock` through `tag_visual` for a
+  selection bigger than one cell or a count; an uncounted `vit` on one cell
+  still takes `tag_text_object`, and on an empty pair (`<a><b></b></a>` @ (0,
+  4)) `vitd` deletes `><` where nvim 0.12.5 deletes the `<` after the open tag.
+  vim's `in_html_tag` cursor adjustment was not ported. In `V`, `it` on one row
+  (`"<a>\n  <b>x</b>\n</a>"` @ (1, 5), `Vitd`) deletes `x` where nvim deletes
+  `<b>x</b>` charwise: vim widens a one-cell inner object equal to the selection
+  to `at`, which the `V` path does not reach.
+- **Block `O` across a tab leaves the cursor one column early after an
+  operator.** `<C-v>jlOld` on `"a\tbc\nxyzwvut"` @ (0, 1) matches nvim's buffer
+  and register, but the cursor ends on (0, 1) where nvim's is on (0, 2). The `O`
+  arm in `normal.rs` trades the corners as display columns and lands on the
+  character covering each; vim may keep the anchor's virtual column inside the
+  tab. Not investigated further.
 - **`.` after `!{motion}` and `gc{motion}` is not recorded (2026-10-28).**
   `op_is_change` (`hjkl-vim` `visual.rs`) now admits every operator vim redoes
   except these two. Neither was measured: the oracle's nvim has no

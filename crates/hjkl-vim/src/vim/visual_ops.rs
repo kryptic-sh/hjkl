@@ -56,7 +56,10 @@ fn include_closed_folds_in_selection<H: hjkl_engine::types::Host>(
     }
     match mode {
         Mode::Visual => vim_mut(ed).visual_anchor = new_anchor,
-        Mode::VisualLine => vim_mut(ed).visual_line_anchor = new_anchor.0,
+        Mode::VisualLine => {
+            vim_mut(ed).visual_anchor = new_anchor;
+            vim_mut(ed).visual_line_anchor = new_anchor.0;
+        }
         _ => {
             vim_mut(ed).block_anchor = new_anchor;
             vim_mut(ed).block_vcol = new_cursor.1;

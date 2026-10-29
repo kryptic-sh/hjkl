@@ -164,6 +164,7 @@ pub fn step_normal<H: Host>(
         }
         Key::Char('V') if !input.ctrl && ed.fsm_mode() == FsmMode::Normal => {
             let (row, _) = ed.cursor();
+            ed.set_visual_anchor(ed.cursor());
             ed.set_visual_line_anchor(row);
             ed.set_mode(VimMode::VisualLine);
             // B5: `[count]V` extends the initial selection to `count`
@@ -179,15 +180,36 @@ pub fn step_normal<H: Host>(
             }
             return true;
         }
+        // Switching between the Visual modes keeps the selection's start,
+        // as vim's single `VIsual` position does.
         Key::Char('v') if !input.ctrl && ed.fsm_mode() == FsmMode::VisualLine => {
-            ed.set_visual_anchor(ed.cursor());
             ed.set_mode(VimMode::Visual);
             return true;
         }
         Key::Char('V') if !input.ctrl && ed.fsm_mode() == FsmMode::Visual => {
-            let (row, _) = ed.cursor();
-            ed.set_visual_line_anchor(row);
+            ed.set_visual_line_anchor(ed.visual_anchor().0);
             ed.set_mode(VimMode::VisualLine);
+            return true;
+        }
+        Key::Char('v' | 'V') if !input.ctrl && ed.fsm_mode() == FsmMode::VisualBlock => {
+            let anchor = ed.block_anchor();
+            ed.set_visual_anchor(anchor);
+            ed.set_visual_line_anchor(anchor.0);
+            ed.set_mode(if input.key == Key::Char('v') {
+                VimMode::Visual
+            } else {
+                VimMode::VisualLine
+            });
+            return true;
+        }
+        Key::Char('v')
+            if input.ctrl && matches!(ed.fsm_mode(), FsmMode::Visual | FsmMode::VisualLine) =>
+        {
+            let cur = ed.cursor();
+            ed.set_block_anchor(ed.visual_anchor());
+            ed.set_block_vcol(cur.1);
+            ed.set_block_to_eol(false);
+            ed.set_mode(VimMode::VisualBlock);
             return true;
         }
         Key::Char('v') if input.ctrl && ed.fsm_mode() == FsmMode::Normal => {
@@ -203,9 +225,33 @@ pub fn step_normal<H: Host>(
             ed.set_mode(VimMode::Normal);
             return true;
         }
+        // `O` in a block — the other end of the same rows (`:h v_b_O`): the
+        // cursor and anchor trade columns and keep their rows.
+        Key::Char('O') if !input.ctrl && ed.fsm_mode() == FsmMode::VisualBlock => {
+            let cur = ed.cursor();
+            let anchor = ed.block_anchor();
+            let tabstop = ed.settings().tabstop;
+            let line =
+                |row| hjkl_engine::buf_helpers::buf_line(ed.buffer(), row).unwrap_or_default();
+            // The columns trade as display columns: each lands on the
+            // character covering the other's column in its own row.
+            let (cur_line, anchor_line) = (line(cur.0), line(anchor.0));
+            let cur_v = hjkl_buffer::char_col_to_visual_col(&cur_line, cur.1, tabstop);
+            let anchor_v = hjkl_buffer::char_col_to_visual_col(&anchor_line, anchor.1, tabstop);
+            let landing = |line: &str, vcol| {
+                hjkl_buffer::visual_col_to_char_col(line, vcol, tabstop)
+                    .min(line.chars().count().saturating_sub(1))
+            };
+            let new_cur = landing(&cur_line, anchor_v);
+            ed.set_block_anchor((anchor.0, landing(&anchor_line, cur_v)));
+            ed.set_block_vcol(new_cur);
+            ed.jump_cursor(cur.0, new_cur);
+            return true;
+        }
         // `o` in visual modes — swap anchor and cursor so the user
-        // can extend the other end of the selection.
-        Key::Char('o') if !input.ctrl => match ed.fsm_mode() {
+        // can extend the other end of the selection. Outside a block `O`
+        // does the same (`:h v_O`).
+        Key::Char('o' | 'O') if !input.ctrl => match ed.fsm_mode() {
             FsmMode::Visual => {
                 let cur = ed.cursor();
                 let anchor = ed.visual_anchor();
@@ -214,13 +260,14 @@ pub fn step_normal<H: Host>(
                 return true;
             }
             FsmMode::VisualLine => {
-                let cur_row = ed.cursor().0;
-                let anchor_row = ed.visual_line_anchor();
-                ed.set_visual_line_anchor(cur_row);
-                ed.jump_cursor(anchor_row, 0);
+                let cur = ed.cursor();
+                let anchor = ed.visual_anchor();
+                ed.set_visual_anchor(cur);
+                ed.set_visual_line_anchor(cur.0);
+                ed.jump_cursor(anchor.0, anchor.1);
                 return true;
             }
-            FsmMode::VisualBlock => {
+            FsmMode::VisualBlock if input.key == Key::Char('o') => {
                 let cur = ed.cursor();
                 let anchor = ed.block_anchor();
                 ed.set_block_anchor(cur);

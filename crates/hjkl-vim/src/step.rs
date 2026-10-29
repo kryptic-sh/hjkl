@@ -80,7 +80,7 @@ pub fn begin_step<H: hjkl_engine::Host>(
         }),
         Mode::VisualLine => Some(crate::vim::LastVisual {
             mode: Mode::VisualLine,
-            anchor: (crate::vim_state::vim(ed).visual_line_anchor, 0),
+            anchor: crate::vim_state::vim(ed).visual_anchor,
             cursor: ed.cursor(),
             block_vcol: 0,
         }),

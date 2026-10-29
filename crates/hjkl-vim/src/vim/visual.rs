@@ -49,6 +49,7 @@ pub fn enter_visual_line_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
     let (row, _) = ed.cursor();
+    vim_mut(ed).visual_anchor = ed.cursor();
     vim_mut(ed).visual_line_anchor = row;
     set_vim_mode_bridge(ed, Mode::VisualLine);
 }
@@ -126,7 +127,7 @@ pub fn exit_visual_to_normal_bridge<H: hjkl_engine::types::Host>(
         }),
         Mode::VisualLine => Some(LastVisual {
             mode: Mode::VisualLine,
-            anchor: (vim(ed).visual_line_anchor, 0),
+            anchor: vim(ed).visual_anchor,
             cursor: ed.cursor(),
             block_vcol: 0,
         }),
@@ -170,10 +171,11 @@ pub fn visual_o_toggle_bridge<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_
             ed.jump_cursor(anchor.0, anchor.1);
         }
         Mode::VisualLine => {
-            let cur_row = ed.cursor().0;
-            let anchor_row = vim(ed).visual_line_anchor;
-            vim_mut(ed).visual_line_anchor = cur_row;
-            ed.jump_cursor(anchor_row, 0);
+            let cur = ed.cursor();
+            let anchor = vim(ed).visual_anchor;
+            vim_mut(ed).visual_anchor = cur;
+            vim_mut(ed).visual_line_anchor = cur.0;
+            ed.jump_cursor(anchor.0, anchor.1);
         }
         Mode::VisualBlock => {
             let cur = ed.cursor();
@@ -198,6 +200,7 @@ pub fn reenter_last_visual_bridge<H: hjkl_engine::types::Host>(
                 set_vim_mode_bridge(ed, Mode::Visual);
             }
             Mode::VisualLine => {
+                vim_mut(ed).visual_anchor = snap.anchor;
                 vim_mut(ed).visual_line_anchor = snap.anchor.0;
                 set_vim_mode_bridge(ed, Mode::VisualLine);
             }

@@ -67,6 +67,15 @@ and this project adheres to
 
 ### Fixed
 
+- Visual mode keeps one anchor position across `v`, `V` and `<C-v>`, as vim's
+  `VIsual` does. Switching between them kept only the cursor (`vkV` dropped the
+  anchor's row, `Vj<C-v>` stayed linewise), `o` in `V` and `gv` landed in column
+  0, and `iw` / `aw` / `is` / `as` on a selection of several lines in `V` acted
+  on the cursor's line alone. `iw` / `aw` now make a `V` selection charwise from
+  the anchor, and `is` / `as` extend it, as in vim.
+- `O` in Visual mode: in `v` and `V` it swaps the ends like `o`, in a block it
+  moves to the other corner on the same rows (`:h v_O`, `:h v_b_O`). It did
+  nothing.
 - `it` / `at` in Visual mode follow vim's `current_tagblock`: repeating them
   grows the selection to the enclosing tag pair (`vitit` takes the whole
   `<b>…</b>`, `vatat` the pair around it), a count walks outward (`v2it`), and a

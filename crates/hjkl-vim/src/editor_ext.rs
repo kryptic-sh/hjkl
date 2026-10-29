@@ -1580,7 +1580,13 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         crate::vim_state::vim(self).visual_line_anchor
     }
     fn set_visual_line_anchor(&mut self, row: usize) {
-        crate::vim_state::vim_mut(self).visual_line_anchor = row;
+        let state = crate::vim_state::vim_mut(self);
+        state.visual_line_anchor = row;
+        // `visual_anchor` holds the full position in every Visual mode; a
+        // row it is not on starts at that row's first column.
+        if state.visual_anchor.0 != row {
+            state.visual_anchor = (row, 0);
+        }
     }
     fn block_anchor(&self) -> (usize, usize) {
         crate::vim_state::vim(self).block_anchor
@@ -1861,15 +1867,11 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         }
         // Sentences and words follow vim's `current_sent` / `current_word`
         // with Visual active: select the object charwise, or extend the
-        // selection keeping anchor and mode. Visual-line keeps only its
-        // anchor's row, so it takes this path only while the selection is one
-        // row (anchor and cursor coincide).
+        // selection keeping anchor and mode (a word object makes a
+        // Visual-line selection charwise, as vim's `current_word` does).
         let ported_anchor = match crate::vim_state::vim(self).mode {
-            FsmMode::Visual => Some(crate::vim_state::vim(self).visual_anchor),
-            FsmMode::VisualLine
-                if crate::vim_state::vim(self).visual_line_anchor == self.cursor().0 =>
-            {
-                Some(self.cursor())
+            FsmMode::Visual | FsmMode::VisualLine => {
+                Some(crate::vim_state::vim(self).visual_anchor)
             }
             _ => None,
         };
@@ -1891,6 +1893,12 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         if let Some(picked) = ported {
             match picked {
                 Some(crate::vim::VisualTextObject::Extend((row, col))) => {
+                    if matches!(obj, TextObject::Word { .. })
+                        && crate::vim_state::vim(self).mode == FsmMode::VisualLine
+                    {
+                        crate::vim_state::vim_mut(self).mode = FsmMode::Visual;
+                        crate::vim_state::vim_mut(self).current_mode = VimMode::Visual;
+                    }
                     self.jump_cursor(row, col);
                     if crate::vim_state::vim(self).mode == FsmMode::VisualBlock {
                         crate::vim_state::vim_mut(self).block_vcol = col;
@@ -2111,6 +2119,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             }
             match kind {
                 RangeKind::Linewise => {
+                    crate::vim_state::vim_mut(self).visual_anchor = start;
                     crate::vim_state::vim_mut(self).visual_line_anchor = start.0;
                     crate::vim_state::vim_mut(self).mode = FsmMode::VisualLine;
                     crate::vim_state::vim_mut(self).current_mode = VimMode::VisualLine;
@@ -2128,6 +2137,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         }
         match kind {
             RangeKind::Linewise => {
+                crate::vim_state::vim_mut(self).visual_anchor = start;
                 crate::vim_state::vim_mut(self).visual_line_anchor = start.0;
                 crate::vim_state::vim_mut(self).mode = FsmMode::VisualLine;
                 crate::vim_state::vim_mut(self).current_mode = VimMode::VisualLine;
