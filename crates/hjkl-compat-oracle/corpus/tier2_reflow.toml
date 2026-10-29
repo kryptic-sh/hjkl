@@ -524,3 +524,68 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 textwidth = 10
+
+[[cases]]
+name = "autowrap_mid_line_keeps_text_after"
+initial_buffer = "one two\nthree four\nfive six\n"
+initial_cursor = [0, 0]
+keys = "cwab cd ef<Esc>a ab<Esc>"
+expected_buffer = "ab cd ef\nab two\nthree four\nfive six\n"
+expected_cursor = [1, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_mid_line_keeps_space_after"
+initial_buffer = "one two\nthree four\nfive six\n"
+initial_cursor = [0, 0]
+keys = "cwab cd ef<Esc>aab cd ef<Esc>"
+expected_buffer = "ab cd efab\ncd ef two\nthree four\nfive six\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_dot_change_word_rewraps"
+initial_buffer = "one two\nthree four\nfive six\n"
+initial_cursor = [0, 0]
+keys = "cwab cd ef<Esc>jw."
+expected_buffer = "ab cd ef two\nthree four\nab cd ef six\n"
+expected_cursor = [2, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_dot_substitute_rewraps"
+initial_buffer = "one two\nthree four\nfive six\n"
+initial_cursor = [0, 0]
+keys = "lsab cd ef<Esc>j$."
+expected_buffer = "oab cd efe two\nthree\nfouab cd\nef\nfive six\n"
+expected_cursor = [3, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_dot_change_to_eol_rewraps"
+initial_buffer = "one two\nthree four\nfive six\n"
+initial_cursor = [0, 0]
+keys = "Cab cd ef gh<Esc>jw."
+expected_buffer = "ab cd ef\ngh\nthree ab\ncd ef gh\nfive six\n"
+expected_cursor = [3, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10

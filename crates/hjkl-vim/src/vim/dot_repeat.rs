@@ -9,20 +9,16 @@ use crate::vim_state::{vim, vim_mut};
 use hjkl_engine::Editor;
 use hjkl_engine::buf_helpers::{buf_cursor_pos, buf_line, buf_line_chars, buf_set_cursor_rc};
 
-/// Replay-side helper: insert `text` at the cursor through the
-/// edit funnel, then leave insert mode (the original change ended
-/// with Esc, so the dot-repeat must end the same way — including
-/// the cursor step-back vim does on Esc-from-insert).
+/// Replay-side helper: type `text` at the cursor, then leave insert mode
+/// (the original change ended with Esc, so the dot-repeat must end the same
+/// way — including the cursor step-back vim does on Esc-from-insert).
 pub fn replay_insert_and_finish<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     text: &str,
 ) {
-    use hjkl_buffer::{Edit, Position};
-    let cursor = ed.cursor();
-    ed.mutate_edit(Edit::InsertStr {
-        at: Position::new(cursor.0, cursor.1),
-        text: text.to_string(),
-    });
+    // Typed again, so it wraps at 'textwidth' where its own text reaches
+    // the margin, as vim's redo does.
+    type_text(ed, text);
     if vim_mut(ed).insert_session.take().is_some() {
         if ed.cursor().1 > 0 {
             hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
@@ -281,17 +277,21 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             remember_cursor_column(ed);
         }
         LastChange::DeleteToEol { inserted, register } => {
-            use hjkl_buffer::{Edit, Position};
             ed.push_undo();
             vim_mut(ed).pending_register = register;
             delete_to_eol(ed);
             if let Some(text) = inserted {
-                let cursor = ed.cursor();
-                ed.mutate_edit(Edit::InsertStr {
-                    at: Position::new(cursor.0, cursor.1),
-                    text,
-                });
+                // `C`: retype the text, then step back onto its last
+                // character as the typed `<Esc>` did.
+                type_text(ed, &text);
+                if ed.cursor().1 > 0 {
+                    hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
+                }
+            } else {
+                // `D` lands on the new last character, as the live one does.
+                hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
             }
+            remember_cursor_column(ed);
         }
         LastChange::OpenLine {
             above,

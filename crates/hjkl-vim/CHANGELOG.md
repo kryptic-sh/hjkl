@@ -57,6 +57,16 @@ and this project adheres to
 
 ### Fixed
 
+- Auto-wrap while typing in the middle of a line keeps the text after the cursor
+  as it was: the break drops only the blanks before the cursor, and the
+  character being typed (not the one under the cursor) decides where the break
+  goes, as in vim's `internal_format`.
+- `.` after `o` / `O` and after a change (`cw`, `C`, `s`, `cc`, ...) retypes the
+  text through the auto-wrap check, so it wraps where its own text reaches the
+  margin instead of replaying the first insert's line breaks.
+- `.` after `C` leaves the cursor on the last typed character and after `D` on
+  the new last character, as the live commands do; `D` also sets curswant there,
+  so a `j` after it aims for that column.
 - Block `I` whose left edge cuts a tab on the top row types before the tab and
   copies the text to no other row, as vim's `op_insert` does.
 - `.` after a Visual-block change rebuilds the block with the same display width

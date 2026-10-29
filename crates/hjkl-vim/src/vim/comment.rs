@@ -236,7 +236,11 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
     };
     let inserted = if matches!(session.reason, InsertReason::Replace) {
         changed_run(&before, &after)
-    } else if let InsertReason::Enter(_) = session.reason
+    } else if (matches!(session.reason, InsertReason::Enter(_))
+        || matches!(
+            session.reason,
+            InsertReason::AfterChange | InsertReason::DeleteToEol | InsertReason::Open { .. }
+        ) && session.backspaces == 0)
         && let Some(typed) = typed_at_start(&session, ed)
     {
         typed

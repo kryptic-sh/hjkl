@@ -100,12 +100,15 @@ fn move_to_closed_fold_edge<H: hjkl_engine::types::Host>(
 /// records for `.` would include the opened line break and the indent or
 /// comment leader that came with it, which the repeat adds again itself.
 fn restart_insert_snapshot<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
-    let row = ed.cursor().0;
+    let (row, col) = ed.cursor();
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
     if let Some(session) = vim_mut(ed).insert_session.as_mut() {
         session.before_rope = rope;
         session.row_min = row;
         session.row_max = row;
+        // The typed text starts on the opened line, after its leader.
+        session.start_row = row;
+        session.start_col = col;
     }
 }
 /// `O` — open a new line above the cursor and begin Insert.
@@ -299,6 +302,9 @@ pub fn delete_to_eol_bridge<H: hjkl_engine::types::Host>(
         ed.push_undo();
         delete_to_eol(ed);
         hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
+        // `D` is `d$`, and an operator sets curswant where it leaves the
+        // cursor: a `j` after it aims for that column.
+        remember_cursor_column(ed);
     } else {
         apply_op_with_motion(ed, Operator::Delete, &Motion::LineEnd, count);
     }

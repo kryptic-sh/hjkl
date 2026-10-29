@@ -67,11 +67,18 @@ pub fn auto_wrap_before<H: hjkl_engine::types::Host>(
             return;
         }
         let margin = hjkl_buffer::visual_col_to_char_col(&line, textwidth, tabstop);
-        // Walk back from the cursor for the start of a blank run.
+        // Walk back from the cursor for the start of a blank run. At the
+        // cursor itself vim looks at the character being typed, not the one
+        // already there.
         let mut found = None;
         let mut at = col;
         loop {
-            if chars.get(at).copied().is_some_and(is_blank) {
+            let here = if at == col {
+                Some(ch)
+            } else {
+                chars.get(at).copied()
+            };
+            if here.is_some_and(is_blank) {
                 let mut start = at;
                 while start > 0 && is_blank(chars[start - 1]) {
                     start -= 1;
@@ -93,8 +100,10 @@ pub fn auto_wrap_before<H: hjkl_engine::types::Host>(
         let Some(start) = found else {
             return;
         };
+        // The break drops the blanks up to the cursor; text after the cursor,
+        // a blank it starts with included, moves down unchanged.
         let mut end = start;
-        while end < chars.len() && is_blank(chars[end]) {
+        while end < col && is_blank(chars[end]) {
             end += 1;
         }
         let indent: String = if ed.settings().autoindent {

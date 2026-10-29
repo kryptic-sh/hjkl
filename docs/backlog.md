@@ -1160,10 +1160,6 @@ pattern identified so far:
     `textwidth` is set. hjkl's defaults are `ro` and `textwidth` 79, so adding
     `t` would wrap every user's typing at 79. The oracle driver adds `t`
     whenever a case sets `textwidth`, to match nvim.
-  - `.` retypes through the wrap check only for `i` / `a` / `I` / `A` (and a
-    count, and `".p`). The `o` / `O` and change (`cw`, `C`, `s`, ...) replays
-    still insert the recorded text with the first insert's line breaks in it;
-    unmeasured how often that differs from nvim.
   - Comment leaders (`c`), `'formatexpr'`, and the `l` / `b` / `1` / `2` flags.
 
 Seen while measuring, not `gq`:
