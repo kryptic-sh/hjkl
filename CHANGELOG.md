@@ -8,8 +8,21 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-10-29
+
 ### Added
 
+- Insert-mode auto-wrap under `formatoptions` `t` and `c`: typed text wraps at
+  `textwidth` at the last blank before the margin, and a comment line wraps with
+  its leader on the new line (`# `, `// `, `*` after `/*`, …). The new
+  `comments` option (`:set comments`) holds the leaders, defaulting to nvim's.
+  hjkl's default `formatoptions` stays `ro`, so nothing wraps until `t` / `c`
+  are set.
+- `formatoptions` `j`: joining comment lines with `J` / `gJ` drops the joined
+  line's leader.
+- The read-only registers `".` and `"/` can be named in Normal and Visual mode:
+  `".p` types the last inserted text again, `"/p` pastes the last search
+  pattern, and a delete, yank or change naming either is refused with `E354`.
 - `[count]zF` folds `[count]` lines from the cursor (one without a count),
   stopping at the last line, and leaves the cursor on the first non-blank of the
   fold's top line, as in vim. In Visual mode `zF` folds the selection, as `zf`
@@ -17,6 +30,15 @@ patch bumps.
 
 ### Changed (BREAKING)
 
+- `LastChange::InsertAt` has a `backspaces` field and `InsertSession` has
+  `backspaces`, `deleted` and `wraps` (with the new `InsertWrap`); the block
+  widths in `VisualExtent::Block`, `VisualBlockInsert` and `VisualBlockReplace`
+  count display columns. Code building these must add the fields.
+- `Selection::Block`'s columns are display columns (the same as character
+  columns on a line without tabs or wide characters); the new
+  `Selection::row_span_on` turns them into a row's characters.
+- `VimEditorExt::indent_block` shifts at the block's left edge instead of
+  indenting whole lines.
 - `hjkl-vim-types`' `Pending`, `Motion`, `LastChange` and `InsertEntry`,
   `hjkl-vim`'s `PendingState` and `VimState`, and `hjkl-engine`'s `SearchBank`
   are `#[non_exhaustive]`. A match over those enums outside their crate needs a
@@ -40,6 +62,26 @@ patch bumps.
 
 ### Fixed
 
+- Visual-block operators work in display columns, as vim's do: `d`, `y`, `c`,
+  the case operators, `r`, `I`, `A`, `>`, `<`, block paste, the highlight and
+  `.` take the same screen columns on every row over a line with a tab or a wide
+  character. A tab cut by the block's edge keeps or gives its cells as spaces,
+  as in vim.
+- `.` after an insert replays backspaces typed past its start, retypes text that
+  wrapped at `textwidth` so it wraps again, and reads a typed line break from
+  where the insert started (`iab<CR>c<Esc>j.`).
+- A count typed before a register prefix is kept, and one after it multiplies
+  it: `2"ap` pastes twice and `2"a3p` six times.
+- `gj` / `gk` step from a closed fold's edge, and an operator over a counted
+  `gj` / `gk` that runs out of lines is cancelled (`d9gj`).
+- A macro recorded through the FSM keeps the keys typed into the search prompt,
+  so `qq/g<CR>q@q` replays the search.
+- Undo and redo set curswant where they land, and undo of a linewise change over
+  several lines (`c2j`, `2cc`) lands on its second line, as in vim.
+- Marks follow a charwise delete across rows, `J` and `gJ` the way vim's join
+  moves them, where they were dropped or left at their old columns.
+- `.` after `C` and `D` leaves the cursor on the last character, and `D` sets
+  curswant there.
 - Bracket text objects in Visual mode follow vim: `<C-v>i[` / `<C-v>a{` select
   the block charwise (they did nothing), `vji(` takes the block around the
   selection's start instead of its end, `vi[i[` grows to the enclosing block,
@@ -6631,7 +6673,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.43.4...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.44.0...HEAD
+[0.44.0]: https://github.com/kryptic-sh/hjkl/compare/v0.43.4...v0.44.0
 [0.43.4]: https://github.com/kryptic-sh/hjkl/compare/v0.43.3...v0.43.4
 [0.43.3]: https://github.com/kryptic-sh/hjkl/compare/v0.43.2...v0.43.3
 [0.43.2]: https://github.com/kryptic-sh/hjkl/compare/v0.43.1...v0.43.2
