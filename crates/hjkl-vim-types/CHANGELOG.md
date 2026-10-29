@@ -10,6 +10,9 @@ and this project adheres to
 
 ### Changed (BREAKING)
 
+- The `cols` of `VisualExtent::Block`, `LastChange::VisualBlockInsert` and
+  `LastChange::VisualBlockReplace` count display columns, not characters, so a
+  block repeated with `.` over a tab keeps its screen width.
 - `Pending`, `Motion`, `LastChange` and `InsertEntry` are `#[non_exhaustive]`: a
   `match` over them outside this crate needs a wildcard arm. From here on a new
   variant on any of them is not a breaking change. Building with

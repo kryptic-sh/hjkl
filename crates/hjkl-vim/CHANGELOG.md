@@ -57,6 +57,10 @@ and this project adheres to
 
 ### Fixed
 
+- `.` after a Visual-block change rebuilds the block with the same display width
+  from the cursor's display column, as vim's `v_.` does, instead of the same
+  number of characters: after `<C-v>ld` over a tab, `j.` deletes the same screen
+  width on the next line.
 - `buffer_selection` gives a Visual block's corners in display columns
   (`block_corners`), so the highlight matches the cells the block operators act
   on over a line with a tab; `selection_highlight` converts them to the top and

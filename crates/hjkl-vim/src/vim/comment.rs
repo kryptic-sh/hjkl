@@ -306,12 +306,15 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
             // A one-row block lands on its left edge too.
             buf_set_cursor_rc(ed.buffer_mut(), top, cursor_col);
             // Record for dot-repeat (`:h v_.`, block `I`/`A`). `cols` is the
-            // block width `A` appends past: `cursor_col == left + 1` and
-            // (non-ragged) `col == right + 1`, so `cols == col + 1 -
-            // cursor_col`. `I` doesn't need a width (it re-inserts at the
-            // cursor column), so its `cols` is a placeholder.
+            // display width `A` appends past, from the block's left edge
+            // (`cursor_col - 1`) to the column it appended at (`col`), which
+            // `.` adds to the cursor's. `I` doesn't need a width (it
+            // re-inserts at the cursor column), so its `cols` is a placeholder.
             let cols = if pad {
-                (col + 1).saturating_sub(cursor_col)
+                let top_line = buf_line(ed.buffer(), top).unwrap_or_default();
+                let tabstop = ed.settings().tabstop;
+                let vcol = |c: usize| hjkl_buffer::char_col_to_visual_col(&top_line, c, tabstop);
+                vcol(col).saturating_sub(vcol(cursor_col.saturating_sub(1)))
             } else {
                 1
             };

@@ -434,10 +434,17 @@ fn charwise_extent(top: (usize, usize), bot: (usize, usize)) -> VisualExtent {
 /// from an ordered inclusive rectangle. `rows`/`cols` are the height/width;
 /// `to_eol` carries the `$`-ragged flag so replay re-runs to each row's own
 /// EOL (`:h v_b_$`).
-fn block_extent(top: usize, bot: usize, left: usize, right: usize, to_eol: bool) -> VisualExtent {
+/// What `.` needs to rebuild a block: its rows and its width in display
+/// columns (vim's `v_.` replays the same screen size from the cursor).
+fn block_extent(top: usize, bot: usize, cols: BlockCols) -> VisualExtent {
+    let to_eol = cols.right == usize::MAX;
     VisualExtent::Block {
         rows: bot - top + 1,
-        cols: right + 1 - left,
+        cols: if to_eol {
+            1
+        } else {
+            cols.right + 1 - cols.left
+        },
         to_eol,
     }
 }
@@ -579,21 +586,17 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
     // Same capture as `apply_visual_operator` — this is also reached
     // directly from `range_ops`, so it cannot rely on that one.
     let register = vim(ed).pending_register;
-    let (top, bot, left, right) = block_bounds(ed);
-    let (_, _, cols) = block_rect(ed);
+    // The block in display columns; a `$` block (`:h v_b_$`) has
+    // `cols.right == usize::MAX`, so every row runs to its own end.
+    let (top, bot, cols) = block_rect(ed);
     let left_col =
         block_start_col(ed, top, cols).min(buf_line_chars(ed.buffer(), top).saturating_sub(1));
     if matches!(op, Operator::Delete | Operator::Yank | Operator::Change)
         && refuse_read_only_register(ed)
     {
-        refused_operator(ed, op, (top, left), RangeKind::Exclusive);
+        refused_operator(ed, op, (top, left_col), RangeKind::Exclusive);
         return;
     }
-    // `$` (`:h v_b_$`) makes the block ragged: every row resolves its own
-    // right edge to its own EOL instead of the fixed `right` above. Read
-    // once here and thread through — vim's `$`-block affects every
-    // operator, not just `d`/`y`/`A`.
-    let to_eol = vim(ed).block_to_eol;
     // Snapshot the block text for yank / clipboard.
     let yank = block_yank(ed, top, bot, cols);
     let block_width = block_register_width(&yank, cols);
@@ -627,26 +630,14 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
             // rather than past it (`<C-v>jjD` on "abcd…" → (0,0), not (0,1)).
             let line_len = buf_line_chars(ed.buffer(), top);
             ed.jump_cursor(top, left_col.min(line_len.saturating_sub(1)));
-            record_visual_last_change(
-                ed,
-                op,
-                block_extent(top, bot, left, right, to_eol),
-                register,
-                1,
-            );
+            record_visual_last_change(ed, op, block_extent(top, bot, cols), register, 1);
         }
         Operator::Change => {
             ed.push_undo();
             // Record BEFORE entering insert: the `BlockChange` finish site
             // (comment.rs) patches `inserted` into this entry on Esc, exactly
             // as `AfterChange` does for charwise/linewise `c`.
-            record_visual_last_change(
-                ed,
-                op,
-                block_extent(top, bot, left, right, to_eol),
-                register,
-                1,
-            );
+            record_visual_last_change(ed, op, block_extent(top, bot, cols), register, 1);
             // `c`'s replicated typed text always lands at the LEFT column
             // on every row (`:h v_b_c`) — unaffected by a ragged right
             // edge, so only the delete side needs `to_eol`.
@@ -677,13 +668,7 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
             transform_block_case(ed, op, top, bot, cols);
             vim_mut(ed).mode = Mode::Normal;
             ed.jump_cursor(top, left_col);
-            record_visual_last_change(
-                ed,
-                op,
-                block_extent(top, bot, left, right, to_eol),
-                register,
-                1,
-            );
+            record_visual_last_change(ed, op, block_extent(top, bot, cols), register, 1);
         }
         Operator::Indent | Operator::Outdent => {
             // VisualBlock `>` / `<` shifts at the BLOCK's left column, not at
@@ -699,13 +684,7 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
                 outdent_block(ed, top, bot, cols, count.max(1));
             }
             vim_mut(ed).mode = Mode::Normal;
-            record_visual_last_change(
-                ed,
-                op,
-                block_extent(top, bot, left, right, to_eol),
-                register,
-                count.max(1),
-            );
+            record_visual_last_change(ed, op, block_extent(top, bot, cols), register, count.max(1));
         }
         Operator::Fold => unreachable!("Visual zf takes its own path"),
         Operator::Reflow => {
@@ -795,24 +774,24 @@ pub fn block_start_col<H: hjkl_engine::types::Host>(
     let line = buf_line(ed.buffer(), row).unwrap_or_default();
     block_row(&line, cols, ed.settings().tabstop, true).start
 }
-/// The block's display columns for a rectangle given in character columns
-/// on its top row, as dot-repeat describes one.
+/// The display columns of a block `width` cells wide whose left edge is the
+/// character at `col` on `row`, as dot-repeat rebuilds one at the cursor
+/// (vim's `v_.` keeps the block's screen size).
 pub fn block_cols_at<H: hjkl_engine::types::Host>(
     ed: &Editor<hjkl_buffer::View, H>,
     row: usize,
-    left: usize,
-    right: usize,
+    col: usize,
+    width: usize,
     to_eol: bool,
 ) -> BlockCols {
     let line = buf_line(ed.buffer(), row).unwrap_or_default();
-    let tabstop = ed.settings().tabstop;
-    let first = |col: usize| hjkl_buffer::char_col_to_visual_col(&line, col, tabstop);
+    let left = hjkl_buffer::char_col_to_visual_col(&line, col, ed.settings().tabstop);
     BlockCols {
-        left: first(left),
+        left,
         right: if to_eol {
             usize::MAX
         } else {
-            first(right + 1).max(first(right) + 1) - 1
+            left + width.max(1) - 1
         },
     }
 }
@@ -1035,12 +1014,11 @@ pub fn replay_block_visual_op<H: hjkl_engine::types::Host>(
 ) {
     let (top, left) = ed.cursor();
     let bot = top + rows.saturating_sub(1);
-    let right = left + cols.saturating_sub(1);
     // `d` / `c` yank the deleted rectangle into the unnamed register just
     // like the live block delete (`:h v_.` re-does the whole change,
     // register included) — verified against nvim (`.` after a block `d`
     // leaves the SECOND rectangle in `"`, not the first).
-    let cols = block_cols_at(ed, top, left, right, to_eol);
+    let cols = block_cols_at(ed, top, left, cols, to_eol);
     let record_delete = |ed: &mut Editor<hjkl_buffer::View, H>| {
         let yank = block_yank(ed, top, bot, cols);
         if !yank.is_empty() {
@@ -1077,6 +1055,11 @@ pub fn replay_block_visual_op<H: hjkl_engine::types::Host>(
         Operator::Change => {
             ed.push_undo();
             record_delete(ed);
+            // As the live block `c`: the text goes where the block's left
+            // edge falls on the top row, past any spaces a cut tab left.
+            let top_line = buf_line(ed.buffer(), top).unwrap_or_default();
+            let top_span = block_row(&top_line, cols, ed.settings().tabstop, true);
+            let left = top_span.start + top_span.startspaces;
             delete_block_contents(ed, top, bot, cols);
             let text = inserted.unwrap_or_default();
             if text.is_empty() {
@@ -1115,8 +1098,7 @@ pub fn replay_block_replace<H: hjkl_engine::types::Host>(
 ) {
     let (top, left) = ed.cursor();
     let bot = top + rows.saturating_sub(1);
-    let right = left + cols.saturating_sub(1);
-    let cols = block_cols_at(ed, top, left, right, to_eol);
+    let cols = block_cols_at(ed, top, left, cols, to_eol);
     block_replace_bounds(ed, ch, top, bot, cols);
 }
 /// Dot-repeat replay of block `I` / `A` — re-insert `text` at the block's
@@ -1139,23 +1121,30 @@ pub fn replay_block_insert<H: hjkl_engine::types::Host>(
     ed.sync_buffer_content_from_textarea();
     // `A` appends `cols` columns past the left edge (or each row's own EOL
     // when ragged); `I` inserts at the left edge.
+    // `cols` is the block's display width: `A` appends at the display column
+    // just past it, padding a short top row to reach it.
+    let line_len = buf_line_chars(ed.buffer(), top);
     let top_col = if append {
         if to_eol {
-            buf_line_chars(ed.buffer(), top)
+            line_len
         } else {
-            left + cols
+            let line = buf_line(ed.buffer(), top).unwrap_or_default();
+            let tabstop = ed.settings().tabstop;
+            let target = hjkl_buffer::char_col_to_visual_col(&line, left, tabstop) + cols;
+            match char_at_vcol(&line, target, tabstop) {
+                Ok(c) => c,
+                Err(short) => {
+                    ed.mutate_edit(Edit::InsertStr {
+                        at: Position::new(top, line_len),
+                        text: " ".repeat(short),
+                    });
+                    line_len + short
+                }
+            }
         }
     } else {
         left
     };
-    let line_len = buf_line_chars(ed.buffer(), top);
-    if append && top_col > line_len {
-        let pad_str: String = std::iter::repeat_n(' ', top_col - line_len).collect();
-        ed.mutate_edit(Edit::InsertStr {
-            at: Position::new(top, line_len),
-            text: pad_str,
-        });
-    }
     // Top row (cursor row) always reaches `top_col` — `left` for `I`, or a
     // just-padded column for `A`.
     ed.mutate_edit(Edit::InsertStr {

@@ -378,10 +378,6 @@ now take display columns through `block_rect` / `block_row` (`hjkl-vim`
   traced: on `"\tx\nabcdefgh"` @ (1,1), `<C-v>klIX<Esc>` gives
   `"X\tx\nabcdefgh"` in nvim 0.12.5 (it inserts before the tab and skips row 1)
   and `"X\tx\nXabcdefgh"` in hjkl.
-- `.` after a block `I` / `A` / `d` / `c` / case op rebuilds the block from the
-  recorded character width (`LastChange::VisualBlockInsert` / `VisualOp`'s
-  `extent`), not a display width: `<C-v>AX<Esc>j.` over `\tab` puts `X` at
-  `"xyzX"` where nvim gives `"xyz   X"`.
 - `<C-v>1MU` on `(hello)` (hjkl does nothing, nvim uppercases the line) is the
   separate Visual-block `H` / `M` / `L` decision below.
 
