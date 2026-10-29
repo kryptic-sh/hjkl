@@ -1207,8 +1207,14 @@ pub struct Settings {
     /// Format options flags (subset of vim's `formatoptions`).
     /// `r` — auto-continue line comments on `<Enter>` in insert mode.
     /// `o` — auto-continue line comments on `o` / `O` in normal mode.
-    /// Default: both on (`"ro"`).
+    /// `t` — wrap typed text at `textwidth`.
+    /// `c` — wrap typed comment text at `textwidth`, repeating the leader.
+    /// Default `"ro"`.
     pub formatoptions: String,
+    /// Comment leaders in vim's `comments` format (`{flags}:{string},…`),
+    /// which auto-wrap under `formatoptions` `c` repeats on the new line.
+    /// Matches vim's `:set comments` / `:set com`. Default nvim's.
+    pub comments: String,
     /// Active filetype (language name) for the current buffer.
     /// Used by comment-continuation and future language-aware features.
     /// Matches vim's `:set filetype` / `:set ft`. Default `""` (plain text).
@@ -1401,6 +1407,7 @@ impl Default for Settings {
             foldmarker: "{{{,}}}".to_string(),
             colorcolumn: String::new(),
             formatoptions: "ro".to_string(),
+            comments: "s1:/*,mb:*,ex:*/,://,b:#,:%,:XCOMM,n:>,fb:-".to_string(),
             filetype: String::new(),
             commentstring: String::new(),
             makeprg: "cargo check".to_string(),
@@ -1494,6 +1501,7 @@ impl Settings {
             foldmarker: self.foldmarker.clone(),
             colorcolumn: self.colorcolumn.clone(),
             formatoptions: self.formatoptions.clone(),
+            comments: self.comments.clone(),
             filetype: self.filetype.clone(),
             scrolloff: self.scrolloff,
             sidescrolloff: self.sidescrolloff,
@@ -1561,6 +1569,7 @@ impl Settings {
         self.foldmarker.clone_from(&opts.foldmarker);
         self.colorcolumn.clone_from(&opts.colorcolumn);
         self.formatoptions.clone_from(&opts.formatoptions);
+        self.comments.clone_from(&opts.comments);
         self.filetype.clone_from(&opts.filetype);
         self.scrolloff = opts.scrolloff;
         self.sidescrolloff = opts.sidescrolloff;
@@ -1625,6 +1634,7 @@ fn settings_from_options(o: &crate::types::Options) -> Settings {
         foldmarker: o.foldmarker.clone(),
         colorcolumn: o.colorcolumn.clone(),
         formatoptions: o.formatoptions.clone(),
+        comments: o.comments.clone(),
         filetype: o.filetype.clone(),
         commentstring: String::new(),
         makeprg: "cargo check".to_string(),
@@ -7401,6 +7411,7 @@ mod options_conversion_tests {
             foldmarker: "<<<,>>>".to_string(),
             colorcolumn: "80,120".to_string(),
             formatoptions: "r".to_string(),
+            comments: ":#".to_string(),
             filetype: "rust".to_string(),
             scrolloff: 11,
             sidescrolloff: 13,

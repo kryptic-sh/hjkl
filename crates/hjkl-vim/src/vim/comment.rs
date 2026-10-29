@@ -50,6 +50,69 @@ pub fn detect_comment_on_line(lang: &str, line: &str) -> Option<(String, &'stati
     }
     None
 }
+/// The comment leader `line` starts with under vim's `'comments'` format
+/// (`{flags}:{string},…`), as vim's `get_leader_len` finds it: its length in
+/// characters (indent, comment string and the blanks after it), and the
+/// leader a line broken out of this one starts with. `None` when the line is
+/// not a comment. Supported flags: `b` (a blank must follow), `n` (nested,
+/// `> >`), `f` (first line only: the next line gets spaces), and `s` / `m` of
+/// a three-part comment (`s1:/*,mb:*` continues `/* x` with ` * `). An `e`
+/// part, a comment's end, starts nothing.
+pub fn comment_leader(line: &str, comments: &str, tabstop: usize) -> Option<(usize, String)> {
+    let parts: Vec<(&str, &str)> = comments
+        .split(',')
+        .filter_map(|part| part.split_once(':'))
+        .filter(|(_, string)| !string.is_empty())
+        .collect();
+    let chars: Vec<char> = line.chars().collect();
+    let is_blank = |c: char| c == ' ' || c == '\t';
+    let skip_blanks = |mut i: usize| {
+        while i < chars.len() && is_blank(chars[i]) {
+            i += 1;
+        }
+        i
+    };
+    let mut i = skip_blanks(0);
+    let mut found: Option<(usize, usize, usize)> = None; // (part, string start, end)
+    loop {
+        let rest: String = chars[i..].iter().collect();
+        let Some((index, (flags, string))) =
+            parts.iter().enumerate().find(|(_, (flags, string))| {
+                !flags.contains('e')
+                    && rest.starts_with(string)
+                    && (!flags.contains('b')
+                        || rest[string.len()..].chars().next().is_none_or(is_blank))
+            })
+        else {
+            break;
+        };
+        let start = i;
+        i = skip_blanks(i + string.chars().count());
+        found = Some((index, start, i));
+        if !flags.contains('n') {
+            break;
+        }
+    }
+    let (index, start, end) = found?;
+    let (flags, string) = parts[index];
+    let leader: String = chars[..end].iter().collect();
+    let next = if flags.contains('f') {
+        " ".repeat(hjkl_buffer::char_col_to_visual_col(&leader, end, tabstop))
+    } else if flags.contains('s') {
+        // A three-part comment continues with its middle part, offset by the
+        // digit in the start part's flags, and the blanks after the start.
+        let offset: usize = flags.chars().find_map(|c| c.to_digit(10)).unwrap_or(0) as usize;
+        let middle = parts[index + 1..]
+            .iter()
+            .find(|(f, _)| f.contains('m'))
+            .map_or("", |(_, m)| m);
+        let blanks: String = chars[start + string.chars().count()..end].iter().collect();
+        format!("{}{middle}{blanks}", " ".repeat(offset))
+    } else {
+        leader
+    };
+    Some((end, next))
+}
 /// Given the current `row` in `buffer` and the active `settings`, return the
 /// string to prepend on the new line when comment-continuation fires.
 ///

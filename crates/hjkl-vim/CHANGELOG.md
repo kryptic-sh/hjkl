@@ -22,6 +22,11 @@ and this project adheres to
 
 ### Added
 
+- Auto-wrap of comments under `formatoptions` `c`: a comment line (by the
+  `comments` option, vim's `get_leader_len`, through `comment_leader`) wraps at
+  `textwidth` and the new line starts with its leader — `# `, `// `, nested
+  `> > `, spaces for an `f` leader such as `- `, and `*` after `/*`. Text lines
+  still wrap only under `t`.
 - Insert-mode auto-wrap under `'formatoptions'` `t` (vim's `internal_format`): a
   non-blank character typed where it would end past `'textwidth'` breaks the
   line at the last blank run starting at or before the margin, dropping that run

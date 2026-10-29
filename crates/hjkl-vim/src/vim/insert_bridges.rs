@@ -52,7 +52,7 @@ pub fn auto_wrap_before<H: hjkl_engine::types::Host>(
 ) {
     use hjkl_buffer::{Edit, Position};
     let textwidth = ed.settings().textwidth;
-    if textwidth == 0 || ch.is_whitespace() || !ed.settings().formatoptions.contains('t') {
+    if textwidth == 0 || ch.is_whitespace() {
         return;
     }
     let tabstop = ed.settings().tabstop;
@@ -66,6 +66,14 @@ pub fn auto_wrap_before<H: hjkl_engine::types::Host>(
         if hjkl_buffer::char_col_to_visual_col(&typed, col + 1, tabstop) <= textwidth {
             return;
         }
+        // A comment line wraps under `c`, carrying its leader to the new
+        // line; any other line under `t`.
+        let leader = comment_leader(&line, &ed.settings().comments, tabstop);
+        let fo = &ed.settings().formatoptions;
+        if !fo.contains(if leader.is_some() { 'c' } else { 't' }) {
+            return;
+        }
+        let leader_len = leader.as_ref().map_or(0, |(len, _)| *len);
         let margin = hjkl_buffer::visual_col_to_char_col(&line, textwidth, tabstop);
         // Walk back from the cursor for the start of a blank run. At the
         // cursor itself vim looks at the character being typed, not the one
@@ -83,7 +91,8 @@ pub fn auto_wrap_before<H: hjkl_engine::types::Host>(
                 while start > 0 && is_blank(chars[start - 1]) {
                     start -= 1;
                 }
-                if start == 0 {
+                // Never break inside the comment leader, nor before text.
+                if start == 0 || start < leader_len {
                     break;
                 }
                 found = Some(start);
@@ -106,10 +115,12 @@ pub fn auto_wrap_before<H: hjkl_engine::types::Host>(
         while end < col && is_blank(chars[end]) {
             end += 1;
         }
-        let indent: String = if ed.settings().autoindent {
-            chars.iter().take_while(|&&c| is_blank(c)).collect()
-        } else {
-            String::new()
+        let indent: String = match &leader {
+            Some((_, next)) => next.clone(),
+            None if ed.settings().autoindent => {
+                chars.iter().take_while(|&&c| is_blank(c)).collect()
+            }
+            None => String::new(),
         };
         let new_col = indent.chars().count() + col.saturating_sub(end);
         let at = hjkl_engine::types::Query::rope(ed.buffer()).line_to_char(row) + start;

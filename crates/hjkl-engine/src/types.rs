@@ -277,8 +277,13 @@ pub struct Options {
     /// Format-options flags (subset of vim's `formatoptions` / `fo`).
     /// `r` — auto-continue line comments on `<Enter>` in insert mode.
     /// `o` — auto-continue line comments on `o` / `O` in normal mode.
-    /// Default `"ro"` (both on).
+    /// `t` — wrap typed text at `textwidth`.
+    /// `c` — wrap typed comment text at `textwidth`, repeating the leader.
+    /// Default `"ro"`.
     pub formatoptions: String,
+    /// Comment leaders, in vim's `comments` / `com` format
+    /// (`{flags}:{string},…`), for auto-wrapping comments. Default nvim's.
+    pub comments: String,
     /// Active filetype for the current buffer (e.g. `"rust"`, `"python"`).
     /// Matches vim's `:set filetype` / `:set ft`. Default `""` (plain text).
     pub filetype: String,
@@ -486,6 +491,7 @@ impl Default for Options {
             foldmarker: "{{{,}}}".to_string(),
             colorcolumn: String::new(),
             formatoptions: "ro".to_string(),
+            comments: "s1:/*,mb:*,ex:*/,://,b:#,:%,:XCOMM,n:>,fb:-".to_string(),
             filetype: String::new(),
             scrolloff: 5,
             sidescrolloff: 0,
@@ -717,6 +723,7 @@ impl Options {
             "foldlevelstart" | "fls" => set_u32!(foldlevelstart),
             "colorcolumn" | "cc" => set_string!(colorcolumn),
             "formatoptions" | "fo" => set_string!(formatoptions),
+            "comments" | "com" => set_string!(comments),
             "filetype" | "ft" => set_string!(filetype),
             "scrolloff" | "so" => {
                 self.scrolloff = match val {
@@ -862,6 +869,7 @@ impl Options {
             "foldlevelstart" | "fls" => OptionValue::Int(self.foldlevelstart as i64),
             "colorcolumn" | "cc" => OptionValue::String(self.colorcolumn.clone()),
             "formatoptions" | "fo" => OptionValue::String(self.formatoptions.clone()),
+            "comments" | "com" => OptionValue::String(self.comments.clone()),
             "filetype" | "ft" => OptionValue::String(self.filetype.clone()),
             "scrolloff" | "so" => OptionValue::Int(self.scrolloff as i64),
             "sidescrolloff" | "siso" => OptionValue::Int(self.sidescrolloff as i64),

@@ -589,3 +589,120 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 textwidth = 10
+
+[[cases]]
+name = "autowrap_comment_hash_repeats_leader"
+initial_buffer = "# aa\n"
+initial_cursor = [0, 0]
+keys = "A bb cc dd ee ff gg<Esc>"
+expected_buffer = "# aa bb cc\n# dd ee ff\n# gg\n"
+expected_cursor = [2, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_comment_slashes_repeats_leader"
+initial_buffer = "// aa\n"
+initial_cursor = [0, 0]
+keys = "A bb cc dd ee ff gg<Esc>"
+expected_buffer = "// aa bb\n// cc dd\n// ee ff\n// gg\n"
+expected_cursor = [3, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_comment_indented_leader"
+initial_buffer = "  # aa\n"
+initial_cursor = [0, 0]
+keys = "A bb cc dd<Esc>"
+expected_buffer = "  # aa bb\n  # cc dd\n"
+expected_cursor = [1, 8]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_comment_nested_quote"
+initial_buffer = "> > aa\n"
+initial_cursor = [0, 0]
+keys = "A bb cc dd ee<Esc>"
+expected_buffer = "> > aa bb\n> > cc dd\n> > ee\n"
+expected_cursor = [2, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_comment_first_line_only_dash"
+initial_buffer = "- aa\n"
+initial_cursor = [0, 0]
+keys = "A bb cc dd ee ff gg<Esc>"
+expected_buffer = "- aa bb cc\n  dd ee ff\ngg\n"
+expected_cursor = [2, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_comment_three_part_start"
+initial_buffer = "/* aa\n"
+initial_cursor = [0, 0]
+keys = "A bb cc dd ee<Esc>"
+expected_buffer = "/* aa bb\n * cc dd\n * ee\n"
+expected_cursor = [2, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_comment_three_part_middle"
+initial_buffer = " * aa\n"
+initial_cursor = [0, 0]
+keys = "A bb cc dd ee<Esc>"
+expected_buffer = " * aa bb\n * cc dd\n * ee\n"
+expected_cursor = [2, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_comment_needs_blank_after_hash"
+initial_buffer = "#aa\n"
+initial_cursor = [0, 0]
+keys = "A bb cc dd ee<Esc>"
+expected_buffer = "#aa bb cc\ndd ee\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10
+
+[[cases]]
+name = "autowrap_comment_dot_repeat"
+initial_buffer = "# aa\n# xx\n"
+initial_cursor = [0, 0]
+keys = "A bb cc dd<Esc>jj."
+expected_buffer = "# aa bb cc\n# dd\n# xx bb cc\n# dd\n"
+expected_cursor = [3, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+textwidth = 10

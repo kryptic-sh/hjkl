@@ -98,6 +98,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `Settings::comments` / `Options::comments` (`:set comments` / `:set com`):
+  comment leaders in vim's format, default nvim's
+  (`s1:/*,mb:*,ex:*/,://,b:#,:%,:XCOMM,n:>,fb:-`), which auto-wrap under
+  `formatoptions` `c` repeats on the new line.
 - `Editor::join_row_marks(from, to, moved)`: move the marks and jumps on one row
   onto another, mapping their columns, for a command that joins lines itself
   (`J`).

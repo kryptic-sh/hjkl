@@ -1160,7 +1160,11 @@ pattern identified so far:
     `textwidth` is set. hjkl's defaults are `ro` and `textwidth` 79, so adding
     `t` would wrap every user's typing at 79. The oracle driver adds `t`
     whenever a case sets `textwidth`, to match nvim.
-  - Comment leaders (`c`), `'formatexpr'`, and the `l` / `b` / `1` / `2` flags.
+  - `'formatexpr'` and the `l` / `b` / `1` / `2` / `w` flags are not ported;
+    none is in nvim's default `formatoptions` (`tcqj`). Comment leaders under
+    `c` follow `comments` since 2026-10-29, but only for wrapping: hjkl's `r` /
+    `o` continuation still uses its per-filetype prefix list
+    (`comment_prefixes_for_lang`).
 
 Seen while measuring, not `gq`:
 
