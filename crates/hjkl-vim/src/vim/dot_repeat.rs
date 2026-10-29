@@ -378,25 +378,29 @@ fn move_to_insert_entry<H: hjkl_engine::types::Host>(
         _ => {}
     }
 }
-/// Type `keys` at the cursor through the Insert-mode bridges, in a session
-/// of their own so `<C-w>` / `<C-u>` stop at its start as the typed ones did.
-fn replay_insert_keys<H: hjkl_engine::types::Host>(
+/// Type `keys` at the cursor through the Insert-mode bridges. Outside an
+/// insert they run in a session of their own, so `<C-w>` / `<C-u>` stop at
+/// its start as the typed ones did; inside one (`<C-r>.`) they join it.
+pub fn replay_insert_keys<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     keys: &[InsertKey],
 ) {
+    let own_session = vim(ed).insert_session.is_none();
     let (row, col) = ed.cursor();
-    vim_mut(ed).insert_session = Some(InsertSession {
-        count: 1,
-        row_min: row,
-        row_max: row,
-        before_rope: hjkl_engine::types::Query::rope(ed.buffer()),
-        reason: InsertReason::ReplayOnly,
-        start_row: row,
-        start_col: col,
-        backspaces: 0,
-        deleted: 0,
-        wraps: Vec::new(),
-    });
+    if own_session {
+        vim_mut(ed).insert_session = Some(InsertSession {
+            count: 1,
+            row_min: row,
+            row_max: row,
+            before_rope: hjkl_engine::types::Query::rope(ed.buffer()),
+            reason: InsertReason::ReplayOnly,
+            start_row: row,
+            start_col: col,
+            backspaces: 0,
+            deleted: 0,
+            wraps: Vec::new(),
+        });
+    }
     for &key in keys {
         match key {
             InsertKey::Char(ch) => {
@@ -424,7 +428,9 @@ fn replay_insert_keys<H: hjkl_engine::types::Host>(
             _ => {}
         }
     }
-    vim_mut(ed).insert_session = None;
+    if own_session {
+        vim_mut(ed).insert_session = None;
+    }
 }
 /// The substring of `after` that differs from `before` (first-diff to
 /// last-diff). Unlike [`extract_inserted`] this works for equal-length or

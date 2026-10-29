@@ -875,6 +875,18 @@ fn paste_source<H: hjkl_engine::types::Host>(
         ),
     })
 }
+/// Type the `".` register at the cursor: its keys when the insert deleted
+/// something (backspaces, `<C-w>`, `<C-u>`, `<Del>` act again here, as vim's
+/// keys do), its text otherwise.
+pub fn type_last_insert<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    text: &str,
+) {
+    match vim(ed).last_insert_keys.clone() {
+        Some(keys) => replay_insert_keys(ed, &keys),
+        None => type_text(ed, text),
+    }
+}
 /// `".p` / `".P`: vim pastes the last inserted text by typing it again, as
 /// an `a` / `i` would, so the cursor ends on its last character even when
 /// the text spans lines, where a charwise paste would leave it at the start,
@@ -883,13 +895,16 @@ fn paste_as_typed<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     before: bool,
     text: &str,
+    count: usize,
 ) {
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
     if !before {
         hjkl_engine::motions::move_right_to_end(ed.buffer_mut(), 1);
     }
-    type_text(ed, text);
+    for _ in 0..count.max(1) {
+        type_last_insert(ed, text);
+    }
     if ed.cursor().1 > 0 {
         hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
     }
@@ -931,6 +946,12 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
     } else {
         None
     };
+    // `".` is typed again rather than put: its keys when the insert deleted
+    // something (its net text can then be empty), its text otherwise.
+    if selector == Some('.') && (vim(ed).last_insert_keys.is_some() || !yank.is_empty()) {
+        paste_as_typed(ed, before, &yank, count.min(MAX_COUNT));
+        return true;
+    }
     // Empty register: nothing to paste on any iteration — bail before the
     // loop instead of `continue`-spinning through a huge count prefix.
     if yank.is_empty() {
@@ -950,10 +971,6 @@ pub fn do_paste<H: hjkl_engine::types::Host>(
     if requested_bytes > MAX_PASTE_BYTES {
         reject_oversized_paste(ed, requested_bytes);
         return false;
-    }
-    if selector == Some('.') {
-        paste_as_typed(ed, before, &yank.repeat(count));
-        return true;
     }
     if blockwise {
         let Some(block_bytes) = block_width

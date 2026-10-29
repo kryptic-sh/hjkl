@@ -674,3 +674,99 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "reg_dot_paste_replays_backspaces"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "jA<BS><BS>x<Esc>\".p"
+expected_buffer = "abc def\nghi jkl x\npqr stu\nxyz w\n"
+expected_cursor = [1, 8]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_paste_replays_ctrl_w"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "A<C-w>x<Esc>j\".p"
+expected_buffer = "abc x\nghi xkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_paste_replays_delete"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "ix<Del><Esc>j\".P"
+expected_buffer = "abx def\nghx jkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_paste_backspace_joins_line"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "A<BS>x<Esc>j0\".P"
+expected_buffer = "abc dexxghi jkl mno\npqr stu\nxyz w\n"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_paste_counted_keys"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "A<C-w>x<Esc>j2\".p"
+expected_buffer = "abc x\nghi xkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_ctrl_r_replays_keys"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "A<C-w>x<Esc>ji<C-r>.<Esc>"
+expected_buffer = "abc x\nxjkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_ctrl_a_replays_keys"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "A<C-w>x<Esc>jA<C-a><Esc>"
+expected_buffer = "abc x\nghi jkl x\npqr stu\nxyz w\n"
+expected_cursor = [1, 8]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_paste_deletion_only"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "A<C-w><Esc>j\".p"
+expected_buffer = "abc \njkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

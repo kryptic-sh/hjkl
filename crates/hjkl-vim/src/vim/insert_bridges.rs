@@ -982,6 +982,11 @@ pub fn insert_ctrl_a_bridge<H: hjkl_engine::types::Host>(
     let Some(text) = vim(ed).last_insert_text.clone() else {
         return false;
     };
+    if vim(ed).last_insert_keys.is_some() {
+        ed.sync_buffer_content_from_textarea();
+        type_last_insert(ed, &text);
+        return true;
+    }
     if text.is_empty() {
         return false;
     }

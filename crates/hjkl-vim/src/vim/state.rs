@@ -61,6 +61,11 @@ pub struct VimState {
     /// the net text cannot stand for them (`<C-w>`, `<C-u>`, `<Del>`).
     /// `None` once a key outside [`hjkl_vim_types::InsertKey`] was used.
     pub insert_keys: Option<Vec<hjkl_vim_types::InsertKey>>,
+    /// The keys of the most recent insert when they include a deletion
+    /// (`<BS>`, `<C-w>`, `<C-u>`, `<Del>`): vim's `".` holds the keys, so
+    /// `".p`, `<C-r>.` and `<C-a>` type them again. `None` means the
+    /// insert's text (`last_insert_text`) stands for it.
+    pub last_insert_keys: Option<Vec<hjkl_vim_types::InsertKey>>,
     /// Most-recent mutating command for `.` dot-repeat.
     pub last_change: Option<LastChange>,
     /// Captured on insert-mode entry: count, buffer snapshot, entry kind.

@@ -67,6 +67,11 @@ and this project adheres to
 
 ### Fixed
 
+- The `".` register holds the last insert's keys when it deleted something
+  (`<BS>`, `<C-w>`, `<C-u>`, `<Del>`), as vim's does: `".p`, `<C-r>.` and
+  `<C-a>` type them again, so the deletions act at the new place too. Before,
+  `".p` after `A<C-w>x` pasted only `x`, or nothing when the insert deleted more
+  than it typed.
 - `<C-w>` in Insert mode stops at the insert's start before deleting further, as
   vim's does (`Ay<C-w>` takes only the `y`).
 - `.` after an `i` / `a` / `I` / `A` that used `<C-w>`, `<C-u>` or `<Del>` types

@@ -159,6 +159,13 @@ pub fn insert_register_text<H: hjkl_engine::types::Host>(
 ) {
     use hjkl_buffer::Edit;
     sync_clipboard_register_for(ed, Some(selector));
+    // `".` holds the last insert's keys when they delete something; they
+    // act again here, in this insert.
+    if selector == '.' && vim(ed).last_insert_keys.is_some() {
+        let text = vim(ed).last_insert_text.clone().unwrap_or_default();
+        type_last_insert(ed, &text);
+        return;
+    }
     // The read-only registers (`/`, `.`) have no slot in the register store.
     let text = match selector {
         '/' | '.' => match read_only_register_text(ed, selector) {

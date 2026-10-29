@@ -1291,10 +1291,6 @@ Seen while measuring, not `gq`:
   Not covered:
   - `"%` and `":` are still not accepted by `set_pending_register`; `"%` reads
     from the register store but cannot be named in Normal mode.
-  - vim's `".` holds the typed keys, backspaces included: after
-    `jA<BS><BS>x<Esc>`, `".p` replays the two backspaces in nvim, while hjkl's
-    `last_insert_text` keeps only the text, so it pastes `x`. `<C-r>.` and
-    `<C-a>` read the same field.
   - A refused Visual or `gn` operator records no `LastChange`, where vim's redo
     holds the refused command; a refused Normal-mode operator does record it,
     and `.` refuses again.

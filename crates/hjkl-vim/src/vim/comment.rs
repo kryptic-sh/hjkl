@@ -342,6 +342,18 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
         return;
     };
     let restarted = std::mem::take(&mut vim_mut(ed).insert_restarted);
+    let keys = vim_mut(ed).insert_keys.take();
+    let has_deletion = keys.as_ref().is_some_and(|keys| {
+        keys.iter().any(|k| {
+            matches!(
+                k,
+                hjkl_vim_types::InsertKey::Backspace
+                    | hjkl_vim_types::InsertKey::CtrlW
+                    | hjkl_vim_types::InsertKey::CtrlU
+                    | hjkl_vim_types::InsertKey::Delete
+            )
+        })
+    });
     let after_rope = hjkl_engine::types::Query::rope(ed.buffer());
     // Clamp both slices to their respective bounds — the buffer may have
     // grown (Enter splits rows) or shrunk (Backspace joins rows) during
@@ -389,9 +401,11 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
     } else {
         extract_inserted(&before, &after)
     };
-    // vim `".` register — text of the most recent insert.
-    if !vim(ed).replaying && !inserted.is_empty() {
+    // vim `".` register — the most recent insert: its text, and its keys
+    // when they delete something, since vim's `".` holds the keys.
+    if !vim(ed).replaying && (!inserted.is_empty() || has_deletion) {
         vim_mut(ed).last_insert_text = Some(inserted.clone());
+        vim_mut(ed).last_insert_keys = has_deletion.then(|| keys.clone()).flatten();
     }
     let open_line = matches!(session.reason, InsertReason::Open { .. });
     if session.count > 1 && !vim(ed).replaying {
@@ -541,7 +555,6 @@ pub fn finish_insert_session<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_b
     if restarted && inserted.is_empty() && backspaces == 0 {
         return;
     }
-    let keys = vim_mut(ed).insert_keys.take();
     match session.reason {
         // Keys the net text cannot stand for: `.` types them again.
         InsertReason::Enter(entry)
