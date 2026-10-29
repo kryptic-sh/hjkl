@@ -369,18 +369,6 @@ separate project, not a fix to the heuristic. Whether hjkl's `=` on a buffer
 with no filetype should copy C-indenting at all (the cases above are not C) is
 the owner's call; until then the fuzzer keeps reporting them.
 
-**What the display-column block port leaves out (2026-10-29).** Block operators
-now take display columns through `block_rect` / `block_row` (`hjkl-vim`
-`block.rs`, vim's `block_prep`). Not ported:
-
-- `I` / `A` split a tab the block's edge cuts into spaces on the rows they
-  replicate to, as vim does. A cut tab on the top row is not handled and was not
-  traced: on `"\tx\nabcdefgh"` @ (1,1), `<C-v>klIX<Esc>` gives
-  `"X\tx\nabcdefgh"` in nvim 0.12.5 (it inserts before the tab and skips row 1)
-  and `"X\tx\nXabcdefgh"` in hjkl.
-- `<C-v>1MU` on `(hello)` (hjkl does nothing, nvim uppercases the line) is the
-  separate Visual-block `H` / `M` / `L` decision below.
-
 **The `:s` curswant fix has no oracle case.** It is covered by two unit tests in
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
 keys. A corpus case would need the ex layer driven some other way.
@@ -1232,9 +1220,11 @@ Seen while measuring, not `gq`:
   Needs a decision.** In nvim 0.12.5, `<C-v>Ld` / `<C-v>Hd` @ (0,3) on
   `"ab cd\nef gh\nij"` take columns 0–3 (register `"ab c\nef g\nij"`), and
   `<C-v>L<` @ (0,3) on `"(n1)  a.'end', (xy)"` leaves the cursor on (0,0); hjkl
-  keeps column 3. Adding `ViewportTop` / `ViewportMiddle` / `ViewportBottom` to
-  `update_block_vcol`'s syncing arm (as `FileTop` / `FileBottom` now are) fixes
-  all three — but fails `blockwise_is_anchor_below_via_H_keeps_block_mode` and
+  keeps column 3. The fuzzer's `<C-v>1MU` on `(hello)` @ (0,6) (nvim uppercases
+  the line, hjkl does nothing) is the same `M` case. Adding `ViewportTop` /
+  `ViewportMiddle` / `ViewportBottom` to `update_block_vcol`'s syncing arm (as
+  `FileTop` / `FileBottom` now are) fixes all three — but fails
+  `blockwise_is_anchor_below_via_H_keeps_block_mode` and
   `blockwise_as_anchor_below_via_H_keeps_block_mode`
   (`tier2_block_textobj.toml`), which expect (4,5) / (4,4) for `<C-v>His` /
   `<C-v>Has` @ (25,6) on 30 lines of `"aaa. bbb."`. Live nvim 0.12.5 through

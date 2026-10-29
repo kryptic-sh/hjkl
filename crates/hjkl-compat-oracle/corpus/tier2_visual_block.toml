@@ -1586,3 +1586,39 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "block_insert_top_row_cut_tab_no_copy"
+initial_buffer = "\tx\nabcdefgh\n"
+initial_cursor = [1, 1]
+keys = "<C-v>klIX<Esc>"
+expected_buffer = "X\tx\nabcdefgh\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_insert_top_row_cut_tab_three_rows"
+initial_buffer = "\tx\nabcdefgh\nabcdefgh\n"
+initial_cursor = [2, 1]
+keys = "<C-v>kklIX<Esc>"
+expected_buffer = "X\tx\nabcdefgh\nabcdefgh\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_insert_top_row_whole_tab_copies"
+initial_buffer = "\tx\nabcdefgh\n"
+initial_cursor = [1, 1]
+keys = "<C-v>kIX<Esc>"
+expected_buffer = "X\tx\nXabcdefgh\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

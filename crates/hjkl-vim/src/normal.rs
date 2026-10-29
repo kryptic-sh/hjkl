@@ -309,8 +309,17 @@ pub fn step_normal<H: Host>(
                 return true;
             }
             Key::Char('I') => {
-                let (top, bot, cols) = crate::vim::block_rect(ed);
+                let (top, mut bot, cols) = crate::vim::block_rect(ed);
                 let left = crate::vim::block_start_col(ed, top, cols);
+                // When the block's left edge cuts a tab on the top row, vim's
+                // `op_insert` types before the tab and, finding nothing typed
+                // at the block's own column, copies it to no other row.
+                let top_line = ed.line(top).unwrap_or_default();
+                if crate::vim::block_row(&top_line, cols, ed.settings().tabstop, false).startspaces
+                    > 0
+                {
+                    bot = top;
+                }
                 // `[count]I` repeats the typed text `count` times on every
                 // row (`:h v_b_I` + count) — verified against nvim v0.12.4:
                 // `<C-v>jj2Ix` → "xx" on each row.

@@ -57,6 +57,8 @@ and this project adheres to
 
 ### Fixed
 
+- Block `I` whose left edge cuts a tab on the top row types before the tab and
+  copies the text to no other row, as vim's `op_insert` does.
 - `.` after a Visual-block change rebuilds the block with the same display width
   from the cursor's display column, as vim's `v_.` does, instead of the same
   number of characters: after `<C-v>ld` over a tab, `j.` deletes the same screen
