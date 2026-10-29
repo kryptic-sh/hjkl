@@ -66,6 +66,10 @@ pub struct VimState {
     /// `".p`, `<C-r>.` and `<C-a>` type them again. `None` means the
     /// insert's text (`last_insert_text`) stands for it.
     pub last_insert_keys: Option<Vec<hjkl_vim_types::InsertKey>>,
+    /// vim's `did_ai`: the row whose indent `'autoindent'` just put in, until
+    /// a key is typed there. Leaving the row unused (`<Esc>`, `<CR>`, a cursor
+    /// move, `<C-o>`) removes that indent again.
+    pub auto_indent_row: Option<usize>,
     /// Most-recent mutating command for `.` dot-repeat.
     pub last_change: Option<LastChange>,
     /// Captured on insert-mode entry: count, buffer snapshot, entry kind.

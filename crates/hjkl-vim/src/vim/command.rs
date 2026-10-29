@@ -489,6 +489,8 @@ pub fn replace_char<H: hjkl_engine::types::Host>(
             kind: MotionKind::Char,
         });
         crate::vim::insert_newline_bridge(ed);
+        // The `<Esc>` vim types after the `<CR>` drops an unused indent.
+        crate::vim::drop_unused_auto_indent(ed);
         if buf_cursor_pos(ed.buffer()).col > 0 {
             hjkl_engine::motions::move_left(ed.buffer_mut(), 1);
         }

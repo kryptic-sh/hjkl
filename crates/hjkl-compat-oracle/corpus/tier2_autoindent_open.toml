@@ -39,3 +39,246 @@ keys = "Ox<Esc>"
 autoindent = true
 expected_buffer = "    x\n    a\nb\n"
 expected_mode = "normal"
+
+# `autoindent` rebuilds the indent from its width under `expandtab`, and an
+# indent nothing was typed after is removed again (vim's `did_ai`).
+
+[[cases]]
+name = "ai_tab_indent_rebuilt_with_expandtab_on_cr"
+initial_buffer = "\tab cd"
+initial_cursor = [0, 2]
+keys = "a<CR><Esc>"
+expected_buffer = "\tab\n    cd"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_tab_indent_rebuilt_with_expandtab_on_o"
+initial_buffer = "\tab"
+initial_cursor = [0, 1]
+keys = "ox<Esc>"
+expected_buffer = "\tab\n    x"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_tab_indent_rebuilt_with_expandtab_on_O"
+initial_buffer = "\tab"
+initial_cursor = [0, 1]
+keys = "Ox<Esc>"
+expected_buffer = "    x\n\tab"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_mixed_indent_rebuilt_by_width"
+initial_buffer = "  \t ab"
+initial_cursor = [0, 5]
+keys = "ox<Esc>"
+expected_buffer = "  \t ab\n     x"
+expected_cursor = [1, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_unused_indent_dropped_on_esc"
+initial_buffer = "    ab"
+initial_cursor = [0, 5]
+keys = "o<Esc>"
+expected_buffer = "    ab\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_unused_indent_dropped_on_O_esc"
+initial_buffer = "    ab"
+initial_cursor = [0, 5]
+keys = "O<Esc>"
+expected_buffer = "\n    ab"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_unused_indent_dropped_after_A_cr"
+initial_buffer = "    ab  "
+initial_cursor = [0, 5]
+keys = "A<CR><Esc>"
+expected_buffer = "    ab  \n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_unused_indent_dropped_on_next_cr"
+initial_buffer = "    ab"
+initial_cursor = [0, 5]
+keys = "o<CR><Esc>"
+expected_buffer = "    ab\n\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_unused_indent_still_indents_next_line"
+initial_buffer = "    ab"
+initial_cursor = [0, 5]
+keys = "A<CR><CR>x<Esc>"
+expected_buffer = "    ab\n\n    x"
+expected_cursor = [2, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_unused_indent_dropped_on_up"
+initial_buffer = "    ab"
+initial_cursor = [0, 5]
+keys = "o<Up><Esc>"
+expected_buffer = "    ab\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_unused_indent_dropped_on_ctrl_o"
+initial_buffer = "    ab"
+initial_cursor = [0, 5]
+keys = "o<C-o>x<Esc>"
+expected_buffer = "    ab\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_failed_down_keeps_indent"
+initial_buffer = "    ab"
+initial_cursor = [0, 5]
+keys = "o<Down>x<Esc>"
+expected_buffer = "    ab\n    x"
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_typed_space_keeps_indent"
+initial_buffer = "    ab"
+initial_cursor = [0, 5]
+keys = "o <Esc>"
+expected_buffer = "    ab\n     "
+expected_cursor = [1, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_typed_then_deleted_keeps_indent"
+initial_buffer = "    ab"
+initial_cursor = [0, 5]
+keys = "ox<BS><Esc>"
+expected_buffer = "    ab\n    "
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_unused_indent_dropped_on_dot"
+initial_buffer = "    ab"
+initial_cursor = [0, 5]
+keys = "o<Esc>."
+expected_buffer = "    ab\n\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_unused_indent_dropped_on_counted_o"
+initial_buffer = "    ab"
+initial_cursor = [0, 5]
+keys = "3o<Esc>"
+expected_buffer = "    ab\n\n\n"
+expected_cursor = [3, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_typed_space_dot_keeps_indent"
+initial_buffer = "    ab"
+initial_cursor = [0, 5]
+keys = "o <Esc>."
+expected_buffer = "    ab\n     \n      "
+expected_cursor = [2, 5]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_r_cr_rebuilds_tab_indent"
+initial_buffer = "\tab cd"
+initial_cursor = [0, 3]
+keys = "r<CR>"
+expected_buffer = "\tab\n    cd"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_r_cr_drops_unused_indent"
+initial_buffer = "    ab cd"
+initial_cursor = [0, 6]
+keys = "3r<CR>"
+expected_buffer = "    ab\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true
+
+[[cases]]
+name = "ai_r_cr_drops_unused_indent_mid_buffer"
+initial_buffer = "  ab\n    cd"
+initial_cursor = [1, 5]
+keys = "r<CR>"
+expected_buffer = "  ab\n    c\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = true

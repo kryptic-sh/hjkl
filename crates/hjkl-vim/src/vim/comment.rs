@@ -233,6 +233,13 @@ pub fn try_dedent_close_bracket<H: hjkl_engine::types::Host>(
 /// comment leader the open put in) and `inserted` again — a typed line break
 /// included, which copying only the opened row's last line lost.
 pub fn open_line_repeats(leader: &str, inserted: &str, count: usize) -> String {
+    // An auto-indent with nothing typed after it is dropped on each line,
+    // as on the first (`drop_unused_auto_indent`).
+    let leader = if inserted.is_empty() && leader.chars().all(|c| c == ' ' || c == '\t') {
+        ""
+    } else {
+        leader
+    };
     format!("\n{leader}{inserted}").repeat(count.saturating_sub(1))
 }
 /// The text an `i` / `a` / `I` / `A` session typed, read from where it
@@ -281,6 +288,10 @@ pub fn record_insert_key<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     key: Option<hjkl_vim_types::InsertKey>,
 ) {
+    // Any typed key keeps the auto-indent; `<CR>` decides for itself.
+    if key != Some(hjkl_vim_types::InsertKey::Newline) {
+        vim_mut(ed).auto_indent_row = None;
+    }
     if vim(ed).replaying {
         return;
     }
@@ -294,6 +305,30 @@ pub fn record_insert_key<H: hjkl_engine::types::Host>(
         None => state.insert_keys = None,
     }
 }
+/// vim's `did_ai` removal: an auto-indent nothing was typed after is taken
+/// out again when Insert mode leaves its row, so `o<Esc>` leaves an empty
+/// line rather than one of blanks. Only a row that is still all blanks is
+/// cleared.
+pub fn drop_unused_auto_indent<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) {
+    use hjkl_buffer::{Edit, MotionKind, Position};
+    let Some(row) = vim_mut(ed).auto_indent_row.take() else {
+        return;
+    };
+    let Some(line) = buf_line(ed.buffer(), row) else {
+        return;
+    };
+    if line.is_empty() || !line.chars().all(|c| c == ' ' || c == '\t') {
+        return;
+    }
+    let (cur_row, cur_col) = ed.cursor();
+    ed.mutate_edit(Edit::DeleteRange {
+        start: Position::new(row, 0),
+        end: Position::new(row, line.chars().count()),
+        kind: MotionKind::Char,
+    });
+    let col = if cur_row == row { 0 } else { cur_col };
+    buf_set_cursor_rc(ed.buffer_mut(), cur_row, col);
+}
 /// vim's `start_arrow`: a cursor move inside Insert mode finishes the text
 /// typed so far as its own change, and what is typed from there on is a
 /// fresh `i` at the cursor, without the entry's count. `.` then repeats only
@@ -303,6 +338,7 @@ pub fn record_insert_key<H: hjkl_engine::types::Host>(
 pub fn restart_insert_at_cursor<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
 ) {
+    drop_unused_auto_indent(ed);
     let Some(session) = vim(ed).insert_session.as_ref() else {
         return;
     };

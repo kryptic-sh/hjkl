@@ -21,6 +21,10 @@ pub fn replay_insert_and_finish<H: hjkl_engine::types::Host>(
     // Typed again, so it wraps at 'textwidth' where its own text reaches
     // the margin, as vim's redo does.
     type_text(ed, text);
+    if !text.is_empty() {
+        vim_mut(ed).auto_indent_row = None;
+    }
+    drop_unused_auto_indent(ed);
     if vim_mut(ed).insert_session.take().is_some() {
         if ed.cursor().1 > 0 {
             hjkl_engine::motions::move_left(ed.buffer_mut(), 1);

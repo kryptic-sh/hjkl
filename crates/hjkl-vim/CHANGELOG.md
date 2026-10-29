@@ -67,6 +67,16 @@ and this project adheres to
 
 ### Fixed
 
+- `'autoindent'` builds the new line's indent from the previous line's width
+  under the current `expandtab` / `tabstop`, as vim does, instead of copying its
+  tabs and spaces: with `expandtab`, `o` on a tab-indented line indents with
+  spaces.
+- An auto-indent nothing was typed after is removed again, as vim's is: `o<Esc>`
+  leaves an empty line rather than one of blanks, and so do `<Esc>`, another
+  `<CR>`, a cursor move or `<C-o>` from a line holding only its indent, `r<CR>`,
+  `[count]o` and `.`. A typed space or a typed-then-deleted character keeps it.
+- An Insert-mode arrow key that cannot move (`<Down>` on the last line) no
+  longer ends the change `.` repeats, as vim's only beeps.
 - `"%` and `":` name the file name and the last command line in Normal mode, as
   in vim: `"%p` and `":p` paste them, and a delete, yank or change naming either
   is refused with E354 and leaves the text alone, where hjkl ignored the

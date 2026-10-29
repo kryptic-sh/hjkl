@@ -72,6 +72,9 @@ pub fn open_line_below_bridge<H: hjkl_engine::types::Host>(
         format!("\n{cont}")
     } else {
         let indent = compute_enter_indent(ed.settings(), &prev_line);
+        if !indent.is_empty() {
+            vim_mut(ed).auto_indent_row = Some(row + 1);
+        }
         format!("\n{indent}")
     };
     ed.mutate_edit(Edit::InsertStr {
@@ -145,6 +148,9 @@ pub fn open_line_above_bridge<H: hjkl_engine::types::Host>(
         // `O` on a dir whose preceding row is its own nested child).
         let cur = buf_line(ed.buffer(), row).unwrap_or_default();
         let indent = compute_enter_indent(ed.settings(), &cur);
+        if !indent.is_empty() {
+            vim_mut(ed).auto_indent_row = Some(row);
+        }
         let content = indent.clone();
         (format!("{indent}\n"), content)
     };

@@ -207,7 +207,7 @@ pub fn insert_register_text<H: hjkl_engine::types::Host>(
 /// after Enter is pressed at `cursor`. Walks the smartindent rules:
 ///
 /// - autoindent off → empty string
-/// - autoindent on  → copy prev line's leading whitespace
+/// - autoindent on  → prev line's indent width, rebuilt per `expandtab`
 /// - smartindent on → bump one `shiftwidth` if prev line's last
 ///   non-whitespace char is `{` / `(` / `[`
 ///
@@ -225,11 +225,13 @@ pub(super) fn compute_enter_indent(settings: &hjkl_engine::Settings, prev_line: 
     if !settings.autoindent {
         return String::new();
     }
-    // Copy the prev line's leading whitespace (autoindent base).
-    let base: String = prev_line
-        .chars()
-        .take_while(|c| *c == ' ' || *c == '\t')
-        .collect();
+    // The prev line's indent width, rebuilt under the current `expandtab`
+    // and `tabstop` as vim's `set_indent` does (no `'copyindent'` here).
+    let base = build_indent(
+        indent_width(prev_line, settings.tabstop),
+        settings.expandtab,
+        settings.tabstop,
+    );
 
     if settings.smartindent {
         let unit = if settings.expandtab {

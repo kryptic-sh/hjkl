@@ -2165,8 +2165,12 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     }
 
     fn insert_arrow(&mut self, dir: InsertDir) {
+        let before = self.cursor();
         crate::vim::insert_arrow_bridge(self, dir);
-        after_insert_motion(self);
+        // An arrow that cannot move only beeps in vim: no `start_arrow`.
+        if self.cursor() != before {
+            after_insert_motion(self);
+        }
     }
 
     fn insert_home(&mut self) {
@@ -2211,6 +2215,7 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
     }
 
     fn insert_ctrl_o_arm(&mut self) {
+        crate::vim::drop_unused_auto_indent(self);
         crate::vim::record_insert_key(self, None);
         crate::vim::insert_ctrl_o_bridge(self);
     }

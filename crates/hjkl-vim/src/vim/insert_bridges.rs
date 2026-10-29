@@ -349,6 +349,9 @@ pub fn insert_newline_bridge<H: hjkl_engine::types::Host>(
 ) -> bool {
     use hjkl_buffer::Edit;
     ed.sync_buffer_content_from_textarea();
+    // A line left with only its auto-indent loses it once the new line has
+    // taken its indent from it, as vim's `did_ai` does.
+    let unused_indent_row = vim_mut(ed).auto_indent_row.take();
 
     // ── Abbreviation expansion on CR ─────────────────────────────────────────
     // CR triggers expansion for full-id / end-id / non-id abbreviations.
@@ -457,6 +460,9 @@ pub fn insert_newline_bridge<H: hjkl_engine::types::Host>(
         // rather than re-indenting the row it just pushed down.
         let before_cursor: String = prev_line.chars().take(cursor.col).collect();
         let indent = compute_enter_indent(ed.settings(), &before_cursor);
+        if !indent.is_empty() {
+            vim_mut(ed).auto_indent_row = Some(cursor.row + 1);
+        }
         format!("\n{indent}")
     };
 
@@ -487,6 +493,9 @@ pub fn insert_newline_bridge<H: hjkl_engine::types::Host>(
     } else {
         ed.mutate_edit(Edit::InsertStr { at: cursor, text });
     }
+    let new_indent_row = std::mem::replace(&mut vim_mut(ed).auto_indent_row, unused_indent_row);
+    drop_unused_auto_indent(ed);
+    vim_mut(ed).auto_indent_row = new_indent_row;
     true
 }
 /// Insert a tab character (or spaces up to the next softtabstop boundary when
@@ -1112,6 +1121,7 @@ pub fn leave_insert_to_normal_bridge<H: hjkl_engine::types::Host>(
     }
 
     finish_insert_session(ed);
+    drop_unused_auto_indent(ed);
     // Paired-tag auto-rename (issue #182). Must run BEFORE the cursor moves
     // left (the move-left is vim's "leave-insert cursor adjustment"; the
     // sync needs the post-insert cursor position to detect the tag name).
