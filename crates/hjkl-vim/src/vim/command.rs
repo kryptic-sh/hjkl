@@ -574,7 +574,14 @@ pub fn join_line<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View,
     }
     let cur_line = buf_line(ed.buffer(), row).unwrap_or_default();
     let next_raw = buf_line(ed.buffer(), row + 1).unwrap_or_default();
-    let next_trimmed = next_raw.trim_start();
+    // `'formatoptions'` `j`: a comment line joined onto a comment line loses
+    // its leader, blanks after it included.
+    let leader = joined_comment_leader(ed, &cur_line, &next_raw);
+    let next_body: String = match &leader {
+        Some(l) => next_raw.chars().skip(l.len).collect(),
+        None => next_raw.clone(),
+    };
+    let next_trimmed = next_body.trim_start();
     let cur_chars = cur_line.chars().count();
     let next_chars = next_raw.chars().count();
     // `J` inserts a single space iff both sides are non-empty after
@@ -618,6 +625,21 @@ pub fn join_line<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View,
     );
     true
 }
+/// The leader `'formatoptions'` `j` strips from `next` when it is joined
+/// onto `cur`: only when both lines are comments (vim's `do_join` keeps the
+/// leader after a line that is not one).
+fn joined_comment_leader<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    cur: &str,
+    next: &str,
+) -> Option<crate::vim::CommentLeader> {
+    let settings = ed.settings();
+    if !settings.formatoptions.contains('j') {
+        return None;
+    }
+    crate::vim::comment_leader(cur, &settings.comments, settings.tabstop)?;
+    crate::vim::comment_leader(next, &settings.comments, settings.tabstop)
+}
 /// `gJ` — join the next line onto the current one without inserting a
 /// separating space or stripping leading whitespace.
 /// Returns `false` when the cursor is on the last line. See [`join_line`].
@@ -629,6 +651,17 @@ pub fn join_line_raw<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::V
         return false;
     }
     let join_col = buf_line_chars(ed.buffer(), row);
+    // `'formatoptions'` `j`: drop the joined comment line's leader, keeping
+    // the blank after it, as vim's `gJ` does.
+    let cur_line = buf_line(ed.buffer(), row).unwrap_or_default();
+    let next_raw = buf_line(ed.buffer(), row + 1).unwrap_or_default();
+    if let Some(l) = joined_comment_leader(ed, &cur_line, &next_raw) {
+        ed.mutate_edit(Edit::DeleteRange {
+            start: hjkl_buffer::Position::new(row + 1, 0),
+            end: hjkl_buffer::Position::new(row + 1, l.string_end),
+            kind: hjkl_buffer::MotionKind::Char,
+        });
+    }
     ed.mutate_edit(Edit::JoinLines {
         row,
         count: 1,

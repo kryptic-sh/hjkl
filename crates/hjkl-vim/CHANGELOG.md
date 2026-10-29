@@ -22,6 +22,11 @@ and this project adheres to
 
 ### Added
 
+- `formatoptions` `j`: `J` / `gJ` (and Visual `J` / `gJ`) joining a comment line
+  onto a comment line drop the joined line's leader, as nvim's default does. `J`
+  takes the blanks after it too; `gJ` keeps one. `comment_leader` returns a
+  `CommentLeader` (its length, where the comment string ends, and the
+  continuation leader).
 - Auto-wrap of comments under `formatoptions` `c`: a comment line (by the
   `comments` option, vim's `get_leader_len`, through `comment_leader`) wraps at
   `textwidth` and the new line starts with its leader — `# `, `// `, nested

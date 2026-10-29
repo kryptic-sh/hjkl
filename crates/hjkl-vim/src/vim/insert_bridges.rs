@@ -73,7 +73,7 @@ pub fn auto_wrap_before<H: hjkl_engine::types::Host>(
         if !fo.contains(if leader.is_some() { 'c' } else { 't' }) {
             return;
         }
-        let leader_len = leader.as_ref().map_or(0, |(len, _)| *len);
+        let leader_len = leader.as_ref().map_or(0, |l| l.len);
         let margin = hjkl_buffer::visual_col_to_char_col(&line, textwidth, tabstop);
         // Walk back from the cursor for the start of a blank run. At the
         // cursor itself vim looks at the character being typed, not the one
@@ -116,7 +116,7 @@ pub fn auto_wrap_before<H: hjkl_engine::types::Host>(
             end += 1;
         }
         let indent: String = match &leader {
-            Some((_, next)) => next.clone(),
+            Some(l) => l.next.clone(),
             None if ed.settings().autoindent => {
                 chars.iter().take_while(|&&c| is_blank(c)).collect()
             }

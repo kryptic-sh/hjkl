@@ -117,7 +117,6 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
-
 # ── A counted join on the last line ──────────────────────────────────────────
 #
 # Nothing is left to join. With a count of 3 or more vim still moves the cursor
@@ -171,3 +170,110 @@ shiftwidth = 4
 expandtab = true
 autoindent = false
 
+[[cases]]
+name = "join_comment_drops_leader"
+initial_buffer = "# aa\n# bb\n"
+initial_cursor = [0, 0]
+keys = "J"
+expected_buffer = "# aa bb\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "join_comment_counted"
+initial_buffer = "# aa\n# bb\n# cc\n"
+initial_cursor = [0, 0]
+keys = "3J"
+expected_buffer = "# aa bb cc\n"
+expected_cursor = [0, 7]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "join_comment_raw_keeps_blank"
+initial_buffer = "# aa\n# bb\n"
+initial_cursor = [0, 0]
+keys = "gJ"
+expected_buffer = "# aa bb\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "join_comment_indented"
+initial_buffer = "  # aa\n  # bb\n"
+initial_cursor = [0, 0]
+keys = "J"
+expected_buffer = "  # aa bb\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "join_comment_after_plain_keeps_leader"
+initial_buffer = "aa\n# bb\n"
+initial_cursor = [0, 0]
+keys = "J"
+expected_buffer = "aa # bb\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "join_comment_onto_plain_line"
+initial_buffer = "# aa\nbb\n"
+initial_cursor = [0, 0]
+keys = "J"
+expected_buffer = "# aa bb\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "join_comment_nested_quote"
+initial_buffer = "> > aa\n> > bb\n"
+initial_cursor = [0, 0]
+keys = "J"
+expected_buffer = "> > aa bb\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "join_comment_three_part_middle"
+initial_buffer = "/* aa\n * bb\n */\n"
+initial_cursor = [0, 0]
+keys = "3J"
+expected_buffer = "/* aa bb */\n"
+expected_cursor = [0, 8]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "join_comment_visual"
+initial_buffer = "# aa\n# bb\n"
+initial_cursor = [0, 0]
+keys = "VjJ"
+expected_buffer = "# aa bb\n"
+expected_cursor = [0, 4]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

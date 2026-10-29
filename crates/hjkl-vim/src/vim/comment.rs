@@ -50,15 +50,25 @@ pub fn detect_comment_on_line(lang: &str, line: &str) -> Option<(String, &'stati
     }
     None
 }
+/// A comment leader at the start of a line, as [`comment_leader`] finds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentLeader {
+    /// Characters the leader takes: indent, comment string(s), and the
+    /// blanks after them.
+    pub len: usize,
+    /// Where the last comment string ends, before those trailing blanks.
+    pub string_end: usize,
+    /// The leader a line broken out of this one starts with.
+    pub next: String,
+}
+
 /// The comment leader `line` starts with under vim's `'comments'` format
-/// (`{flags}:{string},…`), as vim's `get_leader_len` finds it: its length in
-/// characters (indent, comment string and the blanks after it), and the
-/// leader a line broken out of this one starts with. `None` when the line is
-/// not a comment. Supported flags: `b` (a blank must follow), `n` (nested,
+/// (`{flags}:{string},…`), as vim's `get_leader_len` finds it. `None` when
+/// the line is not a comment. Supported flags: `b` (a blank must follow), `n` (nested,
 /// `> >`), `f` (first line only: the next line gets spaces), and `s` / `m` of
 /// a three-part comment (`s1:/*,mb:*` continues `/* x` with ` * `). An `e`
 /// part, a comment's end, starts nothing.
-pub fn comment_leader(line: &str, comments: &str, tabstop: usize) -> Option<(usize, String)> {
+pub fn comment_leader(line: &str, comments: &str, tabstop: usize) -> Option<CommentLeader> {
     let parts: Vec<(&str, &str)> = comments
         .split(',')
         .filter_map(|part| part.split_once(':'))
@@ -95,6 +105,7 @@ pub fn comment_leader(line: &str, comments: &str, tabstop: usize) -> Option<(usi
     }
     let (index, start, end) = found?;
     let (flags, string) = parts[index];
+    let string_end = start + string.chars().count();
     let leader: String = chars[..end].iter().collect();
     let next = if flags.contains('f') {
         " ".repeat(hjkl_buffer::char_col_to_visual_col(&leader, end, tabstop))
@@ -106,12 +117,16 @@ pub fn comment_leader(line: &str, comments: &str, tabstop: usize) -> Option<(usi
             .iter()
             .find(|(f, _)| f.contains('m'))
             .map_or("", |(_, m)| m);
-        let blanks: String = chars[start + string.chars().count()..end].iter().collect();
+        let blanks: String = chars[string_end..end].iter().collect();
         format!("{}{middle}{blanks}", " ".repeat(offset))
     } else {
         leader
     };
-    Some((end, next))
+    Some(CommentLeader {
+        len: end,
+        string_end,
+        next,
+    })
 }
 /// Given the current `row` in `buffer` and the active `settings`, return the
 /// string to prepend on the new line when comment-continuation fires.

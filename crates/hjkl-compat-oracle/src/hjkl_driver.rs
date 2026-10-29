@@ -94,6 +94,9 @@ pub fn run_case(case: &OracleCase) -> anyhow::Result<HjklOutcome> {
     if let Some(et) = case.expandtab {
         editor.settings_mut().expandtab = et;
     }
+    // nvim's default `'formatoptions'` also has `j`: joining comment lines
+    // drops the joined line's leader.
+    editor.settings_mut().formatoptions.push('j');
     if let Some(tw) = case.textwidth {
         editor.settings_mut().textwidth = tw;
         // nvim's default `'formatoptions'` (`tcqj`) wraps typed text and
