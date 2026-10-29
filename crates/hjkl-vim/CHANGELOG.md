@@ -57,6 +57,14 @@ and this project adheres to
 
 ### Fixed
 
+- Visual-block `>` / `<` shift in display columns, as vim's `shift_block` does:
+  `>` rewrites the whitespace around the block's left edge (the run before it, a
+  tab the edge cuts, and the run starting there) as one stretch a shiftwidth
+  wider, and `<` takes cells out of the whitespace starting at the edge. On a
+  line with a tab the shift used to land at the top row's character column;
+  `<C-v>j>` over `\tab` now gives `"        ab"`, as in nvim.
+- `VimEditorExt::indent_block`, the app's Visual-block `>` / `<`, shifts at the
+  block's left edge instead of indenting whole lines.
 - Visual-block operators work in display columns, as vim's do (`block_prep`, now
   `hjkl_vim`'s `block` module): over a line with a tab or a double-width
   character, `d`, `y`, `c`, the case operators, `r`, `I`, `A` and a block paste

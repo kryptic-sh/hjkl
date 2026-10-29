@@ -353,6 +353,35 @@ fn visual_block_d_deletes_rectangle_via_range_mutation() {
 }
 
 #[test]
+fn visual_block_shift_moves_text_at_block_left_edge() {
+    // <C-v>jl> from column 2 shifts at the block's left edge, as vim's
+    // `shift_block` does, not the whole line: "abcdef" -> "ab    cdef".
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "abcdef\nabcdef");
+    app.active_editor_mut().jump_cursor(0, 2);
+    app.sync_viewport_from_editor();
+    let sw = app.active_editor().settings().shiftwidth;
+
+    hjkl_vim_tui::handle_key(
+        app.active_editor_mut(),
+        KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+    );
+    app.route_chord_key(ck('j'));
+    app.route_chord_key(ck('l'));
+    let consumed = app.route_chord_key(ck('>'));
+    assert!(consumed, "> in VisualBlock must be consumed");
+
+    let shifted = format!("ab{}cdef", " ".repeat(sw));
+    let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
+    assert_eq!(
+        lines,
+        vec![shifted.as_str(), shifted.as_str()],
+        "VisualBlock > must shift at the block's left edge; got {lines:?}"
+    );
+    assert_eq!(app.active_editor().vim_mode(), hjkl_engine::VimMode::Normal);
+}
+
+#[test]
 fn visual_block_y_yanks_rectangle_to_register() {
     // <C-v>lj"ay — yank a 2-col block into register 'a'. View unchanged.
     let mut app = App::new(None, false, None, None).unwrap();

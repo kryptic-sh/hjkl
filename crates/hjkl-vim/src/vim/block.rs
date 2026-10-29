@@ -33,7 +33,7 @@ pub struct BlockRow {
 }
 
 /// Display cells `ch` takes when it starts at display column `vcol`.
-fn cell_width(ch: char, vcol: usize, tabstop: usize) -> usize {
+pub fn block_cell_width(ch: char, vcol: usize, tabstop: usize) -> usize {
     if ch == '\t' {
         let ts = tabstop.max(1);
         ts - vcol % ts
@@ -55,7 +55,7 @@ pub fn block_row(line: &str, cols: BlockCols, tabstop: usize, is_del: bool) -> B
     // Walk to the block's left edge.
     let (mut vcol, mut i, mut incr, mut prev_start) = (0, 0, 0, 0);
     while vcol < cols.left && i < n {
-        incr = cell_width(chars[i], vcol, tabstop);
+        incr = block_cell_width(chars[i], vcol, tabstop);
         vcol += incr;
         prev_start = i;
         i += 1;
@@ -88,7 +88,7 @@ pub fn block_row(line: &str, cols: BlockCols, tabstop: usize, is_del: bool) -> B
         let (mut v, mut j, mut prev_end) = (start_vcol, start, start);
         while v <= cols.right && j < n {
             prev_end = j;
-            incr = cell_width(chars[j], v, tabstop);
+            incr = block_cell_width(chars[j], v, tabstop);
             v += incr;
             j += 1;
         }
@@ -120,7 +120,7 @@ pub fn char_at_vcol(line: &str, vcol: usize, tabstop: usize) -> Result<usize, us
         if v >= vcol {
             return Ok(i);
         }
-        v += cell_width(ch, v, tabstop);
+        v += block_cell_width(ch, v, tabstop);
     }
     if v >= vcol {
         Ok(line.chars().count())
@@ -136,7 +136,7 @@ pub fn char_at_vcol(line: &str, vcol: usize, tabstop: usize) -> Result<usize, us
 pub fn tab_cut_at(line: &str, vcol: usize, tabstop: usize) -> Option<(usize, usize, usize)> {
     let mut v = 0;
     for (i, ch) in line.chars().enumerate() {
-        let w = cell_width(ch, v, tabstop);
+        let w = block_cell_width(ch, v, tabstop);
         if v >= vcol {
             return None;
         }
@@ -154,7 +154,10 @@ pub fn tab_cut_at(line: &str, vcol: usize, tabstop: usize) -> Option<(usize, usi
 fn char_cells(line: &str, col: usize, tabstop: usize) -> (usize, usize) {
     let first = hjkl_buffer::char_col_to_visual_col(line, col, tabstop);
     match line.chars().nth(col) {
-        Some(ch) => (first, first + cell_width(ch, first, tabstop).max(1) - 1),
+        Some(ch) => (
+            first,
+            first + block_cell_width(ch, first, tabstop).max(1) - 1,
+        ),
         None => (first, first),
     }
 }

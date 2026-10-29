@@ -1382,3 +1382,111 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "block_shift_right_over_tab_line"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [0, 0]
+keys = "<C-v>j>"
+expected_buffer = "        ab\n    abcdefghij\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_shift_right_tab_line_mid"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [1, 5]
+keys = "<C-v>k>"
+expected_buffer = "\ta    b\nabcde    fghij\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_shift_right_after_tab"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [0, 1]
+keys = "<C-v>j>"
+expected_buffer = "        ab\nabcd    efghij\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_shift_right_counted_over_tab"
+initial_buffer = "\tab\nabcdefghij\n"
+initial_cursor = [0, 1]
+keys = "<C-v>jl2>"
+expected_buffer = "            ab\nabcd        efghij\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_shift_right_whitespace_run"
+initial_buffer = "abcdefgh\n  \t  x\n"
+initial_cursor = [0, 1]
+keys = "<C-v>j>"
+expected_buffer = "a    bcdefgh\n          x\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_shift_left_whitespace_run"
+initial_buffer = "abcdefgh\n  \t  x\n"
+initial_cursor = [0, 1]
+keys = "<C-v>j<"
+expected_buffer = "abcdefgh\n  x\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_shift_left_through_tab"
+initial_buffer = "ab\t  cd x\nabcdefghijk\n"
+initial_cursor = [0, 2]
+keys = "<C-v><"
+expected_buffer = "abcd x\nabcdefghijk\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_shift_left_after_tab"
+initial_buffer = "ab\t  cd x\nabcdefghijk\n"
+initial_cursor = [0, 3]
+keys = "<C-v><"
+expected_buffer = "ab\tcd x\nabcdefghijk\n"
+expected_cursor = [0, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "block_shift_right_on_tab"
+initial_buffer = "ab\t  cd x\nabcdefghijk\n"
+initial_cursor = [0, 2]
+keys = "<C-v>>"
+expected_buffer = "ab        cd x\nabcdefghijk\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

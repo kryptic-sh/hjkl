@@ -333,9 +333,9 @@ pub trait VimEditorExt {
         register: char,
     );
 
-    /// Indent (`count > 0`) or outdent (`count < 0`) rows `top_row..=bot_row`.
-    /// Column bounds are ignored — vim's block indent is always linewise.
-    /// `count == 0` is a no-op.
+    /// Shift the VisualBlock `top_row..=bot_row` × `left_col..=right_col`
+    /// right (`count > 0`) or left (`count < 0`) at its left edge, as vim's
+    /// block `>` / `<` do. `count == 0` is a no-op.
     fn indent_block(
         &mut self,
         top_row: usize,
@@ -1433,11 +1433,11 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         &mut self,
         top_row: usize,
         bot_row: usize,
-        _left_col: usize,
-        _right_col: usize,
+        left_col: usize,
+        right_col: usize,
         count: i32,
     ) {
-        crate::vim::indent_block_bridge(self, top_row, bot_row, count);
+        crate::vim::indent_block_bridge(self, top_row, bot_row, left_col, right_col, count);
     }
 
     fn auto_indent_range(&mut self, start: (usize, usize), end: (usize, usize)) {

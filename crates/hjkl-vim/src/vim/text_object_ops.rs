@@ -709,106 +709,126 @@ fn indent_fill(at_col: usize, width: usize, expandtab: bool, tabstop: usize) -> 
     out
 }
 
-/// Blockwise `>` — insert `count * shiftwidth` display columns at the
-/// block's LEFT column on every row it covers.
+/// Blockwise `>`, vim's `shift_block`: on each row the whitespace around the
+/// block's left display column — the run just before it, a tab the edge cuts
+/// included, and the run starting there — is rewritten as one stretch
+/// `count * shiftwidth` cells wider, from where that whitespace began.
 ///
-/// vim does NOT treat a blockwise `>` as a linewise indent (hjkl did, with a
-/// comment claiming vim agreed): `<C-v>jl>` with the block starting at column
-/// 2 turns `"abcdef"` into `"ab    cdef"`, not `"    abcdef"`. A row too
-/// short to reach `left` is skipped, as is an empty one — both verified
-/// against neovim 0.12.4.
+/// vim does NOT treat a blockwise `>` as a linewise indent: `<C-v>jl>` with
+/// the block starting at column 2 turns `"abcdef"` into `"ab    cdef"`, not
+/// `"    abcdef"`. A row that ends before the block is skipped, as is an empty
+/// one (vim's `op_shift` never shifts an empty line).
 pub fn indent_block<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
-    left: usize,
+    cols: BlockCols,
     count: usize,
 ) {
     ed.sync_buffer_content_from_textarea();
     let width = ed.settings().shiftwidth.saturating_mul(count.max(1));
     let expandtab = ed.settings().expandtab;
     let tabstop = ed.settings().tabstop.max(1);
+    let cursor_col = block_start_col(ed, top, cols);
     use hjkl_buffer::{Edit, Position};
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let bot = bot.min(rope.len_lines().saturating_sub(1));
     for r in top..=bot {
-        let line = rope_line_to_str(&rope, r);
-        // vim's `op_shift` never shifts an empty line, even with the block at
-        // column 0, where the length test alone would let it through.
-        if line.is_empty() || line.chars().count() < left {
+        let chars: Vec<char> = rope_line_to_str(&rope, r).chars().collect();
+        if chars.is_empty() {
             continue;
         }
-        let at_col = hjkl_buffer::geom::char_col_to_visual_col(&line, left, tabstop);
-        // `left` doubles as the char index of the insert point: the byte
-        // `char_indices().nth(left)` points at IS the `left`-th char.
-        let fill = indent_fill(at_col, width, expandtab, tabstop);
-        ed.mutate_edit(Edit::InsertStr {
-            at: Position::new(r, left),
-            text: fill,
+        let cells = |ch: char, vcol: usize| block_cell_width(ch, vcol, tabstop);
+        // Walk to the block, remembering where the whitespace before it began.
+        let (mut vcol, mut i) = (0, 0);
+        let (mut ws_vcol, mut ws_start) = (0, 0);
+        while vcol < cols.left && i < chars.len() {
+            let w = cells(chars[i], vcol);
+            vcol += w;
+            i += 1;
+            if !matches!(chars[i - 1], ' ' | '\t') {
+                ws_start = i;
+                ws_vcol = vcol;
+            }
+        }
+        if vcol < cols.left {
+            continue;
+        }
+        let mut end = i;
+        while end < chars.len() && matches!(chars[end], ' ' | '\t') {
+            vcol += cells(chars[end], vcol);
+            end += 1;
+        }
+        let fill = indent_fill(ws_vcol, width + vcol - ws_vcol, expandtab, tabstop);
+        ed.mutate_edit(Edit::Replace {
+            start: Position::new(r, ws_start),
+            end: Position::new(r, end),
+            with: fill,
         });
     }
-    buf_set_cursor_rc(ed.buffer_mut(), top, left);
+    buf_set_cursor_rc(ed.buffer_mut(), top, cursor_col);
 }
 
-/// Blockwise `<` — remove up to `count * shiftwidth` display columns of
-/// whitespace starting AT the block's left column.
-///
-/// A tab that straddles the boundary is SPLIT: with `tabstop=8` and
-/// `shiftwidth=4`, `"ab\tcd"` outdented from column 2 becomes `"ab  cd"` —
-/// the tab was worth six columns there, four came off, two remain. A row
-/// with no whitespace at that column is left alone, which is what makes
-/// `<C-v>iw<` on `"\t(x).[y]"` a no-op. Verified against neovim 0.12.4.
+/// Blockwise `<`, vim's `shift_block` to the left: on each row it takes up to
+/// `count * shiftwidth` cells out of the whitespace that starts at the
+/// block's left display column (after a tab the edge cuts), moving the text
+/// after it left, and keeps whatever of a tab the new column falls inside as
+/// spaces. With `tabstop=8` and `shiftwidth=4`, `"ab\tcd"` outdented from
+/// column 2 becomes `"ab  cd"`. A row with no whitespace there is left alone,
+/// which is what makes `<C-v>iw<` on `"\t(x).[y]"` a no-op.
 pub fn outdent_block<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top: usize,
     bot: usize,
-    left: usize,
+    cols: BlockCols,
     count: usize,
 ) {
     ed.sync_buffer_content_from_textarea();
     let width = ed.settings().shiftwidth.saturating_mul(count.max(1));
     let tabstop = ed.settings().tabstop.max(1);
+    let cursor_col = block_start_col(ed, top, cols);
     use hjkl_buffer::{Edit, Position};
     let rope = hjkl_engine::types::Query::rope(ed.buffer());
     let bot = bot.min(rope.len_lines().saturating_sub(1));
     for r in top..=bot {
-        let line = rope_line_to_str(&rope, r);
-        if line.chars().count() < left {
+        let chars: Vec<char> = rope_line_to_str(&rope, r).chars().collect();
+        let cells = |ch: char, vcol: usize| block_cell_width(ch, vcol, tabstop);
+        let (mut vcol, mut i) = (0, 0);
+        while vcol < cols.left && i < chars.len() {
+            vcol += cells(chars[i], vcol);
+            i += 1;
+        }
+        if vcol < cols.left {
             continue;
         }
-        let start_col = hjkl_buffer::geom::char_col_to_visual_col(&line, left, tabstop);
-        let target = start_col + width;
-        let mut col = start_col;
-        // Char-index twin of the old byte-walk: the removed span
-        // `[left, end)` holds exactly the whitespace chars consumed below.
-        let mut end = left;
-        let mut leftover = 0usize;
-        for ch in line.chars().skip(left) {
-            if !matches!(ch, ' ' | '\t') || col >= target {
+        // The first non-blank at or after the block's start.
+        let mut non_white = i;
+        while non_white < chars.len() && matches!(chars[non_white], ' ' | '\t') {
+            vcol += cells(chars[non_white], vcol);
+            non_white += 1;
+        }
+        let shift = (vcol - cols.left).min(width);
+        if shift == 0 {
+            continue;
+        }
+        let dest = vcol - shift;
+        // Keep the characters that still end at or before the new column.
+        let (mut kept, mut kept_vcol) = (0, 0);
+        while kept < non_white {
+            let w = cells(chars[kept], kept_vcol);
+            if kept_vcol + w > dest {
                 break;
             }
-            let next_col = if ch == '\t' {
-                col + tabstop - col % tabstop
-            } else {
-                col + 1
-            };
-            end += 1;
-            if next_col > target {
-                // The tab straddles the boundary — keep the columns past it.
-                leftover = next_col - target;
-                break;
-            }
-            col = next_col;
+            kept_vcol += w;
+            kept += 1;
         }
-        if end > left {
-            ed.mutate_edit(Edit::Replace {
-                start: Position::new(r, left),
-                end: Position::new(r, end),
-                with: " ".repeat(leftover),
-            });
-        }
+        ed.mutate_edit(Edit::Replace {
+            start: Position::new(r, kept),
+            end: Position::new(r, non_white),
+            with: " ".repeat(dest - kept_vcol),
+        });
     }
-    buf_set_cursor_rc(ed.buffer_mut(), top, left);
+    buf_set_cursor_rc(ed.buffer_mut(), top, cursor_col);
 }
 
 /// Remove up to `count * shiftwidth` leading spaces (or tabs) from

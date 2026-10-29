@@ -180,26 +180,36 @@ pub fn change_block_bridge<H: hjkl_engine::types::Host>(
     vim_mut(ed).block_anchor = saved_anchor;
     vim_mut(ed).block_vcol = saved_vcol;
 }
-/// Indent (`count > 0`) or outdent (`count < 0`) rows `top_row..=bot_row`.
-/// Column bounds are ignored — vim's block indent is always linewise.
+/// Shift a rectangular VisualBlock selection right (`count > 0`) or left
+/// (`count < 0`) by `|count|` shiftwidths at the block's left edge, as the
+/// FSM's block `>` / `<` do (vim's `shift_block`, not a linewise indent).
 /// `count == 0` is a no-op.
 pub fn indent_block_bridge<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     top_row: usize,
     bot_row: usize,
+    left_col: usize,
+    right_col: usize,
     count: i32,
 ) {
     if count == 0 {
         return;
     }
-    ed.push_undo();
-    let abs = count.unsigned_abs() as usize;
-    if count > 0 {
-        indent_rows(ed, top_row, bot_row, abs);
+    let saved_anchor = vim(ed).block_anchor;
+    let saved_vcol = vim(ed).block_vcol;
+    vim_mut(ed).block_anchor = (top_row, left_col);
+    vim_mut(ed).block_vcol = right_col;
+    // See `delete_block_bridge` — `block_to_eol` is deliberately preserved.
+    let clamped = right_col.min(buf_line_chars(ed.buffer(), bot_row).saturating_sub(1));
+    buf_set_cursor_rc(ed.buffer_mut(), bot_row, clamped);
+    let op = if count > 0 {
+        Operator::Indent
     } else {
-        outdent_rows(ed, top_row, bot_row, abs);
-    }
-    vim_mut(ed).mode = Mode::Normal;
+        Operator::Outdent
+    };
+    apply_block_operator(ed, op, count.unsigned_abs() as usize);
+    vim_mut(ed).block_anchor = saved_anchor;
+    vim_mut(ed).block_vcol = saved_vcol;
 }
 /// Auto-indent (v1 dumb shiftwidth) the row span `[start.0, end.0]`. Column
 /// parts are ignored — auto-indent is always linewise. See

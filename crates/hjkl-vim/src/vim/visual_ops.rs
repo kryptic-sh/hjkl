@@ -694,9 +694,9 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
             // where the linewise fallback produced "    abcdef".
             ed.push_undo();
             if op == Operator::Indent {
-                indent_block(ed, top, bot, left, count.max(1));
+                indent_block(ed, top, bot, cols, count.max(1));
             } else {
-                outdent_block(ed, top, bot, left, count.max(1));
+                outdent_block(ed, top, bot, cols, count.max(1));
             }
             vim_mut(ed).mode = Mode::Normal;
             record_visual_last_change(
@@ -1068,11 +1068,11 @@ pub fn replay_block_visual_op<H: hjkl_engine::types::Host>(
         }
         Operator::Indent => {
             ed.push_undo();
-            indent_block(ed, top, bot, left, levels);
+            indent_block(ed, top, bot, cols, levels);
         }
         Operator::Outdent => {
             ed.push_undo();
-            outdent_block(ed, top, bot, left, levels);
+            outdent_block(ed, top, bot, cols, levels);
         }
         Operator::Change => {
             ed.push_undo();
