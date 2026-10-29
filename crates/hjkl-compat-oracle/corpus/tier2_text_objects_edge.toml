@@ -514,3 +514,51 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "visual_it_on_empty_pair_takes_the_close_tag_cell"
+initial_buffer = "<a><b></b></a>\n"
+initial_cursor = [0, 4]
+keys = "vitd"
+expected_buffer = "<a><b>/b></a>\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_it_on_empty_pair_from_close_tag"
+initial_buffer = "<a><b></b></a>\n"
+initial_cursor = [0, 7]
+keys = "vitd"
+expected_buffer = "<a><b>/b></a>\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_line_it_on_empty_pair_goes_charwise"
+initial_buffer = "<a><b></b></a>\n"
+initial_cursor = [0, 4]
+keys = "Vitd"
+expected_buffer = "<a><b>/b></a>\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "visual_it_twice_on_empty_pair_takes_the_pair"
+initial_buffer = "<a><b></b></a>\n"
+initial_cursor = [0, 4]
+keys = "vitit<Esc>"
+expected_buffer = "<a><b></b></a>\n"
+expected_cursor = [0, 9]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

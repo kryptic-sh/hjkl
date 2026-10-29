@@ -1270,9 +1270,10 @@ Seen while measuring, not `gq`:
   where the Visual port's `find_open_after` counts it; unmeasured whether they
   differ. The tag objects follow `current_tagblock` through `tag_visual` for a
   selection bigger than one cell or a count; an uncounted `vit` on one cell
-  still takes `tag_text_object`, and on an empty pair (`<a><b></b></a>` @ (0,
-  4)) `vitd` deletes `><` where nvim 0.12.5 deletes the `<` after the open tag.
-  vim's `in_html_tag` cursor adjustment was not ported.
+  still takes `tag_text_object`, apart from the inner-equals-selection and
+  empty-pair rules handled in `visual_text_obj_extend_counted`. vim's
+  `in_html_tag` cursor adjustment was not ported; the shapes measured with the
+  cursor on a tag match nvim 0.12.5 through `tag_text_object`'s own rule.
 - **Block `O` across a tab leaves the cursor one column early after an
   operator.** `<C-v>jlOld` on `"a\tbc\nxyzwvut"` @ (0, 1) matches nvim's buffer
   and register, but the cursor ends on (0, 1) where nvim's is on (0, 2). The `O`

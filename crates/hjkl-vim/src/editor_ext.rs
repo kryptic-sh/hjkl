@@ -1861,7 +1861,26 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         };
         if obj == TextObject::XmlTag && inner && count == 1 && one_cell {
             let (row, col) = self.cursor();
-            if crate::vim::tag_text_object(self, true) == Some(((row, col), (row, col + 1)))
+            // With no text between the tags vim takes the one cell where it
+            // would start, the close tag's `<`.
+            let inner_range = crate::vim::tag_text_object(self, true).map(|(start, end)| {
+                if start == end {
+                    (start, (start.0, start.1 + 1))
+                } else {
+                    (start, end)
+                }
+            });
+            if let Some((start, end)) = inner_range
+                && end == (start.0, start.1 + 1)
+                && start != (row, col)
+            {
+                crate::vim_state::vim_mut(self).mode = FsmMode::Visual;
+                crate::vim_state::vim_mut(self).current_mode = VimMode::Visual;
+                crate::vim_state::vim_mut(self).visual_anchor = start;
+                self.jump_cursor(start.0, start.1);
+                return;
+            }
+            if inner_range == Some(((row, col), (row, col + 1)))
                 && let Some((start, end)) = crate::vim::tag_text_object(self, false)
             {
                 crate::vim_state::vim_mut(self).mode = FsmMode::Visual;

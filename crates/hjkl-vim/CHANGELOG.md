@@ -67,6 +67,9 @@ and this project adheres to
 
 ### Fixed
 
+- Visual `it` on an empty tag pair (`<b></b>`) selects the one cell after the
+  open tag, and a second `it` the whole pair, as in vim. It selected the `><`
+  between the tags.
 - Visual `it` on a tag pair whose content is the one character under the cursor
   selects the whole pair charwise (`vit` on the `x` of `<b>x</b>`), as vim's
   does when the inner text equals the selection, in `v`, `V` and `<C-v>` alike.
