@@ -122,6 +122,12 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
     if matches!(op, Operator::Delete | Operator::Yank | Operator::Change)
         && refuse_read_only_register(ed)
     {
+        // vim's redo still holds a refused `d`, so `.` refuses it again
+        // rather than repeating the change before it.
+        if op == Operator::Delete {
+            let extent = refused_visual_extent(ed);
+            record_visual_last_change(ed, op, extent, register, 1);
+        }
         let start = visual_op_start(ed);
         refused_operator(ed, op, start, RangeKind::Exclusive);
         return;
@@ -374,6 +380,28 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
 }
 /// B1: record `LastChange::VisualOp` for dot-repeat, unless this call is
 /// itself a replay (`.` must not overwrite the entry it's replaying).
+/// The size `.` would replay the current Visual selection at.
+fn refused_visual_extent<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+) -> VisualExtent {
+    let cursor = ed.cursor();
+    match vim(ed).mode {
+        Mode::VisualLine => {
+            let anchor = vim(ed).visual_line_anchor;
+            VisualExtent::Line {
+                lines: anchor.abs_diff(cursor.0) + 1,
+            }
+        }
+        Mode::VisualBlock => {
+            let (top, bot, cols) = block_rect(ed);
+            block_extent(top, bot, cols)
+        }
+        _ => {
+            let (top, bot) = order(vim(ed).visual_anchor, cursor);
+            charwise_extent(top, bot)
+        }
+    }
+}
 fn record_visual_last_change<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
     op: Operator,
@@ -1014,6 +1042,10 @@ pub fn replay_block_visual_op<H: hjkl_engine::types::Host>(
 ) {
     let (top, left) = ed.cursor();
     let bot = top + rows.saturating_sub(1);
+    if matches!(op, Operator::Delete | Operator::Change) && refuse_read_only_register(ed) {
+        refused_operator(ed, op, (top, left), RangeKind::Exclusive);
+        return;
+    }
     // `d` / `c` yank the deleted rectangle into the unnamed register just
     // like the live block delete (`:h v_.` re-does the whole change,
     // register included) — verified against nvim (`.` after a block `d`

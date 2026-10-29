@@ -10,6 +10,9 @@ patch bumps.
 
 ### Fixed
 
+- A Visual `d` or `dgn` refused for naming `".` or `"/` is what `.` repeats
+  next, as vim's redo keeps it, so `.` refuses again instead of repeating the
+  change before it.
 - The `".` register holds the last insert's keys when it deleted something
   (`<BS>`, `<C-w>`, `<C-u>`, `<Del>`), as vim's does: `".p`, `<C-r>.` and
   `<C-a>` type them again, so the deletions act at the new place too. Before,

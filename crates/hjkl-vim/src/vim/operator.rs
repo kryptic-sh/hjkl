@@ -200,6 +200,15 @@ pub fn gn_operate<H: hjkl_engine::types::Host>(
     if let Some(op @ (Operator::Delete | Operator::Yank | Operator::Change)) = op
         && refuse_read_only_register(ed)
     {
+        // vim's redo still holds a refused `dgn`, so `.` refuses it again.
+        if op == Operator::Delete && !vim(ed).replaying {
+            vim_mut(ed).last_change = Some(LastChange::GnOp {
+                op,
+                forward,
+                inserted: None,
+                register,
+            });
+        }
         refused_operator(ed, op, start_t, RangeKind::Inclusive);
         return;
     }

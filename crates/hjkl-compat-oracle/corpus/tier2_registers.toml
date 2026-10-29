@@ -770,3 +770,51 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "reg_dot_visual_d_refused_dot_refuses"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "iab<Esc>vl\".dj."
+expected_buffer = "ababc def\nghi jkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_visual_line_d_refused_dot_refuses"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "iab<Esc>Vj\".dj."
+expected_buffer = "ababc def\nghi jkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_block_d_refused_dot_refuses"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "iab<Esc><C-v>j\".dj."
+expected_buffer = "ababc def\nghi jkl mno\npqr stu\nxyz w\n"
+expected_cursor = [1, 3]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "reg_dot_dgn_refused_dot_refuses"
+initial_buffer = "abc def\nghi jkl mno\npqr stu\nxyz w\n"
+initial_cursor = [0, 2]
+keys = "/def<CR>iab<Esc>\".dgnj."
+expected_buffer = "abc abdef\nghi jkl mno\npqr stu\nxyz w\n"
+expected_cursor = [0, 6]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

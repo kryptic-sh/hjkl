@@ -791,6 +791,8 @@ pub fn refused_operator<H: hjkl_engine::types::Host>(
     } else {
         clamp_cursor_to_normal_mode(ed);
         vim_mut(ed).mode = Mode::Normal;
+        // As after any operator, curswant follows where the cursor landed.
+        remember_cursor_column(ed);
     }
 }
 pub fn run_operator_over_range<H: hjkl_engine::types::Host>(

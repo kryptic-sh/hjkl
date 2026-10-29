@@ -1291,9 +1291,8 @@ Seen while measuring, not `gq`:
   Not covered:
   - `"%` and `":` are still not accepted by `set_pending_register`; `"%` reads
     from the register store but cannot be named in Normal mode.
-  - A refused Visual or `gn` operator records no `LastChange`, where vim's redo
-    holds the refused command; a refused Normal-mode operator does record it,
-    and `.` refuses again.
+  - A refused Visual `c` records no `LastChange`. nvim's `.` after
+    `iab<Esc>vl".cX<Esc>` and `j` ends in Insert mode; not ported.
 
 ## 2. Blocked on platform access
 
