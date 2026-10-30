@@ -647,6 +647,11 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
             ed.jump_cursor(top, left_col);
         }
         Operator::Delete => {
+            // vim's `op_delete` leaves the cursor at the top row's `textcol +
+            // startspaces`: past the spaces a split tab leaves before the block.
+            let top_line = buf_line(ed.buffer(), top).unwrap_or_default();
+            let top_span = block_row(&top_line, cols, ed.settings().tabstop, true);
+            let land_col = top_span.start + top_span.startspaces;
             ed.push_undo();
             delete_block_contents(ed, top, bot, cols);
             if !yank.is_empty() {
@@ -660,7 +665,7 @@ pub fn apply_block_operator<H: hjkl_engine::types::Host>(
             // the top row shorter than `left`, and nvim parks on its EOL
             // rather than past it (`<C-v>jjD` on "abcd…" → (0,0), not (0,1)).
             let line_len = buf_line_chars(ed.buffer(), top);
-            ed.jump_cursor(top, left_col.min(line_len.saturating_sub(1)));
+            ed.jump_cursor(top, land_col.min(line_len.saturating_sub(1)));
             record_visual_last_change(ed, op, block_extent(top, bot, cols), register, 1);
         }
         Operator::Change => {
@@ -1044,7 +1049,7 @@ pub fn replay_block_visual_op<H: hjkl_engine::types::Host>(
     levels: usize,
 ) {
     let (top, left) = ed.cursor();
-    let bot = top + rows.saturating_sub(1);
+    let bot = replayed_block_bottom(ed, top, rows);
     if matches!(op, Operator::Delete | Operator::Change) && refuse_read_only_register(ed) {
         refused_operator(ed, op, (top, left), RangeKind::Exclusive);
         return;
@@ -1122,6 +1127,16 @@ pub fn replay_block_visual_op<H: hjkl_engine::types::Host>(
     }
     vim_mut(ed).mode = Mode::Normal;
 }
+/// The last row of a block `.` rebuilds `rows` tall from `top`, clamped to
+/// the buffer's last line as vim's redo clamps it: the empty row after a
+/// trailing newline is not a line.
+fn replayed_block_bottom<H: hjkl_engine::types::Host>(
+    ed: &Editor<hjkl_buffer::View, H>,
+    top: usize,
+    rows: usize,
+) -> usize {
+    (top + rows.saturating_sub(1)).min(last_content_row(ed).max(top))
+}
 /// Dot-repeat replay of block `r{ch}` — reconstruct the rectangle at the
 /// cursor and re-replace.
 pub fn replay_block_replace<H: hjkl_engine::types::Host>(
@@ -1132,7 +1147,7 @@ pub fn replay_block_replace<H: hjkl_engine::types::Host>(
     to_eol: bool,
 ) {
     let (top, left) = ed.cursor();
-    let bot = top + rows.saturating_sub(1);
+    let bot = replayed_block_bottom(ed, top, rows);
     let cols = block_cols_at(ed, top, left, cols, to_eol);
     block_replace_bounds(ed, ch, top, bot, cols);
 }
@@ -1151,7 +1166,7 @@ pub fn replay_block_insert<H: hjkl_engine::types::Host>(
 ) {
     use hjkl_buffer::{Edit, Position};
     let (top, left) = ed.cursor();
-    let bot = top + rows.saturating_sub(1);
+    let bot = replayed_block_bottom(ed, top, rows);
     ed.push_undo();
     ed.sync_buffer_content_from_textarea();
     // `A` appends `cols` columns past the left edge (or each row's own EOL

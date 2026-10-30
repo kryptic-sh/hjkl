@@ -228,22 +228,40 @@ pub fn step_normal<H: Host>(
         // `O` in a block — the other end of the same rows (`:h v_b_O`): the
         // cursor and anchor trade columns and keep their rows.
         Key::Char('O') if !input.ctrl && ed.fsm_mode() == FsmMode::VisualBlock => {
+            // vim's `v_swap_corners`: the anchor goes to the block's left
+            // display column on its row and the cursor to the right one on
+            // its own; when that leaves the cursor where it was, the other
+            // way round.
             let cur = ed.cursor();
             let anchor = ed.block_anchor();
             let tabstop = ed.settings().tabstop;
             let line =
                 |row| hjkl_engine::buf_helpers::buf_line(ed.buffer(), row).unwrap_or_default();
-            // The columns trade as display columns: each lands on the
-            // character covering the other's column in its own row.
             let (cur_line, anchor_line) = (line(cur.0), line(anchor.0));
-            let cur_v = hjkl_buffer::char_col_to_visual_col(&cur_line, cur.1, tabstop);
-            let anchor_v = hjkl_buffer::char_col_to_visual_col(&anchor_line, anchor.1, tabstop);
+            // A character's first and last display columns.
+            let span = |line: &str, col: usize| {
+                let start = hjkl_buffer::char_col_to_visual_col(line, col, tabstop);
+                let width = line
+                    .chars()
+                    .nth(col)
+                    .map_or(1, |ch| crate::vim::block_cell_width(ch, start, tabstop));
+                (start, start + width.max(1) - 1)
+            };
+            let (cur_start, cur_end) = span(&cur_line, cur.1);
+            let (anchor_start, anchor_end) = span(&anchor_line, anchor.1);
+            let (left, right) = (cur_start.min(anchor_start), cur_end.max(anchor_end));
+            // vim's `coladvance`: the character covering the column, or the
+            // line's last one past its end.
             let landing = |line: &str, vcol| {
                 hjkl_buffer::visual_col_to_char_col(line, vcol, tabstop)
                     .min(line.chars().count().saturating_sub(1))
             };
-            let new_cur = landing(&cur_line, anchor_v);
-            ed.set_block_anchor((anchor.0, landing(&anchor_line, cur_v)));
+            let (mut new_anchor, mut new_cur) =
+                (landing(&anchor_line, left), landing(&cur_line, right));
+            if new_cur == cur.1 {
+                (new_anchor, new_cur) = (landing(&anchor_line, right), landing(&cur_line, left));
+            }
+            ed.set_block_anchor((anchor.0, new_anchor));
             ed.set_block_vcol(new_cur);
             ed.jump_cursor(cur.0, new_cur);
             return true;

@@ -1169,8 +1169,9 @@ Seen while measuring, not `gq`:
   `text_object.rs`; the buffer reader itself is `vim_buf.rs`) leaves the nroff
   macros out.** `startPS` recognises an empty line or a form feed, not the nroff
   `'paragraphs'` / `'sections'` macros (`.PP`, `.SH`, …). A Visual block taller
-  than one row still takes hjkl's own sentence path, not `sentence_visual`;
-  unmeasured how far that differs from vim.
+  than one row still takes hjkl's own sentence path, not `sentence_visual`; the
+  measured shapes (`<C-v>jis`, `<C-v>jas`, `<C-v>kis`, `<C-v>kas` across two
+  sentence lines) match nvim 0.12.5.
 - **A counted `_` past the end does nothing; a test pins it. Needs a decision.**
   vim's `_` (`nv_lineop`) moves with `cursor_down`, which fails only on the last
   line and otherwise stops there: measured in nvim 0.12.5, `10_` on `"a\nb"` @
@@ -1274,12 +1275,6 @@ Seen while measuring, not `gq`:
   empty-pair rules handled in `visual_text_obj_extend_counted`. vim's
   `in_html_tag` cursor adjustment was not ported; the shapes measured with the
   cursor on a tag match nvim 0.12.5 through `tag_text_object`'s own rule.
-- **Block `O` across a tab leaves the cursor one column early after an
-  operator.** `<C-v>jlOld` on `"a\tbc\nxyzwvut"` @ (0, 1) matches nvim's buffer
-  and register, but the cursor ends on (0, 1) where nvim's is on (0, 2). The `O`
-  arm in `normal.rs` trades the corners as display columns and lands on the
-  character covering each; vim may keep the anchor's virtual column inside the
-  tab. Not investigated further.
 - **`.` after `!{motion}` and `gc{motion}` is not recorded (2026-10-28).**
   `op_is_change` (`hjkl-vim` `visual.rs`) now admits every operator vim redoes
   except these two. Neither was measured: the oracle's nvim has no

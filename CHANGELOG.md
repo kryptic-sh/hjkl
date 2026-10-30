@@ -10,6 +10,14 @@ patch bumps.
 
 ### Fixed
 
+- Block `O` follows vim's `v_swap_corners`, putting the anchor on the block's
+  left display column and the cursor on its right one, so it lands right across
+  tabs. A block `d` whose left edge splits a tab leaves the cursor after the
+  spaces that stand in for the tab's cut-off part, as vim does, not on them.
+- `.` of a block change (`d`, `c`, `r`, `I`, `A`) rebuilt a block taller than
+  the lines left below the cursor onto the empty row after the buffer's final
+  newline, typing or padding there; it now stops at the last line, as vim's redo
+  does.
 - Visual `it` on an empty tag pair (`<b></b>`) selects the one cell after the
   open tag, and a second `it` the whole pair, as in vim. It selected the `><`
   between the tags.
