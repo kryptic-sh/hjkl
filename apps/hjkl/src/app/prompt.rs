@@ -915,8 +915,10 @@ impl App {
             Ok(re) => {
                 self.active_editor_mut().set_search_pattern(Some(re));
                 let forward = self.search_dir == SearchDir::Forward;
+                // vim's `/` searches from after the cursor, like `n`: a
+                // match under the cursor is not where it lands.
                 if forward {
-                    self.active_editor_mut().search_advance_forward(false);
+                    self.active_editor_mut().search_advance_forward(true);
                 } else {
                     self.active_editor_mut().search_advance_backward(true);
                 }

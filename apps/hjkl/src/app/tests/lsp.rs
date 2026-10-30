@@ -523,10 +523,10 @@ fn plus_slash_argv_persists_forward_direction_for_n() {
 }
 
 #[test]
-fn search_count_cursor_on_match_stays_on_match() {
-    // Regression: /<pat><CR> from a cursor that's already ON a match used
-    // to advance past it (counter 1/3 → 2/3). Vim semantics: /<CR> finds
-    // the first match AT-OR-AFTER the cursor — only `n` advances.
+fn search_count_cursor_on_match_moves_to_next_match() {
+    // vim's `/<pat><CR>` searches from after the cursor, so from a cursor
+    // already ON a match it lands on the next one: nvim 0.12.5 takes
+    // `/foo<CR>` on "foo X foo X foo" @ (0,0) to (0,6), counter 2/3.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "foo X foo X foo");
     {
@@ -536,11 +536,11 @@ fn search_count_cursor_on_match_stays_on_match() {
     }
     // Cursor at (0,0) — exactly on the first 'foo'.
     app.commit_search("foo");
+    assert_eq!(app.active_editor().cursor(), (0, 6));
     assert_eq!(
         crate::render::search_count(&app),
-        Some((1, 3)),
-        "/<pat><CR> from cursor on a match must keep counter at 1/3, \
-        not advance to 2/3"
+        Some((2, 3)),
+        "/<pat><CR> from cursor on a match lands on the next one, 2/3"
     );
 }
 

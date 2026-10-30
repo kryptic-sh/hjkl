@@ -1116,16 +1116,6 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
   `qq/g<CR>q"qp` pastes `/g<CR>` in hjkl and `/g` plus a carriage return in nvim
   0.12.5. Replay decodes it back, so `@q` is unaffected; only reading or pasting
   the register differs.
-- **Needs a decision: the app's `/<pat><CR>` stays on a match under the
-  cursor.** `commit_search` (`apps/hjkl` `prompt.rs`) advances with
-  `search_advance_forward(false)`, so `/foo<CR>` with the cursor on a `foo` does
-  not move, while `?` and `n` skip the current match. Measured against nvim
-  0.12.5 on `foo X foo X foo` at (0, 0): `/foo<CR>` lands on (0, 6); hjkl-vim's
-  own prompt (`search_prompt.rs`) agrees with nvim. The test
-  `search_count_cursor_on_match_stays_on_match` (`app::tests::lsp`) pins the
-  current behaviour and its comment calls it vim's, which the measurement
-  contradicts. Changing `false` to `true` makes `/` match nvim and fails only
-  that test; whether to change the test is the owner's call.
 - **Surprise, not a bug: `dfcase` and the corpus run nvim with different
   `'startofline'`.** The nvim driver sets `startofline` only when a case pins
   `shiftwidth` / `expandtab`; `dfcase` always pins them. Expectations copied

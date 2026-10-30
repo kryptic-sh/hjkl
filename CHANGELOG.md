@@ -10,6 +10,8 @@ patch bumps.
 
 ### Fixed
 
+- In the app, `/<pattern><CR>` with the cursor already on a match moves to the
+  next match, as vim's `/` does; it stayed on the match under the cursor.
 - Block `O` follows vim's `v_swap_corners`, putting the anchor on the block's
   left display column and the cursor on its right one, so it lands right across
   tabs. A block `d` whose left edge splits a tab leaves the cursor after the
