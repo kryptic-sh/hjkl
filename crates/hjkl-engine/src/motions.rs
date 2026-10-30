@@ -456,11 +456,12 @@ pub fn move_first_non_blank_line<B: Cursor + Query>(buf: &mut B, count: usize) {
     let cursor = read_cursor(buf);
     let last = content_row_count(buf).saturating_sub(1);
     let offset = count.max(1).saturating_sub(1);
-    let desired = cursor.row + offset;
-    // Vim: `_` with a count that overshoots the buffer is a no-op.
-    if desired > last {
+    // vim's `nv_lineop` moves with `cursor_down`, which fails only on the
+    // last line; short of it, a count past the end stops on the last line.
+    if offset > 0 && cursor.row >= last {
         return;
     }
+    let desired = (cursor.row + offset).min(last);
     write_cursor(buf, Position::new(desired, 0));
     move_first_non_blank(buf);
 }
@@ -2867,14 +2868,13 @@ mod tests {
     }
 
     #[test]
-    fn first_non_blank_line_noop_when_overshooting() {
+    fn first_non_blank_line_overshoot_stops_on_last_line() {
         let mut b = View::from_str("a\nb");
-        // 10_ from row 0 would overshoot; vim no-ops.
-        let before = at(&b);
+        // nvim 0.12.5: `10_` on "a\nb" @ (0,0) lands on (1,0).
         move_first_non_blank_line(&mut b, 10);
-        assert_eq!(at(&b), before, "overshooting _ should be a no-op");
-        // 2_ from row 0 → row 1 (offset=1), first non-blank.
+        assert_eq!(at(&b), Position::new(1, 0));
+        // On the last line a count above one fails and stays put.
         move_first_non_blank_line(&mut b, 2);
-        assert_eq!(at(&b).row, 1);
+        assert_eq!(at(&b), Position::new(1, 0));
     }
 }

@@ -56,11 +56,12 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
         return;
     }
     // Linewise motions normally cover their row even when their endpoint has
-    // the same row. `_` is a successful zero-distance motion, but `j`/`k` and
-    // `+`/`-` fail at a buffer edge and must not operate on the current row.
+    // the same row. A bare `_` is a successful zero-distance motion, but
+    // `j`/`k`, `+`/`-` and a counted `_` fail at a buffer edge and must not
+    // operate on the current row.
     if start.0 == end.0
         && !screen_charwise
-        && matches!(
+        && (matches!(
             motion,
             Motion::Up
                 | Motion::Down
@@ -68,7 +69,7 @@ pub fn apply_op_with_motion<H: hjkl_engine::types::Host>(
                 | Motion::ScreenDown
                 | Motion::FirstNonBlankNextLine
                 | Motion::FirstNonBlankPrevLine
-        )
+        ) || (matches!(motion, Motion::FirstNonBlankLine) && count > 1))
     {
         return;
     }

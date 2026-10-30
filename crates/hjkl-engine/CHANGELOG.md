@@ -19,6 +19,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- `motions::move_first_non_blank_line` stops on the last line when the count
+  runs past it, and fails only from the last line itself, as vim's `_` does.
 - Redo puts the cursor where the change started whenever that lies in the
   changed block, from the line above it through the line after its new end, as
   vim's `u_undoredo` does; before, only a start on the first changed line (or

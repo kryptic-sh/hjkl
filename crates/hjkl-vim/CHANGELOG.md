@@ -67,6 +67,10 @@ and this project adheres to
 
 ### Fixed
 
+- A counted `_` past the end stops on the last line, as vim's `cursor_down`
+  does, so `d10_` deletes through it; on the last line itself `[count]_` fails
+  and an operator does nothing. `_` also counts a closed fold as one line. It
+  did nothing when the count overshot, and `d2_` on the last line deleted it.
 - Block `O` follows vim's `v_swap_corners`, putting the anchor on the block's
   left display column and the cursor on its right one, so it lands right across
   tabs. A block `d` whose left edge splits a tab leaves the cursor after the

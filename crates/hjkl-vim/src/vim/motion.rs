@@ -1031,10 +1031,21 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
         // `+` / `<CR>` / `-` move with vim's `cursor_down` / `cursor_up`: a
         // closed fold counts as one line, a count past the edge stops there,
         // and the motion fails only when no line is left below / above the
-        // cursor's fold.
-        Motion::FirstNonBlankNextLine | Motion::FirstNonBlankPrevLine => {
+        // cursor's fold. `[count]_` is `cursor_down(count - 1)` (vim's
+        // `nv_lineop`), so a bare `_` stays on its line.
+        Motion::FirstNonBlankLine if count <= 1 => {
+            hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
+        }
+        Motion::FirstNonBlankNextLine
+        | Motion::FirstNonBlankPrevLine
+        | Motion::FirstNonBlankLine => {
             use hjkl_engine::types::FoldProvider;
-            let down = matches!(motion, Motion::FirstNonBlankNextLine);
+            let down = !matches!(motion, Motion::FirstNonBlankPrevLine);
+            let count = if matches!(motion, Motion::FirstNonBlankLine) {
+                count - 1
+            } else {
+                count
+            };
             let folds = hjkl_engine::SnapshotFoldProvider::from_buffer(ed.buffer());
             let mut row = ed.cursor().0;
             // `cursor_up` starts from the first line of the cursor's fold.
@@ -1075,9 +1086,6 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
                 }
                 hjkl_engine::motions::move_first_non_blank(ed.buffer_mut());
             }
-        }
-        Motion::FirstNonBlankLine => {
-            hjkl_engine::motions::move_first_non_blank_line(ed.buffer_mut(), count);
         }
         Motion::GotoColumn => {
             hjkl_engine::motions::move_goto_column(ed.buffer_mut(), count);

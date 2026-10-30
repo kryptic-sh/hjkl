@@ -1954,3 +1954,87 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+[[cases]]
+name = "underscore_count_past_end_stops_on_last_line"
+initial_buffer = "a\nb\n"
+initial_cursor = [0, 0]
+keys = "10_"
+expected_buffer = "a\nb\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "d_underscore_count_past_end_deletes_to_last_line"
+initial_buffer = "a\nb\n"
+initial_cursor = [0, 0]
+keys = "d10_"
+expected_buffer = ""
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "d_underscore_count_on_last_line_fails"
+initial_buffer = "a\nb\n"
+initial_cursor = [1, 0]
+keys = "d2_"
+expected_buffer = "a\nb\n"
+expected_cursor = [1, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "underscore_count_from_middle_stops_on_last_line"
+initial_buffer = "a\n  b\nc\n"
+initial_cursor = [1, 0]
+keys = "9_"
+expected_buffer = "a\n  b\nc\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "d_underscore_count_on_last_line_of_three_fails"
+initial_buffer = "a\n  b\nc\n"
+initial_cursor = [2, 0]
+keys = "d3_"
+expected_buffer = "a\n  b\nc\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "underscore_counts_a_closed_fold_as_one_line"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = "zfj2_"
+expected_buffer = "a\nb\nc\nd\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false
+
+[[cases]]
+name = "d_underscore_over_a_closed_fold"
+initial_buffer = "a\nb\nc\nd\n"
+initial_cursor = [0, 0]
+keys = "zfjd2_"
+expected_buffer = "d\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
+autoindent = false

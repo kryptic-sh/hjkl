@@ -1107,7 +1107,9 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
     (`substitute.rs`, `text_object_ops.rs`, `visual_ops.rs`,
     `insert_bridges.rs`, the app's LSP edits in `lsp_glue.rs`), and which of
     them replace across rows was not checked.
-  - **Crate changelogs are not rolled at a release.** `hjkl-vim-types`'s
+  - **DECIDED 2026-10-30: roll every crate changelog at each release, as the
+    root one is; the next release starts by sorting the entries since 0.41.0.**
+    Until now crate changelogs were not rolled at a release. `hjkl-vim-types`'s
     `[Unreleased]` still lists `Motion::ChangeWordEnd`, which the root changelog
     records as shipped in 0.42.0. BCTP moves the root changelog only; whether
     the per-crate ones should move with it is the owner's call.
@@ -1142,11 +1144,12 @@ pattern identified so far:
 - **Insert-mode auto-wrap: what the 2026-10-29 port leaves out.**
   `auto_wrap_before` (`hjkl-vim` `insert_bridges.rs`) covers `'formatoptions'`
   `t` for plain text. Not covered:
-  - **Whether `t` should be on by default needs a decision.** nvim's default
-    `formatoptions` is `tcqj` with `textwidth` 0, so it never wraps until
-    `textwidth` is set. hjkl's defaults are `ro` and `textwidth` 79, so adding
-    `t` would wrap every user's typing at 79. The oracle driver adds `t`
-    whenever a case sets `textwidth`, to match nvim.
+  - **DECIDED 2026-10-30: turn `t` on by default (with `textwidth` 79, so typing
+    wraps at 79); not yet done.** nvim's default `formatoptions` is `tcqj` with
+    `textwidth` 0, so it never wraps until `textwidth` is set. hjkl's defaults
+    are `ro` and `textwidth` 79, so adding `t` would wrap every user's typing
+    at 79. The oracle driver adds `t` whenever a case sets `textwidth`, to match
+    nvim.
   - `'formatexpr'` and the `l` / `b` / `1` / `2` / `w` flags are not ported;
     none is in nvim's default `formatoptions` (`tcqj`). Comment leaders under
     `c` follow `comments` since 2026-10-29, but only for wrapping: hjkl's `r` /
@@ -1162,39 +1165,24 @@ Seen while measuring, not `gq`:
   than one row still takes hjkl's own sentence path, not `sentence_visual`; the
   measured shapes (`<C-v>jis`, `<C-v>jas`, `<C-v>kis`, `<C-v>kas` across two
   sentence lines) match nvim 0.12.5.
-- **A counted `_` past the end does nothing; a test pins it. Needs a decision.**
-  vim's `_` (`nv_lineop`) moves with `cursor_down`, which fails only on the last
-  line and otherwise stops there: measured in nvim 0.12.5, `10_` on `"a\nb"` @
-  (0,0) lands on (1,0), `9_` on three lines from row 1 on row 2, and `d10_` @
-  (0,0) deletes both lines. hjkl's `move_first_non_blank_line` (`hjkl-engine`
-  `motions.rs`) returns without moving when the count overshoots, so `d10_`
-  deletes only the cursor's line. `+` / `-` / `<CR>` got the `cursor_down` /
-  `cursor_up` rule on 2026-10-27; `_` did not, because the unit test
-  `first_non_blank_line_noop_when_overshooting` (same file) asserts the no-op
-  and says "vim no-ops", which nvim contradicts. Changing that test is the
-  user's call. `_` also ignores closed folds (`zfj2_` on four lines @ (0,0)
-  lands on row 1 in hjkl, row 2 in nvim, which counts the fold as one line); `+`
-  / `-` handle folds in the vim layer (`apply_motion_cursor_ctx`'s
-  `FirstNonBlankNextLine` arm), which `_` could join once the overshoot rule is
-  settled.
-- **`it` / `at` before a tag pair scan forward; nvim does nothing; a test pins
-  it. Needs a decision.** `dit` on `"x <a>b</a> y"` @ (0,0) leaves the buffer
-  alone in nvim 0.12.5 and deletes `b` in hjkl, whose `tag_text_object`
-  (`text_object.rs`) falls back to the next pair forward, as the bracket objects
-  also do (and there nvim agrees). The unit test `tag_text_object_edge_cases`
-  (same file) asserts that forward scan ("Cursor before the first tag → forward
-  scan to the next pair"). Matching nvim means changing it, which is the user's
-  call.
-- **A counted `f` / `t` / `;` with too few targets moves; three tests pin it.
-  Needs a decision.** vim's `searchc` fails when the line holds fewer than
-  `count` targets after the cursor, and the cursor stays: measured in nvim
-  0.12.5, `3fx` on `"xaxbxc"` @ (0,0), `2d3fx` on `"xaxbxcxdxexf"` @ (0,0) and
-  `fX3;` on `"aXaXaX"` @ (0,0) all leave buffer and cursor alone (the cursor's
-  own `x` does not count). hjkl stops on the last target found (`Motion::Find`
-  in `apply_motion_cursor_ctx`, `motion.rs`), and `d2fd` deletes through it.
-  Putting the cursor back on a short count fixes all of these (and fuzz cases
-  `2f)`, `3f)rZ`), but fails `fx_with_count_3` and `two_d_3fx_total_count_6`
-  (`apps/hjkl/src/app/tests/keymap.rs`) and
+- **`it` / `at` before a tag pair scan forward; nvim does nothing. DECIDED
+  2026-10-30: match nvim and change the test; not yet done.** `dit` on
+  `"x <a>b</a> y"` @ (0,0) leaves the buffer alone in nvim 0.12.5 and deletes
+  `b` in hjkl, whose `tag_text_object` (`text_object.rs`) falls back to the next
+  pair forward, as the bracket objects also do (and there nvim agrees). The unit
+  test `tag_text_object_edge_cases` (same file) asserts that forward scan
+  ("Cursor before the first tag → forward scan to the next pair"). Matching nvim
+  means changing it, which is the user's call.
+- **A counted `f` / `t` / `;` with too few targets moves. DECIDED 2026-10-30:
+  match nvim and change the three tests; not yet done.** vim's `searchc` fails
+  when the line holds fewer than `count` targets after the cursor, and the
+  cursor stays: measured in nvim 0.12.5, `3fx` on `"xaxbxc"` @ (0,0), `2d3fx` on
+  `"xaxbxcxdxexf"` @ (0,0) and `fX3;` on `"aXaXaX"` @ (0,0) all leave buffer and
+  cursor alone (the cursor's own `x` does not count). hjkl stops on the last
+  target found (`Motion::Find` in `apply_motion_cursor_ctx`, `motion.rs`), and
+  `d2fd` deletes through it. Putting the cursor back on a short count fixes all
+  of these (and fuzz cases `2f)`, `3f)rZ`), but fails `fx_with_count_3` and
+  `two_d_3fx_total_count_6` (`apps/hjkl/src/app/tests/keymap.rs`) and
   `find_repeat_with_count_advances_count_times`
   (`crates/hjkl-engine-tui/tests/editor_behavior.rs`), which expect the partial
   move — the first two counting the cursor's own `x` in their comments. The

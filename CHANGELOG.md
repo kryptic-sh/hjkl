@@ -10,6 +10,10 @@ patch bumps.
 
 ### Fixed
 
+- A counted `_` past the end stops on the last line, as vim's `cursor_down`
+  does, so `d10_` deletes through it; on the last line itself `[count]_` fails
+  and an operator does nothing. `_` also counts a closed fold as one line. It
+  did nothing when the count overshot, and `d2_` on the last line deleted it.
 - In the app, `/<pattern><CR>` with the cursor already on a match moves to the
   next match, as vim's `/` does; it stayed on the match under the cursor.
 - Block `O` follows vim's `v_swap_corners`, putting the anchor on the block's
