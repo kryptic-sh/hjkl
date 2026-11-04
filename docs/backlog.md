@@ -805,20 +805,6 @@ with ripgrep installed are unaffected.
   behaviour change to the test environment, not a workflow-hygiene one. Decide
   it repo-wide or not at all.
 
-- **The `hjkl-ex` path-completion cache test loses its race under a full
-  parallel workspace run.**
-  `complete_path_entries_caches_listing_until_dir_mtime_changes` (`hjkl-ex`
-  `complete.rs`) measures a delta on the process-wide `PATH_ENTRIES_CACHE`
-  rescan counter that every other path test shares. It already evicts and
-  retries 64 times for exactly this contention and still loses: on 2026-09-16 it
-  failed in `cargo test --workspace`, and `cargo test -p hjkl-vim -p hjkl-ex`
-  reproduced it roughly one run in three — on a clean `main` with no local
-  changes, so it is not tied to any pending work. It always passes when run
-  alone. Not fixed — recorded so the next person does not chase it as a real
-  regression. The fix is to give the test its own cache instance (the counter
-  and cache are process-wide statics) rather than to widen the retry loop, which
-  has already been tried and is what is failing.
-
 - **A grammar installed before the query-sanitizer was removed never
   re-installs.** `is_user_install_fresh` (`hjkl-bonsai` `runtime/loader.rs`)
   compares grammar rev, query rev and ABI only, so an install predating

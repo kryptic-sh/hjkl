@@ -376,6 +376,18 @@ fn home_dir_from(home_env: Option<String>, profile: Option<std::path::PathBuf>) 
 /// When `dirs_only` is true, non-directory entries are filtered out (`:cd`
 /// completion); directories still get their trailing `/`.
 fn complete_path_entries(prefix: &str, cwd: &std::path::Path, dirs_only: bool) -> Vec<String> {
+    complete_path_entries_with(&PATH_ENTRIES_CACHE, prefix, cwd, dirs_only)
+}
+
+/// [`complete_path_entries`] over the listing cache `cache`: the
+/// process-wide [`PATH_ENTRIES_CACHE`] in the editor, a private one in tests
+/// that count its rescans.
+fn complete_path_entries_with(
+    cache: &Mutex<Option<PathEntriesCache>>,
+    prefix: &str,
+    cwd: &std::path::Path,
+    dirs_only: bool,
+) -> Vec<String> {
     // A bare `~` scans the home dir with entries prefixed `~/`.
     let prefix = if prefix == "~" { "~/" } else { prefix };
     // Split prefix at the last separator into (dir_part, file_part) — `/`, and
@@ -400,9 +412,7 @@ fn complete_path_entries(prefix: &str, cwd: &std::path::Path, dirs_only: bool) -
         return Vec::new();
     };
     // Serve the listing from the one-entry cache when the dir is unchanged.
-    let mut cache = PATH_ENTRIES_CACHE
-        .lock()
-        .expect("path entries cache poisoned");
+    let mut cache = cache.lock().expect("path entries cache poisoned");
     if !matches!(&*cache, Some(c) if c.dir == scan_dir && c.mtime == mtime) {
         let Ok(rd) = std::fs::read_dir(&scan_dir) else {
             return Vec::new();
@@ -2318,67 +2328,38 @@ mod tests {
 
     #[test]
     fn complete_path_entries_caches_listing_until_dir_mtime_changes() {
-        let temp_dir =
-            std::env::temp_dir().join(format!("hjkl_path_cache_test_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&temp_dir);
-        std::fs::create_dir_all(&temp_dir).unwrap();
+        // A private cache, so no other test's scans land in the counter.
+        let cache = Mutex::new(None);
+        let dir = tempfile::tempdir().unwrap();
+        let temp_dir = dir.path();
         std::fs::write(temp_dir.join("alpha.txt"), b"x").unwrap();
         std::fs::write(temp_dir.join("beta.txt"), b"x").unwrap();
-        let sources = ArgSources {
-            cwd: Some(&temp_dir),
-            ..Default::default()
-        };
-        let scans = || {
-            PATH_ENTRIES_CACHE
-                .lock()
-                .unwrap()
-                .as_ref()
-                .map_or(0, |c| c.scans)
-        };
-        let has = |cands: &[String], name: &str| cands.iter().any(|c| c.contains(name));
+        let list = |cwd: &std::path::Path| complete_path_entries_with(&cache, "", cwd, false);
+        let scans = || cache.lock().unwrap().as_ref().map_or(0, |c| c.scans);
+        let has = |cands: &[String], name: &str| cands.iter().any(|c| c == name);
 
-        // First call scans the dir (+1 to the rescan counter); the repeat call
-        // on the UNCHANGED dir must hit the cache (+0). The cache is a single
-        // process-wide entry and the counter is shared with every other path
-        // test, so a concurrent rescan can land in the measurement window and
-        // inflate the delta — retry until the delta is observed clean. Before
-        // each attempt, scan a throwaway dir so the cached entry is guaranteed
-        // NOT to be ours: r1 is then a real miss and r2 a real hit (never a
-        // delta-0 hit/hit pair).
-        let mut hit_proven = false;
-        for _ in 0..64 {
-            let evict = tempfile::tempdir().unwrap();
-            let evict_sources = ArgSources {
-                cwd: Some(evict.path()),
-                ..Default::default()
-            };
-            let _ = complete_arg("e ", 2, ArgKind::Path, &evict_sources);
-            let before = scans();
-            let r1 = complete_arg("e ", 2, ArgKind::Path, &sources);
-            let r2 = complete_arg("e ", 2, ArgKind::Path, &sources);
-            if scans() == before + 1
-                && has(&r1.candidates, "alpha.txt")
-                && has(&r2.candidates, "beta.txt")
-            {
-                hit_proven = true;
-                break;
-            }
-        }
-        assert!(
-            hit_proven,
+        // The first call scans the dir; the repeat call on the UNCHANGED dir
+        // must hit the cache.
+        let r1 = list(temp_dir);
+        assert_eq!(scans(), 1);
+        let r2 = list(temp_dir);
+        assert_eq!(
+            scans(),
+            1,
             "repeat call on an unchanged dir must hit the cache instead of re-reading"
         );
+        assert!(has(&r1, "alpha.txt") && has(&r2, "beta.txt"), "{r2:?}");
 
-        // A new file bumps the dir's mtime → the next call must rescan (+1)
-        // and see it. On filesystems whose dir mtime does not move on entry
-        // creation (the cache's documented stale window — observed on the
-        // Windows CI runner) the same-dir rescan cannot be observed; there the
-        // cache is instead proven to invalidate on a different scan dir below.
-        let mtime_before = std::fs::metadata(&temp_dir)
+        // A new file bumps the dir's mtime → the next call must rescan and see
+        // it. On filesystems whose dir mtime does not move on entry creation
+        // (the cache's documented stale window — observed on the Windows CI
+        // runner) the same-dir rescan cannot be observed; there the cache is
+        // instead proven to invalidate on a different scan dir below.
+        let mtime_before = std::fs::metadata(temp_dir)
             .and_then(|m| m.modified())
             .unwrap();
         std::fs::write(temp_dir.join("gamma.txt"), b"x").unwrap();
-        let mtime_after = std::fs::metadata(&temp_dir)
+        let mtime_after = std::fs::metadata(temp_dir)
             .and_then(|m| m.modified())
             .unwrap();
         if mtime_after == mtime_before {
@@ -2392,27 +2373,20 @@ mod tests {
                 let times = std::fs::FileTimes::new()
                     .set_accessed(bumped)
                     .set_modified(bumped);
-                std::fs::File::open(&temp_dir)
+                std::fs::File::open(temp_dir)
                     .unwrap()
                     .set_times(times)
                     .unwrap();
             }
         }
-        let mtime_moved = std::fs::metadata(&temp_dir)
+        let mtime_moved = std::fs::metadata(temp_dir)
             .and_then(|m| m.modified())
             .unwrap()
             != mtime_before;
         if mtime_moved {
-            let mut invalidated = false;
-            for _ in 0..64 {
-                let before = scans();
-                let r3 = complete_arg("e ", 2, ArgKind::Path, &sources);
-                if scans() == before + 1 && has(&r3.candidates, "gamma.txt") {
-                    invalidated = true;
-                    break;
-                }
-            }
-            assert!(invalidated, "a dir mtime change must invalidate the cache");
+            let r3 = list(temp_dir);
+            assert_eq!(scans(), 2, "a dir mtime change must invalidate the cache");
+            assert!(has(&r3, "gamma.txt"), "{r3:?}");
         } else {
             // The dir mtime did not move and could not be forced (Windows):
             // this is the cache's documented stale window. Prove it still
@@ -2420,21 +2394,13 @@ mod tests {
             let other = temp_dir.join("other");
             std::fs::create_dir_all(&other).unwrap();
             std::fs::write(other.join("delta.txt"), b"x").unwrap();
-            let other_sources = ArgSources {
-                cwd: Some(&other),
-                ..Default::default()
-            };
-            let before = scans();
-            let r = complete_arg("e ", 2, ArgKind::Path, &other_sources);
-            assert!(scans() > before, "a different scan dir must rescan");
+            let r = list(&other);
+            assert_eq!(scans(), 2, "a different scan dir must rescan");
             assert!(
-                has(&r.candidates, "delta.txt"),
-                "the new scan dir's entries must be listed: {:?}",
-                r.candidates
+                has(&r, "delta.txt"),
+                "the new scan dir's entries must be listed: {r:?}"
             );
         }
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
