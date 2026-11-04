@@ -108,6 +108,13 @@ patch bumps.
 
 ### Changed
 
+- **Dependency updates**, all within existing ranges (`Cargo.lock` only): `zip`
+  9.3.0 under `hjkl-anvil`'s archive extraction; `toml` 1.2.0 with `toml_edit`
+  0.25.18 and `toml_writer` 1.2.0; `pulldown-cmark` 0.13.6; `log` 0.4.35; `cc`
+  1.11.0 for the MSVC grammar compile; `crc32fast` 1.5.4, `utf8_iter` 1.1.0,
+  `psm` 0.1.32 and the `wasm-bindgen` 0.2.130 family. No manifest's version
+  requirement moved: `hjkl-bonsai` keeps its `cc` floor at 1.2.1 so grammar
+  crates pinning `cc ~1.2` still resolve beside it.
 - **Typed text wraps at `textwidth` by default.** The default `'formatoptions'`
   is `"tro"`: `t` joins `r` and `o`, so with the default `textwidth` of 79
   Insert mode breaks a line at a word boundary once it passes column 79.
