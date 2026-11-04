@@ -569,6 +569,23 @@ pub fn reset_column_for_counted_join_on_last_line<H: hjkl_engine::types::Host>(
 /// Returns `false` when the cursor is on the last line (nothing to
 /// join) so counted loops can stop instead of spinning.
 pub fn join_line<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View, H>) -> bool {
+    join_next_line(ed, &mut JoinRun::default())
+}
+/// What vim's `do_join` carries from one join of a command to the next:
+/// the last character of the segment joined before (its `endcurr1`), which
+/// decides whether the next join inserts a space. `None` until the first
+/// join, which reads the cursor line's own last character instead; an empty
+/// segment leaves `Some(None)`, so `"a "` joined over an empty line and then
+/// `"b"` still gets a space before `b`.
+#[derive(Default)]
+pub(crate) struct JoinRun {
+    prev_end: Option<Option<char>>,
+}
+/// One join of a `J` command, continuing `run`. See [`join_line`].
+pub(crate) fn join_next_line<H: hjkl_engine::types::Host>(
+    ed: &mut Editor<hjkl_buffer::View, H>,
+    run: &mut JoinRun,
+) -> bool {
     use hjkl_buffer::{Edit, Position};
     ed.sync_buffer_content_from_textarea();
     let row = buf_cursor_pos(ed.buffer()).row;
@@ -588,10 +605,13 @@ pub fn join_line<H: hjkl_engine::types::Host>(ed: &mut Editor<hjkl_buffer::View,
     let cur_chars = cur_line.chars().count();
     let next_chars = next_raw.chars().count();
     // `J` inserts a single space iff both sides are non-empty after
-    // stripping the next line's leading whitespace.
+    // stripping the next line's leading whitespace, unless the segment
+    // joined before ends in a blank or the next one starts with `)`.
+    let prev_end = run.prev_end.unwrap_or_else(|| cur_line.chars().next_back());
+    run.prev_end = Some(next_trimmed.chars().next_back());
     let separator = if !cur_line.is_empty()
         && !next_trimmed.is_empty()
-        && !cur_line.ends_with([' ', '\t'])
+        && !matches!(prev_end, Some(' ' | '\t'))
         && !next_trimmed.starts_with(')')
     {
         " "
@@ -713,9 +733,10 @@ pub fn visual_join<H: hjkl_engine::types::Host>(
     ed.push_undo();
     buf_set_cursor_rc(ed.buffer_mut(), top, 0);
     let mut joined_any = false;
+    let mut run = JoinRun::default();
     for _ in 0..joins {
         let joined = if with_space {
-            join_line(ed)
+            join_next_line(ed, &mut run)
         } else {
             join_line_raw(ed)
         };

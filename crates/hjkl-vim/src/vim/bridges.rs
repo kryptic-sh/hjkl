@@ -382,9 +382,10 @@ pub fn join_line_bridge<H: hjkl_engine::types::Host>(
     let joins = count.max(2) - 1;
     reset_column_for_counted_join_on_last_line(ed, count);
     let _group = ed.undo_group();
+    let mut run = JoinRun::default();
     for _ in 0..joins {
         ed.push_undo();
-        if !join_line(ed) {
+        if !join_next_line(ed, &mut run) {
             break;
         }
     }

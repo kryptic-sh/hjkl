@@ -277,3 +277,42 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+# A counted `J` decides each space from the segment joined before (vim's
+# `endcurr1`), not from the line built so far: joining an empty line resets
+# it, so the line after still gets its space despite the trailing blank.
+[[cases]]
+name = "counted_join_over_empty_line_after_trailing_space"
+initial_buffer = "a \n\nb\n"
+initial_cursor = [0, 0]
+keys = "3J"
+expected_buffer = "a  b\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+
+[[cases]]
+name = "visual_join_over_empty_line_after_trailing_space"
+initial_buffer = "a \n\nb\n"
+initial_cursor = [0, 0]
+keys = "VGJ"
+expected_buffer = "a  b\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"
+
+[[cases]]
+name = "dot_repeat_of_counted_join_over_empty_line"
+initial_buffer = "a \n\nb\nx \n\ny\n"
+initial_cursor = [0, 0]
+keys = "3Jj."
+expected_buffer = "a  b\nx  y\n"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+
+[[cases]]
+name = "counted_join_over_blank_line_after_tab"
+initial_buffer = "a\t\n\n  b\n"
+initial_cursor = [0, 0]
+keys = "3J"
+expected_buffer = "a\t b\n"
+expected_cursor = [0, 2]
+expected_mode = "normal"

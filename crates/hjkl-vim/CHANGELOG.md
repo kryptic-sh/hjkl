@@ -67,6 +67,10 @@ and this project adheres to
 
 ### Fixed
 
+- A counted `J` (and Visual `J`, `:join`, and `.` of either) decides each
+  inserted space from the line joined just before, as vim's `do_join` does, not
+  from the end of the line built so far. Joining an empty line in between resets
+  that, so `3J` on `"a "`, `""`, `"b"` gives `"a  b"`; it gave `"a b"`.
 - `it` / `at` with the cursor inside no tag pair fail, as vim's tag object does:
   `dit` before `<a>b</a>` leaves the buffer alone and `cit` stays in Normal
   mode. They scanned forward to the next pair, as the bracket objects (rightly)

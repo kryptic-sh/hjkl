@@ -162,9 +162,10 @@ pub fn replay_last_change<H: hjkl_engine::types::Host>(
             toggle_case_at_cursor_bridge(ed, scaled(count));
         }
         LastChange::JoinLine { count } => {
+            let mut run = JoinRun::default();
             for _ in 0..scaled(count) {
                 ed.push_undo();
-                if !join_line(ed) {
+                if !join_next_line(ed, &mut run) {
                     break;
                 }
             }
