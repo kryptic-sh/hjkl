@@ -121,6 +121,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- `Options::default()` and `Settings::default()` set `formatoptions` to `"tro"`,
+  turning on auto-wrap of typed text at `textwidth`; it was `"ro"`.
 - `Editor::filter_range` keeps the CR of filtered CRLF rows. It split the output
   with `str::lines`, which dropped every `\r`, so filtering a CRLF buffer turned
   the replaced rows into LF rows.

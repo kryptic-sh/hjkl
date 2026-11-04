@@ -24,6 +24,8 @@ and this project adheres to
 
 ### Changed
 
+- The bundled config's `formatoptions` is `"tro"`, so typed text wraps at
+  `textwidth` (79) by default.
 - The explorer, the fuzzy file picker, the fuzzy grep picker and `:grep` all
   select files through `hjkl_fs::project`, so what the tree shows is what the
   pickers find and what `:grep` searches. In practice that means dotfiles are

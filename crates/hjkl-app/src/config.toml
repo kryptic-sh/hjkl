@@ -115,8 +115,9 @@ indent_guide_char = "│"
 
 # ── editing behaviour ────────────────────────────────────────────────────────
 iskeyword = "@,48-57,_,192-255"
-# "r" continues line comments on Enter, "o" continues them on o/O.
-formatoptions = "ro"
+# "t" wraps typed text at `textwidth`, "r" continues line comments on Enter,
+# "o" continues them on o/O.
+formatoptions = "tro"
 autopair = true
 autoclose-tag = true
 # `s`/`S` are vim-sneak two-char jumps rather than substitute-char/line.

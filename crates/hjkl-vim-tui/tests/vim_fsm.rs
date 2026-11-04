@@ -6411,3 +6411,19 @@ fn backward_search_commit_sets_sticky_col() {
     run_keys(&mut e, "j");
     assert_eq!(e.cursor(), (1, 1), "clamped to the short row from col 10");
 }
+
+#[test]
+fn typing_past_default_textwidth_wraps() {
+    // The default `formatoptions` carries `t` with `textwidth` 79, so typed
+    // text wraps at a word boundary once it passes column 79.
+    let mut e = editor_with("");
+    let words = "word ".repeat(17); // 85 columns
+    run_keys(&mut e, &format!("i{}<Esc>", words.trim_end()));
+    let rope = e.buffer().rope();
+    assert_eq!(rope.len_lines(), 2, "the typed line must wrap once");
+    let first = hjkl_buffer::rope_line_str(&rope, 0);
+    assert!(
+        first.trim_end().chars().count() <= 79,
+        "first line exceeds textwidth: {first:?}"
+    );
+}

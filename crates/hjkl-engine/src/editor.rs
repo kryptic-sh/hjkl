@@ -1209,7 +1209,7 @@ pub struct Settings {
     /// `o` — auto-continue line comments on `o` / `O` in normal mode.
     /// `t` — wrap typed text at `textwidth`.
     /// `c` — wrap typed comment text at `textwidth`, repeating the leader.
-    /// Default `"ro"`.
+    /// Default `"tro"`.
     pub formatoptions: String,
     /// Comment leaders in vim's `comments` format (`{flags}:{string},…`),
     /// which auto-wrap under `formatoptions` `c` repeats on the new line.
@@ -1406,7 +1406,7 @@ impl Default for Settings {
             foldlevelstart: 99,
             foldmarker: "{{{,}}}".to_string(),
             colorcolumn: String::new(),
-            formatoptions: "ro".to_string(),
+            formatoptions: "tro".to_string(),
             comments: "s1:/*,mb:*,ex:*/,://,b:#,:%,:XCOMM,n:>,fb:-".to_string(),
             filetype: String::new(),
             commentstring: String::new(),

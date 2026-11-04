@@ -1144,12 +1144,6 @@ pattern identified so far:
 - **Insert-mode auto-wrap: what the 2026-10-29 port leaves out.**
   `auto_wrap_before` (`hjkl-vim` `insert_bridges.rs`) covers `'formatoptions'`
   `t` for plain text. Not covered:
-  - **DECIDED 2026-10-30: turn `t` on by default (with `textwidth` 79, so typing
-    wraps at 79); not yet done.** nvim's default `formatoptions` is `tcqj` with
-    `textwidth` 0, so it never wraps until `textwidth` is set. hjkl's defaults
-    are `ro` and `textwidth` 79, so adding `t` would wrap every user's typing
-    at 79. The oracle driver adds `t` whenever a case sets `textwidth`, to match
-    nvim.
   - `'formatexpr'` and the `l` / `b` / `1` / `2` / `w` flags are not ported;
     none is in nvim's default `formatoptions` (`tcqj`). Comment leaders under
     `c` follow `comments` since 2026-10-29, but only for wrapping: hjkl's `r` /

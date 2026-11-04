@@ -102,6 +102,14 @@ patch bumps.
   count, or the change before the move when nothing was typed after it.
   `Ax<Left>y<Esc>j.` inserts `y` before the cursor, where hjkl appended it.
 
+### Changed
+
+- **Typed text wraps at `textwidth` by default.** The default `'formatoptions'`
+  is `"tro"`: `t` joins `r` and `o`, so with the default `textwidth` of 79
+  Insert mode breaks a line at a word boundary once it passes column 79.
+  `:set formatoptions-=t` (or `formatoptions = "ro"` in the config) restores the
+  old behaviour.
+
 ## [0.44.0] - 2026-10-29
 
 ### Added
