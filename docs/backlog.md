@@ -2817,11 +2817,6 @@ well-tested code; three verified findings, all LOW.
 - `crates/hjkl-ex/src/builtins.rs:313-322` — `:wqall!` / `:wqa!` / `:xall!` /
   `:xa!` return `force: false`; vim's `:wqall!` quits even when a save fails.
   Documented divergence, tested as intentional.
-- `apps/hjkl/src/app/explorer_reconcile.rs:843-854` — `apply_applied`'s
-  `Created` arm has a dead duplicated if/else (both branches `File::create`)
-  with a stale "treat as dir" comment; harmless because `revert_ops` never emits
-  `Created` for dirs, but a directory journaled as `Created` would redo as a
-  file.
 
 ### Coverage
 

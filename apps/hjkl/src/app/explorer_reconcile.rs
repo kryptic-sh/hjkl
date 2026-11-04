@@ -841,18 +841,10 @@ pub fn apply_applied(
     for op in ops {
         match op {
             AppliedOp::Created(path) => {
-                // Re-create the file/dir.
-                let result = if path.extension().is_none() && !path.to_string_lossy().contains('.')
-                {
-                    // Heuristic: no extension → treat as dir.  But the journal
-                    // knows exactly what was created; we don't have is_dir info
-                    // here.  Safe fallback: try create_file first; if the path
-                    // was a dir the Restored/Trashed variant would have been used.
-                    std::fs::File::create(path).map(|_| ())
-                } else {
-                    std::fs::File::create(path).map(|_| ())
-                };
-                match result {
+                // Re-create the entry as a file. `Created` carries no is_dir
+                // bit, but a reverted creation (file or dir) is journalled
+                // for redo as `Restored`, not `Created`, so no dir lands here.
+                match std::fs::File::create(path).map(|_| ()) {
                     Ok(()) => {
                         created.push(path.clone());
                         new_applied.push(AppliedOp::Created(path.clone()));

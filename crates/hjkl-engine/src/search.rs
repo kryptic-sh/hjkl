@@ -349,9 +349,10 @@ fn translate_pattern(pat: &str, last_sub: &str) -> (String, Option<bool>) {
                     }
                 }
                 Some(other) => {
-                    // \d \s \w \b \B \n \t \r \& \~ \\ etc. — already
-                    // valid rust-regex syntax (or handled by the caller) and
-                    // identical in vim's default magic. Pass through.
+                    // Everything not rewritten above (`\n`, `\t`, `\r`,
+                    // `\\`, ...) passes through as rust-regex syntax. `\b`
+                    // stays rust-regex's word boundary, where vim's is
+                    // <BS>: an accepted trade-off (`docs/backlog.md`).
                     out.push('\\');
                     out.push(other);
                 }
