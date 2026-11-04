@@ -1446,28 +1446,31 @@ fn ci_brace_forward_scans_when_cursor_before_pair() {
 }
 
 #[test]
-fn cit_forward_scans_when_cursor_before_tag() {
-    // Cursor at column 0 (before `<b>`), cit jumps into the next tag
-    // pair and replaces its contents.
+fn cit_fails_when_cursor_before_tag() {
+    // Cursor at column 0 (before `<b>`): unlike the bracket objects, vim's
+    // tag object does not scan forward, so `cit` fails and stays in Normal
+    // mode with the buffer untouched (nvim 0.12.5).
     let mut e = editor_with("text <b>hello</b> rest");
     e.jump_cursor(0, 0);
-    run_keys(&mut e, "citNEW<Esc>");
+    run_keys(&mut e, "cit");
     assert_eq!(
         hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
-        "text <b>NEW</b> rest"
+        "text <b>hello</b> rest"
     );
+    assert_eq!(e.vim_mode(), VimMode::Normal);
+    assert_eq!(e.cursor(), (0, 0));
 }
 
 #[test]
-fn dat_forward_scans_when_cursor_before_tag() {
-    // dat = delete around tag — including the `<b>...</b>` markup.
+fn dat_fails_when_cursor_before_tag() {
     let mut e = editor_with("text <b>hello</b> rest");
     e.jump_cursor(0, 0);
     run_keys(&mut e, "dat");
     assert_eq!(
         hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
-        "text  rest"
+        "text <b>hello</b> rest"
     );
+    assert_eq!(e.cursor(), (0, 0));
 }
 
 #[test]

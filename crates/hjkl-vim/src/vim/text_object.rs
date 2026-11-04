@@ -796,12 +796,11 @@ pub fn tag_text_object<H: hjkl_engine::types::Host>(
     // Walk `<...>` tokens. Track open tags on a stack; on a matching
     // close pop and consider the pair a candidate when the cursor lies
     // inside its content range. Innermost wins (replace whenever a
-    // tighter range turns up). Also track the first complete pair that
-    // starts at or after the cursor so we can fall back to a forward
-    // scan (targets.vim-style) when the cursor isn't inside any tag.
+    // tighter range turns up). A cursor inside no pair fails, as vim's
+    // `current_tagblock` does: unlike the bracket objects there is no
+    // forward scan to a later pair.
     let mut stack: Vec<(usize, usize, String)> = Vec::new(); // (open_start, content_start, name)
     let mut innermost: Option<(usize, usize, usize, usize)> = None;
-    let mut next_after: Option<(usize, usize, usize, usize)> = None;
     let mut i = 0;
     while i < flat_len {
         if chars[i] != '<' {
@@ -845,8 +844,6 @@ pub fn tag_text_object<H: hjkl_engine::types::Host>(
                         None => Some(candidate),
                         existing => existing,
                     };
-                } else if open_start >= cursor_idx && next_after.is_none() {
-                    next_after = Some(candidate);
                 }
             }
         } else if !trimmed.ends_with('/') {
@@ -862,7 +859,7 @@ pub fn tag_text_object<H: hjkl_engine::types::Host>(
         i = close_end;
     }
 
-    let Some((open_start, content_start, content_end, close_end)) = innermost.or(next_after) else {
+    let Some((open_start, content_start, content_end, close_end)) = innermost else {
         return tag_text_object_full(ed, inner);
     };
     // A pair whose open sits on the window's first row (with content
@@ -920,16 +917,14 @@ fn tag_text_object_full<H: hjkl_engine::types::Host>(
 
     // The innermost pair whose whole span holds the cursor — ON the open or
     // close tag included, as vim `it`/`at` operate on the tag under the
-    // cursor; nested pairs, so the shortest is the innermost. With none, the
-    // first pair (in close order) starting at or after the cursor: a forward
-    // scan, targets.vim-style.
+    // cursor; nested pairs, so the shortest is the innermost. With none the
+    // object fails, as vim's `current_tagblock` does.
     let pairs = tag_pairs(&chars);
     let (open_start, content_start, content_end, close_end) = pairs
         .iter()
         .copied()
         .filter(|&(os, _, _, ce)| cursor_idx >= os && cursor_idx < ce)
-        .min_by_key(|&(os, _, _, ce)| ce - os)
-        .or_else(|| pairs.iter().copied().find(|&(os, ..)| os >= cursor_idx))?;
+        .min_by_key(|&(os, _, _, ce)| ce - os)?;
     if inner {
         Some((idx_to_pos(content_start), idx_to_pos(content_end)))
     } else {
@@ -2091,15 +2086,16 @@ mod tests {
         assert_eq!(tag_text_object(&ed, false), Some(((1, 2), (1, 14))));
     }
 
-    /// `it` / `at` edge cases: cursor before any tag (forward fallback),
-    /// inside a single-line pair, and inside a pair spanning rows.
+    /// `it` / `at` edge cases: cursor before any tag (no pair), inside a
+    /// pair spanning rows, and an unmatched close.
     #[test]
     fn tag_text_object_edge_cases() {
-        // Cursor before the first tag → forward scan to the next pair.
+        // Cursor before the first tag → no pair; vim does not scan forward
+        // (`dit` on "x <a>b</a> y" @ (0,0) is a no-op in nvim 0.12.5).
         let mut ed = make_editor("text <b>x</b>");
         ed.set_cursor_quiet(0, 0);
-        assert_eq!(tag_text_object(&ed, true), Some(((0, 8), (0, 9))));
-        assert_eq!(tag_text_object(&ed, false), Some(((0, 5), (0, 13))));
+        assert_eq!(tag_text_object(&ed, true), None);
+        assert_eq!(tag_text_object(&ed, false), None);
         // Inside a multi-line pair: content runs from just past the open
         // tag to just before the close tag, across the newlines.
         let mut ed = make_editor("<a>\n  body\n</a>");

@@ -1165,14 +1165,6 @@ Seen while measuring, not `gq`:
   than one row still takes hjkl's own sentence path, not `sentence_visual`; the
   measured shapes (`<C-v>jis`, `<C-v>jas`, `<C-v>kis`, `<C-v>kas` across two
   sentence lines) match nvim 0.12.5.
-- **`it` / `at` before a tag pair scan forward; nvim does nothing. DECIDED
-  2026-10-30: match nvim and change the test; not yet done.** `dit` on
-  `"x <a>b</a> y"` @ (0,0) leaves the buffer alone in nvim 0.12.5 and deletes
-  `b` in hjkl, whose `tag_text_object` (`text_object.rs`) falls back to the next
-  pair forward, as the bracket objects also do (and there nvim agrees). The unit
-  test `tag_text_object_edge_cases` (same file) asserts that forward scan
-  ("Cursor before the first tag → forward scan to the next pair"). Matching nvim
-  means changing it, which is the user's call.
 - **Visual-block `H` / `M` / `L` keep the block's column; a corpus case pins it.
   Needs a decision.** In nvim 0.12.5, `<C-v>Ld` / `<C-v>Hd` @ (0,3) on
   `"ab cd\nef gh\nij"` take columns 0–3 (register `"ab c\nef g\nij"`), and

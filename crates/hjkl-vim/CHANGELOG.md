@@ -67,6 +67,10 @@ and this project adheres to
 
 ### Fixed
 
+- `it` / `at` with the cursor inside no tag pair fail, as vim's tag object does:
+  `dit` before `<a>b</a>` leaves the buffer alone and `cit` stays in Normal
+  mode. They scanned forward to the next pair, as the bracket objects (rightly)
+  do.
 - A counted `f` / `t` / `F` / `T` / `;` / `,` with fewer targets after the
   cursor than the count fails and leaves the cursor where it was, as vim's
   `searchc` does (`3fx` on `xaxbxc` from column 0); it stopped on the last

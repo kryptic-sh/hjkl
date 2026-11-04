@@ -562,3 +562,41 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+# A tag object with the cursor before every pair fails: vim's
+# `current_tagblock` does not scan forward the way the bracket objects do.
+[[cases]]
+name = "dit_before_tag_pair_is_noop"
+initial_buffer = "x <a>b</a> y\n"
+initial_cursor = [0, 0]
+keys = "dit"
+expected_buffer = "x <a>b</a> y\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "dat_before_tag_pair_is_noop"
+initial_buffer = "x <a>b</a> y\n"
+initial_cursor = [0, 0]
+keys = "dat"
+expected_buffer = "x <a>b</a> y\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "cit_before_tag_pair_stays_normal"
+initial_buffer = "x <a>b</a> y\n"
+initial_cursor = [0, 1]
+keys = "cit"
+expected_buffer = "x <a>b</a> y\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+[[cases]]
+name = "dit_before_tag_pair_on_a_later_line_is_noop"
+initial_buffer = "x\n<a>b</a> y\n"
+initial_cursor = [0, 0]
+keys = "dit"
+expected_buffer = "x\n<a>b</a> y\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
