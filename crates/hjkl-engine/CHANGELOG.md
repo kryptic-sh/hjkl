@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Changed (breaking)
 
 - `SearchBank` is `#[non_exhaustive]`: build it with `SearchBank::default()` and
@@ -1147,7 +1149,10 @@ re-entering the engine FSM.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.11.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/compare/v0.41.0...v0.45.0
+[0.41.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.0
+[0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.11.4...v0.40.0
 [0.11.4]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.11.3...v0.11.4
 [0.11.3]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.11.2...v0.11.3
 [0.11.2]: https://github.com/kryptic-sh/hjkl-engine/compare/v0.11.1...v0.11.2

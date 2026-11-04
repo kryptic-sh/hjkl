@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Added
 
 - `Selection::row_span_on(row, line, tab_width)`: a selection's span on `row` as
@@ -342,7 +344,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/compare/v0.41.0...v0.45.0
+[0.41.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.0
+[0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.8.1...v0.40.0
 [0.8.1]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/kryptic-sh/hjkl-buffer/releases/tag/v0.8.0
 [0.7.0]: https://github.com/kryptic-sh/hjkl-buffer/compare/v0.6.2...v0.7.0

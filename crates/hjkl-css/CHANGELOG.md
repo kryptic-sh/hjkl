@@ -5,6 +5,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Changed
 
 - **Built on `cssparser` 0.38** (was 0.37), Servo's rewrite that drops the
@@ -106,7 +108,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   properties: `color`, `background-color`, `width`, `height`, `padding`,
   `margin`.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-css/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.45.0
 [0.4.0]: https://github.com/kryptic-sh/hjkl-css/releases/tag/v0.4.0
 [0.3.1]: https://github.com/kryptic-sh/hjkl-css/releases/tag/v0.3.1
 [0.3.0]: https://github.com/kryptic-sh/hjkl-css/releases/tag/v0.3.0

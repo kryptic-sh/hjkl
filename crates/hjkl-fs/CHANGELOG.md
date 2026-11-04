@@ -8,6 +8,8 @@ this project adheres to
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Added
 
 - `process::pid_liveness(pid) -> Option<bool>` — the one per-platform answer to

@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Changed (BREAKING)
 
 - `git::explorer_key_for(path)` is now `explorer_key_for(path, root)`: the key
@@ -52,4 +54,6 @@ and this project adheres to
   Windows, which `git apply` takes literally, so any file in a subdirectory
   failed there.
 
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.45.0
 [unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...HEAD

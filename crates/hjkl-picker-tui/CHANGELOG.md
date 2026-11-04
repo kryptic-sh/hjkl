@@ -53,10 +53,11 @@ and this project adheres to
 - `PreviewTheme` struct exposing pre-computed `ratatui::Style` values for
   border, gutter, non-text glyphs, and cursor-line background.
 
-[Unreleased]:
-  https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.4.0...HEAD
-[0.4.1]: https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.4.0...v0.4.1
-[0.4.0]: https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/kryptic-sh/hjkl-picker-tui/releases/tag/v0.1.0
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+
+https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.4.0...HEAD [0.4.1]:
+https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.4.0...v0.4.1 [0.4.0]:
+https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.3.0...v0.4.0 [0.3.0]:
+https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.2.0...v0.3.0 [0.2.0]:
+https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.1.0...v0.2.0 [0.1.0]:
+https://github.com/kryptic-sh/hjkl-picker-tui/releases/tag/v0.1.0

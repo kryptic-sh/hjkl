@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Fixed
 
 - The `findstr` fallback (used for the grep picker when ripgrep is absent) binds
@@ -205,7 +207,10 @@ adapters become parallel siblings, neither bleeds into the other's dep cone.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-picker/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/compare/v0.41.0...v0.45.0
+[0.41.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.0
+[0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.9.1...v0.40.0
 [0.9.1]: https://github.com/kryptic-sh/hjkl-picker/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/kryptic-sh/hjkl-picker/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/kryptic-sh/hjkl-picker/compare/v0.7.0...v0.8.0

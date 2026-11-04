@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Fixed
 
 - `~` in path completion and a bare `:cd` fall back to the profile directory
@@ -104,6 +106,9 @@ patch bumps.
   `:delm[arks]`, `:cd`, `:pwd`, `:fold*`, `:%`, `:#`, `:<cword>` expansion +
   filename modifiers.
 
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.45.0
+[0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.5.1...v0.40.0
 [0.5.1]: https://github.com/kryptic-sh/hjkl-ex/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/kryptic-sh/hjkl-ex/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/kryptic-sh/hjkl-ex/compare/v0.4.0...v0.4.1

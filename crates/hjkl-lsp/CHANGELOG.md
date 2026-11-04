@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Fixed
 
 - `Server::spawn` resolves the server command through `PATH` with the `which`
@@ -66,6 +68,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 - `EventSink` — typed channel for surfacing LSP events (diagnostics, hover
   responses, completion lists, code-action menus) to the host application.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-lsp/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.45.0
+[0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.1.1...v0.40.0
 [0.1.1]: https://github.com/kryptic-sh/hjkl-lsp/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/kryptic-sh/hjkl-lsp/releases/tag/v0.1.0

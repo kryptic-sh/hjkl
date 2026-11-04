@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Fixed
 
 - `render_viewport` / `render_viewport_ref` no longer panic ("range end index
@@ -32,4 +34,6 @@ and this project adheres to
 
 - Added changelog.
 
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.45.0
 [unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...HEAD

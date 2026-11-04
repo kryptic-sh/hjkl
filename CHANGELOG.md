@@ -8,6 +8,8 @@ patch bumps.
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Fixed
 
 - A counted `J` (and Visual `J`, `:join`, and `.` of either) decides each
@@ -6786,7 +6788,8 @@ the editor side.
   `hjkl-editor`, and `hjkl-ratatui` names on crates.io. No public API.
 - `MIGRATION.md` — extraction plan and design rationale.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.44.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/kryptic-sh/hjkl/compare/v0.43.4...v0.44.0
 [0.43.4]: https://github.com/kryptic-sh/hjkl/compare/v0.43.3...v0.43.4
 [0.43.3]: https://github.com/kryptic-sh/hjkl/compare/v0.43.2...v0.43.3

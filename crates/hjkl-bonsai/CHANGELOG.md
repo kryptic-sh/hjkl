@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Changed (breaking)
 
 - **Routing tree-sitter's C allocations through mimalloc is now the caller's
@@ -562,7 +564,9 @@ history is preserved in this repo (renamed from `kryptic-sh/hjkl-tree-sitter` on
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/compare/v0.41.0...v0.45.0
+[0.41.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.40.0
 [0.7.5]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/kryptic-sh/hjkl-bonsai/compare/v0.7.3...v0.7.4

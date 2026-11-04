@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Fixed
 
 - **A config write-lock left by a crashed process is reclaimed at once off
@@ -25,7 +27,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
   (`<config>.lock`) with retry, preventing concurrent hjkl processes from
   silently losing each other's updates.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-config/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.45.0
 
 ## [0.2.0] - 2026-05-03
 
@@ -75,6 +78,7 @@ structure on Windows).
 - 5 new XDG resolver tests in `loader.rs` covering env-var override, empty-value
   fallback, relative-path rejection, and data/cache dir resolution.
 
+[0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.2.0...v0.40.0
 [0.2.0]: https://github.com/kryptic-sh/hjkl-config/releases/tag/v0.2.0
 
 ## [0.1.1] - 2026-05-03

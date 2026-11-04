@@ -15,4 +15,5 @@ project adheres to [Semantic Versioning](https://semver.org/).
   3). `hjkl-engine` and `hjkl-vim` are now fully toolkit-agnostic; crossterm
   coupling lives here and in `hjkl-engine-tui`.
 
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
 [0.25.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.25.1

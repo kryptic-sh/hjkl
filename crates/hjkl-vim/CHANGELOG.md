@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Changed (BREAKING)
 
 - `PendingState` and `VimState` are `#[non_exhaustive]`: a `match` over
@@ -1163,7 +1165,10 @@ hjkl_vim::feed_input(&mut editor, planned);
 - Initial release: `Mode` enum extracted from `apps/hjkl::keymap::HjklMode`.
   Future phases will land the vim FSM here.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-vim/compare/v0.23.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/compare/v0.41.0...v0.45.0
+[0.41.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.0
+[0.40.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.40.0
 [0.23.2]: https://github.com/kryptic-sh/hjkl-vim/compare/v0.23.1...v0.23.2
 [0.23.1]: https://github.com/kryptic-sh/hjkl-vim/compare/v0.23.0...v0.23.1
 [0.23.0]: https://github.com/kryptic-sh/hjkl-vim/compare/v0.22.0...v0.23.0

@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-04
+
 ### Fixed
 
 - Linux, Wayland: holding a selection no longer wakes the process 20 times a
@@ -518,7 +520,10 @@ ClipboardError::Io(e) => { /* e: Arc<io::Error> */; let _ = &*e; }
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.5...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/kryptic-sh/hjkl/compare/v0.41.0...v0.45.0
+[0.41.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.0
+[0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.5.5...v0.40.0
 [0.5.5]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.4...v0.5.5
 [0.5.4]: https://github.com/kryptic-sh/hjkl-clipboard/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/kryptic-sh/hjkl-clipboard/releases/tag/v0.5.3
