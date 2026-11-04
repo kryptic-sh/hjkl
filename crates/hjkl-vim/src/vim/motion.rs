@@ -872,10 +872,15 @@ pub fn apply_motion_cursor_ctx<H: hjkl_engine::types::Host>(
             // Skip an adjacent target when this is a `;`/`,` repeat, and on the
             // 2nd..Nth step of a counted `t`/`T` (the cursor lands one cell
             // short each time, so a naive repeat would stick).
+            // vim's `searchc` fails when the line holds fewer than `count`
+            // targets, and the cursor stays where it started rather than on
+            // the last target found (`3fx` on "xaxbxc" from column 0).
             let repeat = std::mem::take(&mut vim_mut(ed).find_repeat_skip);
+            let start = ed.cursor();
             for i in 0..count {
                 let skip_adjacent = repeat || i > 0;
                 if !find_char_on_line(ed, *ch, *forward, *till, skip_adjacent) {
+                    buf_set_cursor_rc(ed.buffer_mut(), start.0, start.1);
                     break;
                 }
             }

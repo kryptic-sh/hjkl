@@ -652,9 +652,10 @@ fn tx_backward_lands_after_x() {
 
 #[test]
 fn fx_with_count_3() {
-    // `3fx` in "xaxbxc" from col 0 → 3rd 'x' at col 4.
+    // `3fx` in "xaxbxcxd" from col 0 → the 3rd 'x' after the cursor, at
+    // col 6. The cursor's own 'x' does not count (vim's `searchc`).
     let mut app = App::new(None, false, None, None).unwrap();
-    seed_buffer(&mut app, "xaxbxc");
+    seed_buffer(&mut app, "xaxbxcxd");
     app.active_editor_mut().jump_cursor(0, 0);
 
     // View count via pending_count (mimicking the event_loop digit path).
@@ -672,9 +673,22 @@ fn fx_with_count_3() {
     drive_key(&mut app, key(KeyCode::Char('x')));
     assert_eq!(
         app.active_editor().cursor(),
-        (0, 4),
-        "3fx must land on 3rd 'x' at col 4"
+        (0, 6),
+        "3fx must land on the 3rd 'x' after the cursor, at col 6"
     );
+}
+
+#[test]
+fn fx_with_count_past_last_target_stays_put() {
+    // `3fx` in "xaxbxc" from col 0: only two 'x' follow the cursor, so the
+    // motion fails and the cursor stays (measured in nvim 0.12.5).
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, "xaxbxc");
+    app.active_editor_mut().jump_cursor(0, 0);
+    app.pending_count.try_accumulate('3');
+    drive_key(&mut app, key(KeyCode::Char('f')));
+    drive_key(&mut app, key(KeyCode::Char('x')));
+    assert_eq!(app.active_editor().cursor(), (0, 0));
 }
 
 #[test]
@@ -2214,11 +2228,11 @@ fn dtx_stops_before_x_via_reducer() {
 
 #[test]
 fn two_d_3fx_total_count_6() {
-    // `2d3fx`: count1=2, inner_count=3 → total=6. In "xaxbxcxdxexf" from col 0,
-    // the 6th 'x' is at col 10 (0-indexed: x@0,x@2,x@4,x@6,x@8,x@10).
-    // dfx with count=6 deletes from col 0 through col 10 inclusive.
+    // `2d3fx`: count1=2, inner_count=3 → total=6. In "xaxbxcxdxexfxg" from
+    // col 0, the 6th 'x' after the cursor is at col 12 (the cursor's own 'x'
+    // does not count). dfx with count=6 deletes col 0 through col 12.
     let mut app = App::new(None, false, None, None).unwrap();
-    seed_buffer(&mut app, "xaxbxcxdxexf");
+    seed_buffer(&mut app, "xaxbxcxdxexfxg");
     app.active_editor_mut().jump_cursor(0, 0);
 
     app.pending_count.try_accumulate('2');
@@ -2261,7 +2275,7 @@ fn two_d_3fx_total_count_6() {
     assert!(app.pending_state.is_none());
 
     let line = hjkl_buffer::rope_line_str(&app.active_editor().buffer().rope(), 0);
-    assert_eq!(line, "f", "2d3fx must delete through 6th 'x', got {line:?}");
+    assert_eq!(line, "g", "2d3fx must delete through 6th 'x', got {line:?}");
 }
 
 #[test]

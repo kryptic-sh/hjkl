@@ -10,6 +10,10 @@ patch bumps.
 
 ### Fixed
 
+- A counted `f` / `t` / `F` / `T` / `;` / `,` with fewer targets after the
+  cursor than the count fails and leaves the cursor where it was, as vim's
+  `searchc` does (`3fx` on `xaxbxc` from column 0); it stopped on the last
+  target found, and an operator (`2d3fx`) deleted through it.
 - A counted `_` past the end stops on the last line, as vim's `cursor_down`
   does, so `d10_` deletes through it; on the last line itself `[count]_` fails
   and an operator does nothing. `_` also counts a closed fold as one line. It

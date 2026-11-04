@@ -1069,16 +1069,17 @@ fn find_repeat_with_no_prior_find_is_noop() {
 
 #[test]
 fn find_repeat_with_count_advances_count_times() {
-    // "aXaXaX", cursor (0,0). `fX` → (0,1). `3;` → repeats 3× → (0,5).
-    let mut e = fresh_editor("aXaXaX");
+    // "aXaXaXaX", cursor (0,0). `fX` → (0,1). `3;` → repeats 3× → (0,7).
+    // On "aXaXaX" only two targets follow (0,1), so `3;` fails and stays.
+    let mut e = fresh_editor("aXaXaXaX");
     e.jump_cursor(0, 0);
     e.find_char('X', true, false, 1);
     assert_eq!(e.cursor(), (0, 1), "fX must land on first 'X' at col 1");
     e.apply_motion(hjkl_engine::MotionKind::FindRepeat, 3);
     assert_eq!(
         e.cursor(),
-        (0, 5),
-        "3; must advance 3 times from col 1 to col 5"
+        (0, 7),
+        "3; must advance 3 times from col 1 to col 7"
     );
 }
 

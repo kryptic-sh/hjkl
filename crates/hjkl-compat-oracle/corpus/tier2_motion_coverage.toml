@@ -2038,3 +2038,41 @@ expected_mode = "normal"
 shiftwidth = 4
 expandtab = true
 autoindent = false
+
+# A counted `f` / `t` / `;` with fewer targets than the count fails and the
+# cursor stays (vim's `searchc`); the cursor's own target does not count.
+[[cases]]
+name = "find_count_past_last_target_stays"
+initial_buffer = "xaxbxc\n"
+initial_cursor = [0, 0]
+keys = "3fx"
+expected_buffer = "xaxbxc\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
+
+[[cases]]
+name = "till_count_past_last_target_stays"
+initial_buffer = "bar, \"self.x\".hello\n"
+initial_cursor = [0, 10]
+keys = "2to"
+expected_buffer = "bar, \"self.x\".hello\n"
+expected_cursor = [0, 10]
+expected_mode = "normal"
+
+[[cases]]
+name = "find_repeat_count_past_last_target_stays"
+initial_buffer = "aXaXaX\n"
+initial_cursor = [0, 0]
+keys = "fX3;"
+expected_buffer = "aXaXaX\n"
+expected_cursor = [0, 1]
+expected_mode = "normal"
+
+[[cases]]
+name = "delete_find_count_past_last_target_is_noop"
+initial_buffer = "xaxbxcxdxexf\n"
+initial_cursor = [0, 0]
+keys = "2d3fx"
+expected_buffer = "xaxbxcxdxexf\n"
+expected_cursor = [0, 0]
+expected_mode = "normal"
