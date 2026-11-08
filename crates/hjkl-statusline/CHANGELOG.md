@@ -29,5 +29,5 @@ workspace lockstep version.
   `bar_layout_right_alone_exceeds_width_no_panic`,
   `recording_segment_shows_register`. Closes #135.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
 [0.40.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.40.0

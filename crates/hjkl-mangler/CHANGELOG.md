@@ -42,6 +42,6 @@ patch bumps.
   background threads before writing stdin (required for outputs above the 64 KiB
   pipe buffer).
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
 [0.45.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.45.0
 [0.1.0]: https://github.com/kryptic-sh/hjkl-mangler/releases/tag/v0.1.0

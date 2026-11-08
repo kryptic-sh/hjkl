@@ -54,6 +54,6 @@ and this project adheres to
   `a_wrong_expected_cursor_fails_as_an_author_error` and its two siblings pin
   each new guard by authoring a field wrong on purpose.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
 [0.45.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.45.0
 [unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...HEAD

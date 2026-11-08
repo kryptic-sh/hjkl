@@ -53,7 +53,7 @@ and this project adheres to
 - `PreviewTheme` struct exposing pre-computed `ratatui::Style` values for
   border, gutter, non-text glyphs, and cursor-line background.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
 
 https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.4.0...HEAD [0.4.1]:
 https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.4.0...v0.4.1 [0.4.0]:

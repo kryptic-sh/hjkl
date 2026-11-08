@@ -207,7 +207,7 @@ adapters become parallel siblings, neither bleeds into the other's dep cone.
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
 [0.45.0]: https://github.com/kryptic-sh/hjkl/compare/v0.41.0...v0.45.0
 [0.41.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.9.1...v0.40.0

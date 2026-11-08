@@ -65,7 +65,7 @@ For tests asserting on specific tick values, use
   `presets::hjkl` letterforms + path. Optional `ratatui` feature ships a
   `From<Rgb> for ratatui::style::Color` adapter.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
 [0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.2.0...v0.40.0
 [0.2.0]: https://github.com/kryptic-sh/hjkl-splash/releases/tag/v0.2.0
 [0.1.0]: https://github.com/kryptic-sh/hjkl-splash/releases/tag/v0.1.0

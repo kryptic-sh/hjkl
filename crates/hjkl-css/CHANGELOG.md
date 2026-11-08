@@ -108,7 +108,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   properties: `color`, `background-color`, `width`, `height`, `padding`,
   `margin`.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
 [0.45.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.45.0
 [0.4.0]: https://github.com/kryptic-sh/hjkl-css/releases/tag/v0.4.0
 [0.3.1]: https://github.com/kryptic-sh/hjkl-css/releases/tag/v0.3.1

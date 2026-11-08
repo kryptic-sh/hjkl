@@ -21,6 +21,6 @@ and this project adheres to
   resets `kind` to `Press`, so on Windows (where every key-up arrives as a
   `Release`) a mapped key's release became a second press.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
 [0.45.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.45.0
 [unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...HEAD

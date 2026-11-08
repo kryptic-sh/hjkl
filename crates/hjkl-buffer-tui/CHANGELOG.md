@@ -54,7 +54,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
   previously lived behind `hjkl-buffer`'s `ratatui` feature gate, dropped as
   part of #162).
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
 [0.41.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.25.0...v0.40.0
 [0.25.0]: https://github.com/kryptic-sh/hjkl-buffer-tui/releases/tag/v0.25.0

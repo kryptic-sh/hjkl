@@ -26,7 +26,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
   vim-grammar prompt renderer (`:`, `/`, `?` prefixes).
 - `spinner::frame` — animated braille spinner at ~8 Hz.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
 
 https://github.com/kryptic-sh/hjkl-editor-tui/compare/v0.1.0...HEAD [0.1.0]:
 https://github.com/kryptic-sh/hjkl-editor-tui/releases/tag/v0.1.0

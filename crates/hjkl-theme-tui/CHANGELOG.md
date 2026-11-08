@@ -41,6 +41,6 @@ are foreign to this crate, as are the `hjkl-theme` types. The standard escape
 hatch is a local extension trait (`ToRatatui`), which gives equivalent
 ergonomics (`value.to_ratatui()`) without violating coherence rules.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
 [0.1.1]: https://github.com/kryptic-sh/hjkl-theme-tui/releases/tag/v0.1.1
 [0.1.0]: https://github.com/kryptic-sh/hjkl-theme-tui/releases/tag/v0.1.0

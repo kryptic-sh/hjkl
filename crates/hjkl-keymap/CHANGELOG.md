@@ -165,7 +165,7 @@ suitable enum (or other type) works out of the box.
 - `Binding<A>` — `action: A`, `desc: String`, `recursive: bool` (reserved).
 - `KeymapError` — `Parse(ChordParseError)`, `EmptyChord`.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
 [0.3.0]: https://github.com/kryptic-sh/hjkl-keymap/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.2.0
 [0.1.4]: https://github.com/kryptic-sh/hjkl-keymap/releases/tag/v0.1.4
