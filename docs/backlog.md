@@ -369,6 +369,17 @@ separate project, not a fix to the heuristic. Whether hjkl's `=` on a buffer
 with no filetype should copy C-indenting at all (the cases above are not C) is
 the owner's call; until then the fuzzer keeps reporting them.
 
+**Reverse Visual-block `as` / `is` land a column off from some cursor columns.**
+On `"aaa. bbb."` × 5 with the anchor at (4, c), `<C-v>kas` and `<C-v>kis` agree
+with nvim 0.12.6 from columns 2, 4 and 6, but not from 0 (`as`: hjkl (2,4), nvim
+(2,5)) or 5 (`as`: hjkl (3,4), nvim (3,0); `is`: hjkl (3,5), nvim (3,4)). The
+column-0 shape is parked in `known_divergences.toml`
+(`blockwise_as_anchor_below_from_sentence_start`, and the `<C-v>Has` case that
+reaches it through `H`). Lives in `reverse_visual_block_sentence_landing`
+(`hjkl-vim` `text_object.rs`); the cursor-at-sentence-start and
+cursor-on-separator branches of vim's backward `current_sent` were not traced.
+Found 2026-11-09 while syncing the block column on `H` / `M` / `L`.
+
 **The `:s` curswant fix has no oracle case.** It is covered by two unit tests in
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
 keys. A corpus case would need the ex layer driven some other way.
@@ -1128,24 +1139,6 @@ Seen while measuring, not `gq`:
   than one row still takes hjkl's own sentence path, not `sentence_visual`; the
   measured shapes (`<C-v>jis`, `<C-v>jas`, `<C-v>kis`, `<C-v>kas` across two
   sentence lines) match nvim 0.12.5.
-- **Visual-block `H` / `M` / `L` keep the block's column; a corpus case pins it.
-  Needs a decision.** In nvim 0.12.5, `<C-v>Ld` / `<C-v>Hd` @ (0,3) on
-  `"ab cd\nef gh\nij"` take columns 0–3 (register `"ab c\nef g\nij"`), and
-  `<C-v>L<` @ (0,3) on `"(n1)  a.'end', (xy)"` leaves the cursor on (0,0); hjkl
-  keeps column 3. The fuzzer's `<C-v>1MU` on `(hello)` @ (0,6) (nvim uppercases
-  the line, hjkl does nothing) is the same `M` case. Adding `ViewportTop` /
-  `ViewportMiddle` / `ViewportBottom` to `update_block_vcol`'s syncing arm (as
-  `FileTop` / `FileBottom` now are) fixes all three — but fails
-  `blockwise_is_anchor_below_via_H_keeps_block_mode` and
-  `blockwise_as_anchor_below_via_H_keeps_block_mode`
-  (`tier2_block_textobj.toml`), which expect (4,5) / (4,4) for `<C-v>His` /
-  `<C-v>Has` @ (25,6) on 30 lines of `"aaa. bbb."`. Live nvim 0.12.5 through
-  `dfcase` gives (3,5) for `<C-v>His` — what the change produces — while the
-  parent build gives the corpus's (4,5). Either the case was recorded under
-  different conditions (other corpus comments cite nvim 0.12.4) or `dfcase`'s
-  setup differs from the corpus run; settle which before changing the case or
-  the code. The reverse block-sentence probe in `visual_text_obj_extend_counted`
-  (`editor_ext.rs`) reads `block_vcol` and documents relying on `H` keeping it.
 - **Text-object operators skip vim's column-0 exclusive adjustment.** vim's
   `do_pending_operator` pulls an exclusive end in column 0 of a later line back
   onto the previous line's end, turning the motion inclusive or, with the start

@@ -545,12 +545,14 @@ pub fn update_block_vcol<H: hjkl_engine::types::Host>(
         | Motion::Find { .. }
         | Motion::FindRepeat { .. }
         | Motion::MatchBracket
-        // `gg` / `G` reset vim's curswant to where they land, so the block's
+        // `gg` / `G` / `H` / `M` / `L` reset vim's curswant to where they
+        // land (under 'startofline', which hjkl follows), so the block's
         // column follows them: `<C-v>Gd` takes columns 0 to the anchor's.
-        // `H` / `M` / `L` would too by the same measurement, but a corpus
-        // case pins the old column for them (see `docs/backlog.md`).
         | Motion::FileTop
         | Motion::FileBottom
+        | Motion::ViewportTop
+        | Motion::ViewportMiddle
+        | Motion::ViewportBottom
         // So do the other jumps that set curswant: `{` `}` `(` `)`, the
         // section and unmatched-bracket motions, `+` `-` `_`, `|`, `n` `N`.
         | Motion::ParagraphPrev

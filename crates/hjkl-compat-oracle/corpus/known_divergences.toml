@@ -22,7 +22,28 @@
 # exclusive-motion adjustment in `apply_op_with_text_object`. Promoted to
 # corpus/tier2_block_textobj.toml (di/ci/da/ca across {}/()/[] + visual vi{).
 #
-# No known divergences remain. The empty `cases` array keeps the corpus loader
-# (and the `known_divergences_report` test) happy; add new `[[cases]]` here when
-# a fresh divergence is discovered.
-cases = []
+# ─── reverse Visual-block `as` from a sentence start ─────────────────────────
+# With the head above the anchor and the cursor on the first char of a
+# sentence, nvim 0.12.6 lands `as` on the previous sentence's first char, the
+# same cell `is` lands on; hjkl lands one column left, on the space before it.
+# `reverse_visual_block_sentence_landing` (hjkl-vim `text_object.rs`). See
+# docs/backlog.md §1.5b.
+[[cases]]
+name = "blockwise_as_anchor_below_via_H_keeps_block_mode"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [25, 6]
+keys = "<C-v>Has"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [3, 5]
+expected_mode = "visual_block"
+shiftwidth = 4
+expandtab = true
+
+[[cases]]
+name = "blockwise_as_anchor_below_from_sentence_start"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [4, 0]
+keys = "<C-v>kas"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [2, 5]
+expected_mode = "visual_block"

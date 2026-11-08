@@ -549,25 +549,35 @@ expected_cursor = [0, 4]
 expected_mode = "normal"
 
 # `H` moves the head to row 4 in the oracle's pinned 22-row viewport while
-# leaving the anchor on row 25. The reverse sentence path must preserve the
-# block and land at the current sentence's start.
+# leaving the anchor on row 25. Under 'startofline' (which hjkl follows; the
+# indent pins turn it on in nvim) `H` lands on column 0 and the block's column
+# follows it, so the reverse sentence lookup starts from column 0 of row 4 and
+# lands at the start of the sentence before it. The `as` twin is parked in
+# known_divergences.toml.
 [[cases]]
 name = "blockwise_is_anchor_below_via_H_keeps_block_mode"
 initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
 initial_cursor = [25, 6]
 keys = "<C-v>His"
 expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
-expected_cursor = [4, 5]
+expected_cursor = [3, 5]
 expected_mode = "visual_block"
+shiftwidth = 4
+expandtab = true
 
+# `H` / `M` / `L` set the block's column like `gg` / `G`: `<C-v>Ld` from column
+# 3 takes columns 0 to 3 of every row, not column 3 alone.
 [[cases]]
-name = "blockwise_as_anchor_below_via_H_keeps_block_mode"
-initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
-initial_cursor = [25, 6]
-keys = "<C-v>Has"
-expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
-expected_cursor = [4, 4]
-expected_mode = "visual_block"
+name = "blockwise_L_resets_block_column"
+initial_buffer = "ab cd\nef gh\nij\n"
+initial_cursor = [0, 3]
+keys = "<C-v>Ld"
+expected_buffer = "d\nh\n\n"
+expected_cursor = [0, 0]
+expected_register = ['"', "ab c\nef g\nij"]
+expected_mode = "normal"
+shiftwidth = 4
+expandtab = true
 
 # ── counted Visual text objects ──────────────────────────────────────────────
 # Probed against neovim 0.12.4. Counts typed in Visual mode are handed through

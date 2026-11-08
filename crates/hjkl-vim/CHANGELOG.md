@@ -10,6 +10,10 @@ and this project adheres to
 
 ### Fixed
 
+- `H`, `M` and `L` in Visual-block mode set the block's column to where they
+  land, as `gg` and `G` already did and as vim does under `'startofline'`:
+  `<C-v>Ld` from column 3 deletes columns 0 to 3 of every row, and `<C-v>1MU` on
+  `(hello)` uppercases it. The block kept its old column.
 - A linewise Visual case operator (`U`, `u`, `~`, `gU`, `gu`, `g~`, `g?`) over a
   selection made upward leaves the cursor where `Vk` put it, as vim does, and
   the next `j` / `k` aims at that column: `VkU` from column 4 onto `"xyz"` lands

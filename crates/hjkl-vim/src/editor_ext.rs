@@ -2002,9 +2002,10 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 block_vcol.min(line.chars().count().saturating_sub(1))
             });
             let saved_cursor = self.cursor();
-            // `H` moves the viewport head to its first nonblank while the
-            // block retains its logical column. Probe that column for vim's
-            // reverse sentence lookup, then restore even when it finds none.
+            // The block's logical column can sit right of the cursor (a `k`
+            // onto a shorter row clamps only the cursor). Probe that column
+            // for vim's reverse sentence lookup, then restore even when it
+            // finds none.
             self.jump_cursor(cur_row, probe_col);
             let landing = crate::vim::reverse_visual_block_sentence_landing(self, inner, count);
             self.jump_cursor(saved_cursor.0, saved_cursor.1);
