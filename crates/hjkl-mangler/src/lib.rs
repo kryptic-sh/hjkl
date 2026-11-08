@@ -1124,7 +1124,16 @@ mod tests {
         {
             use std::os::unix::fs::PermissionsExt as _;
             let script = dir.join(name);
-            std::fs::write(&script, "#!/bin/sh\ncat\n").unwrap();
+            // Written by a child `sh`, never by this process: under
+            // `cargo test` another test thread can fork while our write
+            // handle is open, its child keeps that fd until its own `exec`,
+            // and exec'ing the shim then fails with ETXTBSY.
+            let status = std::process::Command::new("sh")
+                .args(["-c", r#"printf '#!/bin/sh\ncat\n' > "$1""#, "sh"])
+                .arg(&script)
+                .status()
+                .unwrap();
+            assert!(status.success(), "writing the shim failed: {status}");
             std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         dir.join(name)
