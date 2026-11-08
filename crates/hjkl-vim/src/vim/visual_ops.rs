@@ -8,10 +8,10 @@ use hjkl_engine::rope_util::rope_line_to_str;
 
 use super::*;
 use crate::vim_state::{vim, vim_mut};
-use hjkl_engine::Editor;
 use hjkl_engine::buf_helpers::{
     buf_cursor_pos, buf_line, buf_line_chars, buf_row_count, buf_set_cursor_rc,
 };
+use hjkl_engine::{Editor, Move};
 
 pub fn apply_visual_operator<H: hjkl_engine::types::Host>(
     ed: &mut Editor<hjkl_buffer::View, H>,
@@ -210,7 +210,14 @@ fn visual_operator_body<H: hjkl_engine::types::Host>(
                 | Operator::ToggleCase
                 | Operator::Rot13 => {
                     apply_case_op_to_selection(ed, op, (top, 0), (bot, 0), RangeKind::Linewise);
-                    buf_set_cursor_rc(ed.buffer_mut(), top, 0);
+                    // Back to the operator's start, which also becomes the
+                    // `j` / `k` column: `VkU` lands where `Vk` left the
+                    // cursor, pulled off Visual's one-past-the-end cell.
+                    let last_col = buf_line_chars(ed.buffer(), top).saturating_sub(1);
+                    ed.move_cursor(Move::Jump {
+                        row: top,
+                        col: start_col.min(last_col),
+                    });
                     record_visual_last_change(
                         ed,
                         op,

@@ -316,3 +316,33 @@ keys = "3J"
 expected_buffer = "a\t b\n"
 expected_cursor = [0, 2]
 expected_mode = "normal"
+
+# Linewise Visual case ops land on the operator's start: the cursor when the
+# selection was made upward (clamped off Visual's one-past-the-end cell), and
+# that column becomes the `j` / `k` column.
+[[cases]]
+name = "visual_line_upward_case_op_lands_on_operator_start"
+initial_buffer = "abcdef\nxyz\nabcdef\nabcdef\n"
+initial_cursor = [2, 4]
+keys = "VkU"
+expected_buffer = "abcdef\nXYZ\nABCDEF\nabcdef\n"
+expected_cursor = [1, 2]
+expected_mode = "normal"
+
+[[cases]]
+name = "visual_line_upward_case_op_sets_curswant"
+initial_buffer = "abcdef\nxyz\nabcdef\nabcdef\n"
+initial_cursor = [2, 4]
+keys = "Vkg?jj"
+expected_buffer = "abcdef\nklm\nnopqrs\nabcdef\n"
+expected_cursor = [3, 2]
+expected_mode = "normal"
+
+[[cases]]
+name = "visual_line_downward_case_op_lands_on_column_zero"
+initial_buffer = "abcdef\nxyz\nabcdef\nabcdef\n"
+initial_cursor = [0, 4]
+keys = "VjgUjj"
+expected_buffer = "ABCDEF\nXYZ\nabcdef\nabcdef\n"
+expected_cursor = [2, 0]
+expected_mode = "normal"

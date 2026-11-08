@@ -8,6 +8,14 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Fixed
+
+- A linewise Visual case operator (`U`, `u`, `~`, `gU`, `gu`, `g~`, `g?`) over a
+  selection made upward leaves the cursor where `Vk` put it, as vim does, and
+  the next `j` / `k` aims at that column: `VkU` from column 4 onto `"xyz"` lands
+  on column 2. It went to column 0, and `j` then aimed at the column from before
+  the selection.
+
 ## [0.45.0] - 2026-11-04
 
 ### Changed (BREAKING)

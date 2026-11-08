@@ -491,9 +491,6 @@ unknown.
   that `lock().unwrap()` on buffer state is deliberate and a poisoned lock is
   fatal. The ~110 call sites are unchanged, so one panic while any of those
   locks is held still takes down every later access, including the save path.
-- **`buf_set_cursor_rc` does not maintain curswant, and `7e260e27` moves the
-  cursor with it.** The landing position is correct, but a following `j` may
-  snap to a stale column — the exact class of latent bug §1.6 exists to prevent.
 
 ### 1.9 Left open by the 2026-08-03 explorer and file-discovery changes
 
