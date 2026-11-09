@@ -90,9 +90,19 @@ Read in the tree on 2026-11-09:
    repo and plan. hjkl's part is the port: `hjkl-keymap-tui`, `hjkl-engine-tui`,
    `hjkl-picker-tui`, `hjkl-kitty` and the app's event loop take `ttyr` events
    instead of crossterm's, carrying the shifted key, base-layout key, every
-   kitty modifier, event kind and associated text. Waits on `ttyr`'s input half.
-   hjkl's requirements of it were sent to the tmxr session for `ttyr`'s plan
-   (2026-11-09); they are listed below.
+   kitty modifier, event kind and associated text. hjkl's requirements of it
+   were sent to the tmxr session for `ttyr`'s plan (2026-11-09); they are listed
+   below. **`ttyr` is ready to pin:** `kryptic-sh/ttyr` `ea44d70` (2026-11-10)
+   has every phase hjkl needs, 02–07, with CI green on Linux, macOS and Windows.
+   Reviewed against hjkl's call sites, by reading: `TtyrBackend` is a drop-in
+   for `CrosstermBackend` on hjkl's ratatui 0.30.2 (ratatui-core 0.1.2; nothing
+   in hjkl's build enables `scrolling-regions`), and its `get_cursor_position`
+   returns the last position it set instead of asking the terminal, which is all
+   `Terminal::clear` needs. On Windows the port should turn on
+   `Mode::VirtualTerminalInput` with `BracketedPaste`, so pastes arrive as
+   `Event::Paste` (backlog §1.14 #3; Windows Terminal honours it, conhost
+   unverified); `ttyr`'s console reader also drops Ctrl+Alt from AltGr
+   characters (§1.14 #2). Not started.
 4. **Push all five flags** once phase 3 can read what they produce. Flag 8 turns
    Enter / Tab / Backspace and plain text into escape codes, so the insert path
    must take text from flag 16's associated text (or the key) rather than
@@ -115,8 +125,8 @@ Read in the tree on 2026-11-09:
   logical-char view and the legacy aliases `normalize_legacy` does now); gpur
   moves with it. `ttyr`'s `KeyEvent` has no `code` — it has `key` (unshifted),
   `shifted`, `base_layout` and `text` — so every ported `.code` site fails to
-  compile and is re-decided between the raw key and the logical view. hjkl's
-  port also waits on `ttyr`'s Windows phase (07).
+  compile and is re-decided between the raw key and the logical view. `ttyr`'s
+  Windows phase (07), which hjkl's port waited on, landed 2026-11-10.
 - **Breaking the key types.** Adding modifiers to `KeyModifiers` / `Input` and
   keys to `KeyCode` breaks `hjkl-picker-tui`'s and gpur's callers. Pre-1.0, so
   allowed; tmxr and gpur need the bump coordinated. tmxr asked (2026-11-09) to
