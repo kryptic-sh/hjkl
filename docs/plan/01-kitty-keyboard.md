@@ -59,6 +59,25 @@ Read in the tree on 2026-11-09:
    (closes backlog §1.12 item 1). Pin `CSI 97;4u` → `<M-A>` and `CSI 104;6u` →
    `<C-S-h>` with crossterm-parsed fixtures. Small, ships first, independent of
    the rest.
+
+   Input from tmxr, which shipped its own fix (tmxr `bde1ed4`, 2026-11-09): it
+   pushes flags 1|4, so crossterm reports the shifted character (Alt+Shift+1 →
+   `'!'` + Alt), and then reads Ctrl + an uppercase letter back as the lowercase
+   letter + Shift, because under flag 4 crossterm also turns Ctrl+Shift+h into
+   `'H'` + Ctrl. Its letter test is Unicode case (`is_uppercase`, a single-char
+   `to_lowercase`), not ASCII — ASCII-only left `C-É` unbindable. Costs it
+   measured: the unshifted key of a digit or symbol is lost, and Unicode case
+   guesses wrong on Turkish (Shift+ı gives `I`, read as Shift+i). The choice for
+   hjkl:
+   - **Flag 1 only** with the rule above: nothing lost, but Alt+Shift+1 arrives
+     as `'1'` + Shift + Alt, i.e. `<M-S-1>`, not `<M-!>`.
+   - **Flags 1|4** with tmxr's Ctrl undo: `<M-!>` works, at tmxr's costs above.
+
+   Either is interim — `ttyr` reports both keys, and its `logical_char()` is the
+   lasting rule. Leaning flag 1 only, since hjkl reads keys itself and nothing
+   is forwarded to a pane; not decided. Whether nvim gives `<M-!>` or `<M-S-1>`
+   for Alt+Shift+1 in kitty was not checked, and is what should decide it.
+
 2. **Terminal hand-over.** One guard owns raw mode, the alternate screen, mouse,
    paste, focus and the keyboard flags; a panic hook and every future
    suspend/shell path go through it. Use `CSI = flags ; 1 u` (set) inside the
