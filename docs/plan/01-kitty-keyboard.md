@@ -91,8 +91,13 @@ Read in the tree on 2026-11-09:
 
 ## Decisions needed
 
-- **Whether `hjkl-kitty` survives `ttyr`.** Its push/pop and `normalize_legacy`
-  may belong in `ttyr`; gpur also uses it. Decide when `ttyr`'s API exists.
+- **Settled 2026-11-09 with tmxr, in `ttyr`'s plan:** `hjkl-kitty` is deleted
+  once `ttyr` has its flag guard (`ttyr` phase 04) and its key helpers (02: the
+  logical-char view and the legacy aliases `normalize_legacy` does now); gpur
+  moves with it. `ttyr`'s `KeyEvent` has no `code` — it has `key` (unshifted),
+  `shifted`, `base_layout` and `text` — so every ported `.code` site fails to
+  compile and is re-decided between the raw key and the logical view. hjkl's
+  port also waits on `ttyr`'s Windows phase (07).
 - **Breaking the key types.** Adding modifiers to `KeyModifiers` / `Input` and
   keys to `KeyCode` breaks `hjkl-picker-tui`'s and gpur's callers. Pre-1.0, so
   allowed; tmxr and gpur need the bump coordinated. tmxr asked (2026-11-09) to
