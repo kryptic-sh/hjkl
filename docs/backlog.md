@@ -369,17 +369,6 @@ separate project, not a fix to the heuristic. Whether hjkl's `=` on a buffer
 with no filetype should copy C-indenting at all (the cases above are not C) is
 the owner's call; until then the fuzzer keeps reporting them.
 
-**Reverse Visual-block `as` / `is` land a column off from some cursor columns.**
-On `"aaa. bbb."` × 5 with the anchor at (4, c), `<C-v>kas` and `<C-v>kis` agree
-with nvim 0.12.6 from columns 2, 4 and 6, but not from 0 (`as`: hjkl (2,4), nvim
-(2,5)) or 5 (`as`: hjkl (3,4), nvim (3,0); `is`: hjkl (3,5), nvim (3,4)). The
-column-0 shape is parked in `known_divergences.toml`
-(`blockwise_as_anchor_below_from_sentence_start`, and the `<C-v>Has` case that
-reaches it through `H`). Lives in `reverse_visual_block_sentence_landing`
-(`hjkl-vim` `text_object.rs`); the cursor-at-sentence-start and
-cursor-on-separator branches of vim's backward `current_sent` were not traced.
-Found 2026-11-09 while syncing the block column on `H` / `M` / `L`.
-
 **The `:s` curswant fix has no oracle case.** It is covered by two unit tests in
 `hjkl-engine`'s `substitute` module, because the corpus driver cannot replay `:`
 keys. A corpus case would need the ex layer driven some other way.
@@ -1145,9 +1134,10 @@ Seen while measuring, not `gq`:
   `text_object.rs`; the buffer reader itself is `vim_buf.rs`) leaves the nroff
   macros out.** `startPS` recognises an empty line or a form feed, not the nroff
   `'paragraphs'` / `'sections'` macros (`.PP`, `.SH`, …). A Visual block taller
-  than one row still takes hjkl's own sentence path, not `sentence_visual`; the
-  measured shapes (`<C-v>jis`, `<C-v>jas`, `<C-v>kis`, `<C-v>kas` across two
-  sentence lines) match nvim 0.12.5.
+  than one row made downward still takes hjkl's own sentence path
+  (`text_object_range`), not `sentence_visual`; the measured shapes (`<C-v>jis`,
+  `<C-v>jas` across two sentence lines) match nvim 0.12.5. One made upward takes
+  `sentence_visual` since 2026-11-10.
 - **Text-object operators skip vim's column-0 exclusive adjustment.** vim's
   `do_pending_operator` pulls an exclusive end in column 0 of a later line back
   onto the previous line's end, turning the motion inclusive or, with the start

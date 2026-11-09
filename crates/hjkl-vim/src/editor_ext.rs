@@ -2002,12 +2002,17 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 block_vcol.min(line.chars().count().saturating_sub(1))
             });
             let saved_cursor = self.cursor();
-            // The block's logical column can sit right of the cursor (a `k`
-            // onto a shorter row clamps only the cursor). Probe that column
-            // for vim's reverse sentence lookup, then restore even when it
-            // finds none.
+            // vim's `current_sent` extends a block taller than one row by the
+            // same Visual walk as a charwise selection, from the cursor
+            // towards the anchor. The block's logical column can sit right of
+            // the cursor (a `k` onto a shorter row clamps only the cursor), so
+            // the walk starts from that column; the cursor is restored after.
             self.jump_cursor(cur_row, probe_col);
-            let landing = crate::vim::reverse_visual_block_sentence_landing(self, inner, count);
+            let anchor = crate::vim_state::vim(self).block_anchor;
+            let landing = match crate::vim::sentence_visual(self, anchor, inner, count) {
+                Some(crate::vim::VisualTextObject::Extend(p)) => Some(p),
+                _ => None,
+            };
             self.jump_cursor(saved_cursor.0, saved_cursor.1);
             landing
         } else {

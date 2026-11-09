@@ -552,8 +552,7 @@ expected_mode = "normal"
 # leaving the anchor on row 25. Under 'startofline' (which hjkl follows; the
 # indent pins turn it on in nvim) `H` lands on column 0 and the block's column
 # follows it, so the reverse sentence lookup starts from column 0 of row 4 and
-# lands at the start of the sentence before it. The `as` twin is parked in
-# known_divergences.toml.
+# lands at the start of the sentence before it, for `as` as for `is`.
 [[cases]]
 name = "blockwise_is_anchor_below_via_H_keeps_block_mode"
 initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
@@ -564,6 +563,66 @@ expected_cursor = [3, 5]
 expected_mode = "visual_block"
 shiftwidth = 4
 expandtab = true
+
+[[cases]]
+name = "blockwise_as_anchor_below_via_H_keeps_block_mode"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [25, 6]
+keys = "<C-v>Has"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [3, 5]
+expected_mode = "visual_block"
+shiftwidth = 4
+expandtab = true
+
+# A block taller than one row extends by the same Visual walk as a charwise
+# selection (vim's `current_sent`): from a sentence start `as` lands on the
+# previous sentence's first character, a count or a repeated object alternates
+# sentences and the blanks between them, and a line break is not a blank.
+[[cases]]
+name = "blockwise_as_anchor_below_from_sentence_start"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [4, 0]
+keys = "<C-v>kas"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [2, 5]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_is_anchor_below_from_sentence_start"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [2, 5]
+keys = "<C-v>kis"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [1, 4]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_counted_as_anchor_below"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [2, 1]
+keys = "<C-v>k2as"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [0, 4]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_counted_is_anchor_below_crosses_line"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [3, 0]
+keys = "<C-v>k3is"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [0, 5]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_repeated_is_anchor_below"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [1, 5]
+keys = "<C-v>kisis"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [0, 0]
+expected_mode = "visual_block"
 
 # `H` / `M` / `L` set the block's column like `gg` / `G`: `<C-v>Ld` from column
 # 3 takes columns 0 to 3 of every row, not column 3 alone.
