@@ -624,6 +624,54 @@ expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
 expected_cursor = [0, 0]
 expected_mode = "visual_block"
 
+# The same walk runs downward: the cursor lands on the last cell the walk
+# reaches, never past the line's end, and a blank row between sentences is a
+# unit of its own.
+[[cases]]
+name = "blockwise_is_anchor_above_from_sentence_end"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [0, 3]
+keys = "<C-v>jis"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [1, 4]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_counted_as_anchor_above"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [0, 0]
+keys = "<C-v>j2as"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [1, 8]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_repeated_as_anchor_above"
+initial_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+initial_cursor = [0, 3]
+keys = "<C-v>jasas"
+expected_buffer = "aaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\naaa. bbb.\n"
+expected_cursor = [2, 4]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_is_anchor_above_onto_blank_row"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jis"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\n"
+expected_cursor = [1, 2]
+expected_mode = "visual_block"
+
+[[cases]]
+name = "blockwise_repeated_is_anchor_above_over_blank_row"
+initial_buffer = "aaa.\n   \nbbb.\nccc.\n"
+initial_cursor = [0, 0]
+keys = "<C-v>jisis"
+expected_buffer = "aaa.\n   \nbbb.\nccc.\n"
+expected_cursor = [2, 3]
+expected_mode = "visual_block"
+
 # `H` / `M` / `L` set the block's column like `gg` / `G`: `<C-v>Ld` from column
 # 3 takes columns 0 to 3 of every row, not column 3 alone.
 [[cases]]

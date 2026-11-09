@@ -10,13 +10,13 @@ patch bumps.
 
 ### Fixed
 
-- `is` and `as` on a Visual block made upward (its cursor above its anchor) land
-  where vim's do. They now take the same walk as a charwise selection, so a
+- `is` and `as` on a Visual block taller than one row land where vim's do, in
+  both directions. They now take the same walk as a charwise selection, so a
   count or a repeated object alternates sentences with the blanks between them:
   `<C-v>kas` from a sentence start reaches the previous sentence's first
-  character, not the space before it, and `<C-v>k2as`, `<C-v>k3is` and
-  `<C-v>kisis` stop where nvim stops. Before, the landing could sit a column
-  off, or a whole sentence short.
+  character, not the space before it, and `<C-v>k2as`, `<C-v>j2is` and
+  `<C-v>jisis` stop where nvim stops. Before, the landing could sit a column
+  off, or a whole sentence short or long.
 
 ## [0.45.1] - 2026-11-09
 

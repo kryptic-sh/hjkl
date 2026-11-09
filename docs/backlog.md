@@ -568,6 +568,14 @@ with ripgrep installed are unaffected.
   (`07689c56`) passed the same test on the same runner image, so it reads as a
   runner flake; nothing was changed for it. If it recurs, retrying the temp file
   creation in the test helpers is the cheap fix.
+- **`xvfb_connection_and_atoms` failed once locally (2026-11-10).** In a full
+  workspace `cargo test` with `DISPLAY` unset, `X11Connection::open` failed (the
+  test's `panic!` arm, `hjkl-clipboard` `x11_thread.rs`) while `difffuzz`-style
+  nvim sweeps were loading the machine; five reruns of the test passed.
+  `ensure_xvfb` starts its own Xvfb on the fixed display `:98` and waits for the
+  socket, so another process holding `:98`, or a slow start, can fail it. Not
+  investigated; if it recurs, pick a free display with Xvfb's `-displayfd`
+  instead of hard-coding one.
 - **`recovery_restores_undo_tree_after_crash` flakes on macOS CI.** The pty e2e
   test (`apps/hjkl/tests/pty_harness/recovery.rs`) failed all three nextest
   tries on `test macos-latest` in CI run 39283039626 (commit `6b0eefa6`, which
@@ -1133,11 +1141,7 @@ Seen while measuring, not `gq`:
 - **The sentence port (`VimBuf`'s sentence methods in `hjkl-vim`
   `text_object.rs`; the buffer reader itself is `vim_buf.rs`) leaves the nroff
   macros out.** `startPS` recognises an empty line or a form feed, not the nroff
-  `'paragraphs'` / `'sections'` macros (`.PP`, `.SH`, …). A Visual block taller
-  than one row made downward still takes hjkl's own sentence path
-  (`text_object_range`), not `sentence_visual`; the measured shapes (`<C-v>jis`,
-  `<C-v>jas` across two sentence lines) match nvim 0.12.5. One made upward takes
-  `sentence_visual` since 2026-11-10.
+  `'paragraphs'` / `'sections'` macros (`.PP`, `.SH`, …).
 - **Text-object operators skip vim's column-0 exclusive adjustment.** vim's
   `do_pending_operator` pulls an exclusive end in column 0 of a later line back
   onto the previous line's end, turning the motion inclusive or, with the start

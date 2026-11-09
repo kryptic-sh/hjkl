@@ -1992,46 +1992,34 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
                 return;
             }
         }
-        let reverse_block_sentence = obj == TextObject::Sentence
+        // vim's `current_sent` extends a block taller than one row by the
+        // same Visual walk as a charwise selection: mode and anchor stay, and
+        // the cursor lands where the walk from the cursor ends, in either
+        // direction. The block's logical column can sit right of the cursor
+        // (a `j` / `k` onto a shorter row clamps only the cursor), so the
+        // walk starts from that column.
+        if obj == TextObject::Sentence
             && crate::vim_state::vim(self).mode == FsmMode::VisualBlock
-            && self.cursor().0 < crate::vim_state::vim(self).block_anchor.0;
-        let reverse_landing = if reverse_block_sentence {
-            let (cur_row, _) = self.cursor();
+            && self.cursor().0 != crate::vim_state::vim(self).block_anchor.0
+        {
+            let (cur_row, cur_col) = self.cursor();
             let block_vcol = crate::vim_state::vim(self).block_vcol;
             let probe_col = self.line(cur_row).map_or(0, |line| {
                 block_vcol.min(line.chars().count().saturating_sub(1))
             });
-            let saved_cursor = self.cursor();
-            // vim's `current_sent` extends a block taller than one row by the
-            // same Visual walk as a charwise selection, from the cursor
-            // towards the anchor. The block's logical column can sit right of
-            // the cursor (a `k` onto a shorter row clamps only the cursor), so
-            // the walk starts from that column; the cursor is restored after.
             self.jump_cursor(cur_row, probe_col);
             let anchor = crate::vim_state::vim(self).block_anchor;
-            let landing = match crate::vim::sentence_visual(self, anchor, inner, count) {
-                Some(crate::vim::VisualTextObject::Extend(p)) => Some(p),
-                _ => None,
-            };
-            self.jump_cursor(saved_cursor.0, saved_cursor.1);
-            landing
-        } else {
-            None
-        };
-        let block_sentence_forward = obj == TextObject::Sentence
-            && inner
-            && crate::vim_state::vim(self).mode == FsmMode::VisualBlock
-            && self.cursor().0 > crate::vim_state::vim(self).block_anchor.0;
-        let range = if let Some(landing) = reverse_landing {
-            Some((landing, landing, RangeKind::Exclusive))
-        } else if block_sentence_forward {
-            // In a forward VisualBlock selection, `is` walks sentence bodies
-            // and same-line separators as distinct count units; the shared
-            // counted-sentence scan already implements that alternation.
-            crate::vim::text_object_range(self, obj, inner, count)
-        } else {
-            crate::vim::text_object_range(self, obj, inner, count)
-        };
+            match crate::vim::sentence_visual(self, anchor, inner, count) {
+                Some(crate::vim::VisualTextObject::Extend((row, col))) => {
+                    self.jump_cursor(row, col);
+                    crate::vim_state::vim_mut(self).block_vcol = col;
+                    crate::vim_state::vim_mut(self).block_to_eol = false;
+                }
+                _ => self.jump_cursor(cur_row, cur_col),
+            }
+            return;
+        }
+        let range = crate::vim::text_object_range(self, obj, inner, count);
         let Some((start, end, kind)) = range else {
             return;
         };
@@ -2102,10 +2090,8 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
         // `bracket_visual` before this; from a one-cell block they select
         // the object charwise like `v` does.
         //
-        // Sentence objects with the anchor below the cursor use vim's reverse
-        // `findsent` landing: `is` returns to the current sentence start and
-        // `as` includes only its immediately preceding same-line separator.
-        // Quotes already no-op in hjkl too. The word objects additionally
+        // Sentence objects on a block taller than one row extend it through
+        // vim's own walk, before the fresh range above. Quotes already no-op in hjkl too. The word objects additionally
         // write `block_vcol` so `block_bounds` sees the new column.
         if crate::vim_state::vim(self).mode == FsmMode::VisualBlock {
             // Word objects keep the selection blockwise: the block spans
@@ -2128,42 +2114,6 @@ impl<H: Host> VimEditorExt for Editor<hjkl_buffer::View, H> {
             // keeps the post-motion geometry.
             if obj == TextObject::XmlTag {
                 return;
-            }
-            // Sentence (`is`) objects EXTEND the block (nvim-measured; the
-            // paragraph objects do too, handled before the fresh range):
-            // mode and anchor stay, the cursor lands at the object-extend
-            // position. A single-row block falls through to the collapse
-            // below (vim takes its normal object path there).
-            if let TextObject::Sentence = obj {
-                let (cur_row, _) = self.cursor();
-                let anchor_row = crate::vim_state::vim(self).block_anchor.0;
-                if cur_row != anchor_row {
-                    if cur_row < anchor_row {
-                        let landing = reverse_landing.unwrap_or_else(|| {
-                            if inner || start.1 == 0 {
-                                start
-                            } else {
-                                self.line(start.0).map_or(start, |line| {
-                                    let chars: Vec<char> = line.chars().collect();
-                                    let mut col = start.1;
-                                    while col > 0 && chars[col - 1].is_whitespace() {
-                                        col -= 1;
-                                    }
-                                    (start.0, col)
-                                })
-                            }
-                        });
-                        self.jump_cursor(landing.0, landing.1);
-                        crate::vim_state::vim_mut(self).block_vcol = landing.1;
-                        crate::vim_state::vim_mut(self).block_to_eol = false;
-                        return;
-                    }
-                    let (er, ec) = crate::vim::retreat_one(self, end);
-                    self.jump_cursor(er, ec);
-                    crate::vim_state::vim_mut(self).block_vcol = ec;
-                    crate::vim_state::vim_mut(self).block_to_eol = false;
-                    return;
-                }
             }
             match kind {
                 RangeKind::Linewise => {
