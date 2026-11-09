@@ -63,9 +63,17 @@ Read in the tree on 2026-11-09:
    paste, focus and the keyboard flags; a panic hook and every future
    suspend/shell path go through it. Use `CSI = flags ; 1 u` (set) inside the
    pushed level so a later flag change does not grow the stack.
-3. **Own key decoder** — needs the owner's decision, see below. Decode `CSI … u`
-   and the legacy/functional forms into a richer event: key, shifted key,
-   base-layout key, all eight kitty modifiers, event kind, associated text.
+3. **Move from crossterm to `ttyr`.** Decided by the owner 2026-11-09: a new
+   kryptic-sh crate, `ttyr`, replaces crossterm entirely in hjkl, tmxr and the
+   other house projects — its own event types; the kitty, xterm modifyOtherKeys,
+   legacy, SGR-mouse, paste, focus and report decoders; a Unix and Windows
+   reader; raw mode, size and output commands; a ratatui backend. It has its own
+   repo and plan. hjkl's part is the port: `hjkl-keymap-tui`, `hjkl-engine-tui`,
+   `hjkl-picker-tui`, `hjkl-kitty` and the app's event loop take `ttyr` events
+   instead of crossterm's, carrying the shifted key, base-layout key, every
+   kitty modifier, event kind and associated text. Waits on `ttyr`'s input half.
+   hjkl's requirements of it were sent to the tmxr session for `ttyr`'s plan
+   (2026-11-09); they are listed below.
 4. **Push all five flags** once phase 3 can read what they produce. Flag 8 turns
    Enter / Tab / Backspace and plain text into escape codes, so the insert path
    must take text from flag 16's associated text (or the key) rather than
@@ -83,22 +91,36 @@ Read in the tree on 2026-11-09:
 
 ## Decisions needed
 
-- **How to decode keys (phase 3).** Options: (a) hjkl's own input reader — it
-  must then also parse mouse, paste, focus and resize, which crossterm does for
-  us today; (b) upstream flags 4 / 16 and modifyOtherKeys to crossterm and wait
-  for a release; (c) a CSI-u-only pre-parser in front of crossterm's, which
-  crossterm's reader does not allow without owning stdin. (a) is what tmxr is
-  doing; sharing one decoder crate between hjkl and tmxr is the natural shape,
-  and `hjkl-kitty` (already shared with gpur) is where it would live.
+- **Whether `hjkl-kitty` survives `ttyr`.** Its push/pop and `normalize_legacy`
+  may belong in `ttyr`; gpur also uses it. Decide when `ttyr`'s API exists.
 - **Breaking the key types.** Adding modifiers to `KeyModifiers` / `Input` and
   keys to `KeyCode` breaks `hjkl-picker-tui`'s and gpur's callers. Pre-1.0, so
   allowed; tmxr and gpur need the bump coordinated. tmxr asked (2026-11-09) to
   be told before the release that changes `hjkl-picker-tui::handle_key` ships:
   its session picker calls it.
-- **Shared decoder — asked, not answered.** tmxr has put the decoder question to
-  the owner (it needs one at its own plan step 3). tmxr's `<…>` key names now
-  follow this plan's syntax, including `A-` = `M-`, and will add `D-` / `T-` as
-  hjkl does.
+- tmxr's `<…>` key names follow this plan's syntax, including `A-` = `M-`, and
+  will add `D-` / `T-` as hjkl does.
+
+## What hjkl needs from `ttyr`
+
+From hjkl's crossterm use on 2026-11-09:
+
+- **Input:** blocking `poll(timeout)` and `read()` — the app's event loop uses
+  nothing else. `EventStream` has no use in the tree, though four crates enable
+  crossterm's `event-stream` feature (`hjkl-engine-tui` as a normal dependency,
+  the others as dev-dependencies); async is not a requirement.
+- **Events:** key (press/repeat/release); mouse down / up / drag / moved and
+  scroll in all four directions, with button and modifiers; resize; paste; focus
+  gained (the loop has no focus-lost arm today).
+- **Keys:** `F(n)`, `BackTab` or Shift+Tab, and a constructor for tests — the
+  tests build key events directly in many places.
+- **Terminal:** raw mode, the alternate screen, mouse capture, bracketed paste,
+  focus reporting, keyboard flags push/pop/set, `size()`, `Clear`,
+  `SetCursorStyle`.
+- **Drawing:** a ratatui backend in place of `CrosstermBackend`.
+- **No blocking probe on startup:** support detection through the event stream,
+  as phase 5 describes; PTY harnesses hang on crossterm's blocking
+  `supports_keyboard_enhancement`.
 
 ## Key-name syntax (for tmxr's `<…>` form)
 
