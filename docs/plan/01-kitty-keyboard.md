@@ -92,7 +92,13 @@ Read in the tree on 2026-11-09:
   and `hjkl-kitty` (already shared with gpur) is where it would live.
 - **Breaking the key types.** Adding modifiers to `KeyModifiers` / `Input` and
   keys to `KeyCode` breaks `hjkl-picker-tui`'s and gpur's callers. Pre-1.0, so
-  allowed; tmxr and gpur need the bump coordinated.
+  allowed; tmxr and gpur need the bump coordinated. tmxr asked (2026-11-09) to
+  be told before the release that changes `hjkl-picker-tui::handle_key` ships:
+  its session picker calls it.
+- **Shared decoder — asked, not answered.** tmxr has put the decoder question to
+  the owner (it needs one at its own plan step 3). tmxr's `<…>` key names now
+  follow this plan's syntax, including `A-` = `M-`, and will add `D-` / `T-` as
+  hjkl does.
 
 ## Key-name syntax (for tmxr's `<…>` form)
 
