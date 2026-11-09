@@ -859,6 +859,15 @@ completion.
    sharing if a third consumer appears. _All other items from the 2026-08-10
    sweep are closed — see the §7 session entry below._
 
+2. **Alt+Shift+letter loses its Shift under the kitty protocol.**
+   `hjkl_keymap_tui::from_crossterm` strips Shift from every `Char`, but under
+   flag 1 the terminal sends Alt+Shift+a as `CSI 97;4u` and crossterm reports
+   `'a'` + Shift + Alt, so `<M-A>` arrives as `<M-a>`. Found by reading both
+   parsers (2026-11-09, reported by tmxr, which hit the same bug); not
+   reproduced in a terminal. Phase 1 of
+   [the kitty keyboard plan](./plan/01-kitty-keyboard.md) fixes it together with
+   item 1.
+
 ### 1.13 Neovim filetype-detection parity — remaining decisions
 
 The actionable 2026-08-18 findings shipped in `c0c8f64d`, `aa79d876`,
