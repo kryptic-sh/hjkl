@@ -102,7 +102,15 @@ Read in the tree on 2026-11-09:
    `Mode::VirtualTerminalInput` with `BracketedPaste`, so pastes arrive as
    `Event::Paste` (backlog §1.14 #3; Windows Terminal honours it, conhost
    unverified); `ttyr`'s console reader also drops Ctrl+Alt from AltGr
-   characters (§1.14 #2). Not started.
+   characters (§1.14 #2). Since `ttyr` `05def76` (2026-11-10), modifier bit 8
+   (`CSI 1;9A`, `CSI 97;9u`) decodes as Super only while the reader knows the
+   kitty protocol is on, and as xterm's Meta otherwise: wherever hjkl pushes or
+   pops `Mode::KeyboardFlags`, it must also call
+   `reader.set_kitty_keyboard(true` / `false)` (a non-zero `CSI ? flags u` reply
+   sets it too), or Super chords arrive as Meta. The same commit decodes an
+   unshifted upper-case letter in xterm's forms as the lower-case letter with
+   `CAPS_LOCK`, not Shift; kitty's CSI u is unchanged. Pin `05def76` or later.
+   Not started.
 4. **Push all five flags** once phase 3 can read what they produce. Flag 8 turns
    Enter / Tab / Backspace and plain text into escape codes, so the insert path
    must take text from flag 16's associated text (or the key) rather than
