@@ -845,25 +845,20 @@ delegate → review → commit → push; each slice pruned from this list on
 completion.
 
 1. **SHIFT normalization divergence (tidy §11 #8) — NEEDS GUIDANCE.**
-   `chord_event_to_input` (`app/keymap.rs:186-193`) claims to mirror
-   `from_crossterm` (`hjkl-keymap-tui/src/lib.rs:38-40`) but doesn't: keymap-tui
-   drops SHIFT for every `Char`, the app copy only for ASCII letters — the same
-   physical key (`<S-1>` etc.) can produce different `Input`s on the two live
-   paths (`event_loop.rs:49` vs `:1040`). Unifying is a behavior decision (which
-   rule wins, and any bindings that depend on `<S-x>` for non-letters must be
-   checked), not a mechanical fix. Tidy §11 #9 (`truncate_desc` ≡
-   `truncate_to_width`) was declined per its own recommendation — only worth
-   sharing if a third consumer appears. _All other items from the 2026-08-10
-   sweep are closed — see the §7 session entry below._
-
-2. **Alt+Shift+letter loses its Shift under the kitty protocol.**
-   `hjkl_keymap_tui::from_crossterm` strips Shift from every `Char`, but under
-   flag 1 the terminal sends Alt+Shift+a as `CSI 97;4u` and crossterm reports
-   `'a'` + Shift + Alt, so `<M-A>` arrives as `<M-a>`. Found by reading both
-   parsers (2026-11-09, reported by tmxr, which hit the same bug); not
-   reproduced in a terminal. Phase 1 of
-   [the kitty keyboard plan](./plan/01-kitty-keyboard.md) fixes it together with
-   item 1.
+   `chord_event_to_input` (`app/keymap.rs`) claims to mirror `from_ttyr`
+   (`hjkl-keymap-tui`) but doesn't: keymap-tui drops SHIFT for every `Char`, the
+   app copy only for ASCII letters — the same physical key (`<S-1>` etc.) can
+   produce different `Input`s on the two live paths (`to_km_event` and
+   `ttyr_to_input` in `event_loop.rs`). Since the ttyr port (2026-11-11) a
+   shifted letter arrives already as its capital without Shift, so only keys
+   whose shifted character was not reported (Alt+Shift+1 under kitty flag 1)
+   still differ; phase 1 of
+   [the kitty keyboard plan](./plan/01-kitty-keyboard.md) decides them. Unifying
+   is a behavior decision (which rule wins, and any bindings that depend on
+   `<S-x>` for non-letters must be checked), not a mechanical fix. Tidy §11 #9
+   (`truncate_desc` ≡ `truncate_to_width`) was declined per its own
+   recommendation — only worth sharing if a third consumer appears. _All other
+   items from the 2026-08-10 sweep are closed — see the §7 session entry below._
 
 ### 1.13 Neovim filetype-detection parity — remaining decisions
 
@@ -936,19 +931,27 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    `tests/install_tests.rs` is `#[cfg(unix)]`. Needs a copy (or hard-link)
    fallback, `std::env::consts::EXE_SUFFIX`, the `Scripts` dir, a Python
    launcher choice, Windows manifest entries with shas, and un-gated tests.
-2. **AltGr characters may type nothing in Insert mode — suspected, not run.**
-   crossterm on Windows reports AltGr as CONTROL|ALT; `crossterm_to_input`
-   (`hjkl-engine-tui`) sets `ctrl`, and `step_insert` (`hjkl-vim` `insert.rs`)
-   swallows ctrl+Char. On German/French/Nordic layouts `@ { [ ] \ | ~` would be
-   lost, and AltGr+`]` would act as `<C-]>`. Reproduce on a non-US layout before
-   changing anything.
-3. **Bracketed paste probably never arrives on Windows — suspected.**
-   crossterm's Windows reader parses console input records and does not emit
-   `Event::Paste`, so pastes arrive as keystrokes: autoindent/autopair cascade,
-   and `App::handle_paste`'s CRLF normalization is bypassed. Separately, the
-   `EnableBracketedPaste` `execute!` in `main.rs` terminal setup could fail on a
-   legacy console after raw mode and the alternate screen are already on,
-   leaving the terminal unrestored. Check in Windows Terminal and conhost.
+2. **AltGr characters on Windows — believed fixed by the ttyr port, not run.**
+   crossterm reported AltGr as CONTROL|ALT, `ttyr_to_input` (`hjkl-engine-tui`)
+   would set `ctrl`, and `step_insert` (`hjkl-vim` `insert.rs`) swallows
+   ctrl+Char, so on German/French/Nordic layouts `@ { [ ] \ | ~` were suspected
+   lost. Since 2026-11-11 hjkl reads the console through ttyr, whose console
+   reader drops Ctrl+Alt from a key record that typed a character with AltGr
+   (`alt_gr_typed` in ttyr's `event/console.rs`, read, not run). Confirm on a
+   non-US layout, then delete this entry.
+3. **Bracketed paste probably never arrives on Windows — suspected.** hjkl reads
+   the console's key records (ttyr's console reader, as crossterm's did), which
+   carry no `Event::Paste`, so pastes arrive as keystrokes: autoindent/autopair
+   cascade, and `App::handle_paste`'s CRLF normalization is bypassed. ttyr's
+   `Mode::VirtualTerminalInput` with `Mode::BracketedPaste` gives `Event::Paste`
+   in Windows Terminal (per the ttyr session; conhost unverified). The ttyr port
+   (2026-11-11) did not turn it on: in VT input keys arrive as escape sequences,
+   not key records, so the Windows console's releases
+   (`app/tests/key_event_kind.rs`) and AltGr handling (#2) change with it. Turn
+   it on in `main.rs` terminal setup (`#[cfg(windows)]`) once it has been tried
+   on a Windows machine. A failure while setting up modes is no longer a stuck
+   terminal: ttyr's guard records each mode as it is turned on, and its panic
+   hook and `restore` undo them.
 4. **Windows clipboard read keeps CRLF — confirmed by code read.**
    `read_clipboard` (`apps/hjkl/src/host.rs`) passes `CF_UNICODETEXT` through,
    so `"+p` of text copied from a Windows app inserts rows ending in `\r`;
@@ -2545,15 +2548,14 @@ exists.
    payload (unit variant) and the allow; public-API shape change if an external
    consumer reads the payload.
 8. **"Mirrors" claim is two drifted SHIFT-normalization copies** —
-   `app/keymap.rs:175-194` (`chord_event_to_input`) vs
-   `hjkl-keymap-tui/src/ lib.rs:33-40` (`from_crossterm`). keymap.rs documents
-   the SHIFT rule as mirroring `from_crossterm`, but they diverged: keymap-tui
-   drops SHIFT for EVERY `Char`; the app copy folds only ASCII letters and keeps
-   SHIFT on other chars (`<S-1>` etc.). Both paths run (event_loop.rs:49
-   `from_crossterm`; event_loop.rs:1040 `crossterm_to_input`), so the same
-   physical key can produce different `Input`s. **This is a real behavior
-   inconsistency, not a mechanical cleanup** — unify on one rule (a decision) or
-   correct the comment. Cross-cutting with correctness.
+   `app/keymap.rs:175-194` (`chord_event_to_input`) vs `hjkl-keymap-tui`
+   (`from_ttyr`, then `from_crossterm`). keymap.rs documents the SHIFT rule as
+   mirroring it, but they diverged: keymap-tui drops SHIFT for EVERY `Char`; the
+   app copy folds only ASCII letters and keeps SHIFT on other chars (`<S-1>`
+   etc.). Both paths run (`event_loop.rs` `to_km_event` and `ttyr_to_input`), so
+   the same physical key can produce different `Input`s. **This is a real
+   behavior inconsistency, not a mechanical cleanup** — unify on one rule (a
+   decision) or correct the comment. Cross-cutting with correctness.
 9. **`truncate_desc` ≡ `truncate_to_width(s, max−1) + "…"`** —
    `hjkl-which-key/src/lib.rs:80-97` vs `hjkl-statusline/src/lib.rs:18-30`; same
    display-width loop, different ellipsis budget, no dep edge between the
