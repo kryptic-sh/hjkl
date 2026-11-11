@@ -1,7 +1,7 @@
 //! e2e: terminal **bracketed paste** into Insert mode preserves newlines.
 //!
-//! Regression for the Ctrl+Shift+V bug: in raw mode crossterm maps a pasted
-//! `\n` (0x0A) to Ctrl+J, which the Insert-mode dispatcher dropped — so pasted
+//! Regression for the Ctrl+Shift+V bug: in raw mode a pasted `\n` (0x0A)
+//! reads as Ctrl+J, which the Insert-mode dispatcher dropped — so pasted
 //! lines bunched onto one line. The fix enables bracketed paste so the terminal
 //! delivers the whole blob as one `Event::Paste`, inserted verbatim.
 //!

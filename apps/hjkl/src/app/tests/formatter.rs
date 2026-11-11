@@ -121,12 +121,12 @@ fn visual_line_eq_reindents_selected_lines() {
     app.active_editor_mut().jump_cursor(1, 0);
     app.sync_viewport_from_editor();
 
-    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+    use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
 
     // Enter VisualLine via `V`.
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
+        &CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
     );
     assert_eq!(
         app.active_editor().vim_mode(),

@@ -6,6 +6,15 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `KeyEvent` re-exports `ttyr::event::KeyEvent` in place of
+  crossterm's, and `crossterm_to_input(KeyEvent)` is `ttyr_to_input(&KeyEvent)`.
+  A character key converts to the character it typed (`logical_char`), with
+  Shift dropped where that character carries it, so Shift+a is `A` from a legacy
+  or a kitty terminal alike.
+- ratatui without its default features: no crossterm in the dependency tree.
+
 ## [0.40.0] - 2026-08-01
 
 ### Removed

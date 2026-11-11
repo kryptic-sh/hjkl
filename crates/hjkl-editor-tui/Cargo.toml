@@ -16,7 +16,7 @@ readme = "README.md"
 hjkl-engine.workspace = true
 hjkl-engine-tui.workspace = true
 hjkl-form.workspace = true
-ratatui = "0.30"
+ratatui = { version = "0.30", default-features = false, features = ["std", "layout-cache", "underline-color"] }
 unicode-width.workspace = true
 
 [package.metadata.docs.rs]

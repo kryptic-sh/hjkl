@@ -1,7 +1,7 @@
 [package]
 name = "hjkl-picker-tui"
-description = "Ratatui adapter for hjkl-picker — preview pane renderer + crossterm key router."
-keywords = ["picker", "fuzzy", "tui", "ratatui", "crossterm"]
+description = "Ratatui adapter for hjkl-picker — preview pane renderer + ttyr key router."
+keywords = ["picker", "fuzzy", "tui", "ratatui", "terminal"]
 categories = ["command-line-interface"]
 version.workspace = true
 edition = "2024"
@@ -18,8 +18,8 @@ hjkl-buffer.workspace = true
 hjkl-buffer-tui.workspace = true
 hjkl-engine.workspace = true
 hjkl-engine-tui.workspace = true
-ratatui = "0.30"
-crossterm = "0.29"
+ratatui = { version = "0.30", default-features = false, features = ["std", "layout-cache", "underline-color"] }
+ttyr = { version = "0.1.0" }
 
 [package.metadata.docs.rs]
 all-features = true

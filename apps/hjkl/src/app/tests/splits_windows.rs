@@ -917,7 +917,7 @@ fn gt_switches_tab_backward() {
     drive_key(&mut app, key(KeyCode::Char('g')));
     drive_key(
         &mut app,
-        crossterm::event::KeyEvent::new(KeyCode::Char('T'), crossterm::event::KeyModifiers::SHIFT),
+        ttyr::event::KeyEvent::new(KeyCode::Char('T'), ttyr::event::KeyModifiers::SHIFT),
     );
     assert_eq!(app.active_tab, 0, "gT must switch to the previous tab");
 }
@@ -1336,7 +1336,7 @@ fn ctrl_w_t_moves_window_to_new_tab() {
     drive_key(&mut app, ctrl_key('w'));
     drive_key(
         &mut app,
-        crossterm::event::KeyEvent::new(KeyCode::Char('T'), crossterm::event::KeyModifiers::SHIFT),
+        ttyr::event::KeyEvent::new(KeyCode::Char('T'), ttyr::event::KeyModifiers::SHIFT),
     );
 
     assert_eq!(app.tabs.len(), 2, "Ctrl-w T must create a new tab");

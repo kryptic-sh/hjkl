@@ -33,7 +33,6 @@ hjkl-hover-tui.workspace = true
 hjkl-icons.workspace = true
 hjkl-anvil.workspace = true
 hjkl-keymap.workspace = true
-hjkl-kitty.workspace = true
 hjkl-keymap-tui.workspace = true
 hjkl-vim.workspace = true
 hjkl-vim-tui.workspace = true
@@ -69,8 +68,7 @@ hjkl-menu.workspace = true
 hjkl-menu-tui.workspace = true
 hjkl-syntax.workspace = true
 hjkl-syntax-tui.workspace = true
-ratatui = "0.30"
-crossterm = "0.29"
+ratatui = { version = "0.30", default-features = false, features = ["std", "layout-cache", "underline-color"] }
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"
 tracing = "0.1"
@@ -87,6 +85,7 @@ mimalloc = { version = "0.1", default-features = false }
 ahash = { version = "0.8", default-features = false, features = ["std"] }
 ropey = "1.6"
 memchr = "2"
+ttyr = { version = "0.1.0", features = ["ratatui"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

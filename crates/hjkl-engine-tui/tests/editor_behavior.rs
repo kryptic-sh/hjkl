@@ -2,7 +2,7 @@
 //!
 //! Relocated from `hjkl-engine/src/editor.rs`'s `#[cfg(all(test, feature = "crossterm"))]
 //! mod tests` as part of #162 phase 3. Engine is now a fully agnostic core with zero
-//! toolkit dependencies; this file provides the crossterm harness the tests previously
+//! toolkit dependencies; this file provides the terminal-key harness the tests previously
 //! relied on.
 //!
 //! Note: the `key()`, `shift_key()`, and `ctrl_key()` helpers below are defined for
@@ -11,8 +11,6 @@
 
 // Several types are imported at the top level for convenience; individual tests
 // may shadow them with local `use` statements, triggering unused-imports lints.
-#[allow(unused_imports)]
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::rope_util::rope_to_lines_vec;
 #[allow(unused_imports)]
 use hjkl_engine::{
@@ -20,6 +18,8 @@ use hjkl_engine::{
     types::{Attrs, Color, DefaultHost, HighlightKind, Host, SnapshotMode, Style, Viewport},
 };
 use hjkl_vim::VimEditorExt;
+#[allow(unused_imports)]
+use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[allow(dead_code)]
 fn key(code: KeyCode) -> KeyEvent {

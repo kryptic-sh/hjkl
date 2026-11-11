@@ -57,7 +57,7 @@ impl Form {
         let prev = self.focused;
         match input.key {
             // BackTab on most terminals comes through as Tab + shift;
-            // crossterm-bridged inputs use Key::Tab with shift. This arm
+            // terminal-bridged inputs use Key::Tab with shift. This arm
             // must precede the forward Tab arm, whose guard does not
             // exclude shift.
             Key::Tab if input.shift => {

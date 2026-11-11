@@ -9,12 +9,12 @@
 //!
 //! First building block toward a `cargo fuzz` harness.
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::VimMode;
 use hjkl_engine::rope_util::rope_to_lines_vec;
 use hjkl_engine::types::{DefaultHost, Options};
 use hjkl_vim::VimEditorExt;
 use proptest::prelude::*;
+use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn keycode_strategy() -> impl Strategy<Value = KeyCode> {
     prop_oneof![
@@ -84,7 +84,7 @@ proptest! {
         let mut ed = hjkl_vim::vim_editor(hjkl_buffer::View::new(), DefaultHost::new(), Options::default());
         ed.set_content("hello world\nsecond line\n");
         for k in seq {
-            let _ = hjkl_vim_tui::handle_key(&mut ed, k);
+            let _ = hjkl_vim_tui::handle_key(&mut ed, &k);
         }
         prop_assert!(legal_mode(ed.vim_mode()));
     }
@@ -96,11 +96,11 @@ proptest! {
         let mut ed = hjkl_vim::vim_editor(hjkl_buffer::View::new(), DefaultHost::new(), Options::default());
         ed.set_content("hello\nworld\n");
         for k in prefix {
-            let _ = hjkl_vim_tui::handle_key(&mut ed, k);
+            let _ = hjkl_vim_tui::handle_key(&mut ed, &k);
         }
         // Three Escapes should pop any nested mode.
         for _ in 0..3 {
-            hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+            hjkl_vim_tui::handle_key(&mut ed, &KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         }
         prop_assert_eq!(ed.vim_mode(), VimMode::Normal);
     }
@@ -115,7 +115,7 @@ fn handle_key_no_panic_baseline() {
     );
     ed.set_content("hello");
     for k in [KeyCode::Char('i'), KeyCode::Char('x'), KeyCode::Esc] {
-        hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(k, KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut ed, &KeyEvent::new(k, KeyModifiers::NONE));
     }
     assert_eq!(ed.vim_mode(), VimMode::Normal);
 }
@@ -135,9 +135,9 @@ proptest! {
         let mut ed = hjkl_vim::vim_editor(hjkl_buffer::View::new(), DefaultHost::new(), Options::default());
         ed.set_content(&text);
         // `yy` then `p`.
-        hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
-        hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
-        hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut ed, &KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut ed, &KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut ed, &KeyEvent::new(KeyCode::Char('p'), KeyModifiers::NONE));
         let content = ed.content();
         prop_assert!(
             content.matches(text.as_str()).count() >= 2,
@@ -157,10 +157,10 @@ proptest! {
         ed.set_content(&original);
         let before: Vec<String> = rope_to_lines_vec(&ed.buffer().rope());
         // `dd` deletes the first line.
-        hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
-        hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut ed, &KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut ed, &KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
         // `u` undoes.
-        hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut ed, &KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE));
         prop_assert_eq!(before, rope_to_lines_vec(&ed.buffer().rope()));
     }
 
@@ -175,12 +175,12 @@ proptest! {
         ed.set_content(&text);
         ed.buffer_mut().set_change_log_enabled(true);
         // Enter insert mode, type some chars, exit.
-        hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut ed, &KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
         for i in 0..edits {
             let c = char::from(b'a' + (i as u8 % 26));
-            hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+            hjkl_vim_tui::handle_key(&mut ed, &KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
         }
-        hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut ed, &KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         // First drain may or may not have entries.
         let _first = ed.take_changes();
         // Second drain must always be empty.

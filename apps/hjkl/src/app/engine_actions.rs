@@ -138,12 +138,10 @@ impl App {
                             hjkl_vim::OperatorKind::Filter => {
                                 // Visual-block !: filter the row range through a shell command.
                                 // Exit visual mode first, then open the filter prompt.
-                                use crossterm::event::{
-                                    KeyCode, KeyEvent as CtKeyEvent, KeyModifiers,
-                                };
+                                use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                                 hjkl_vim_tui::handle_key(
                                     self.active_editor_mut(),
-                                    CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                                    &CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                                 );
                                 self.open_filter_prompt(top_row, bot_row);
                                 return;
@@ -156,10 +154,10 @@ impl App {
                             _ => return,
                         }
                         // Exit visual mode after the op (except Change above).
-                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                        use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                         hjkl_vim_tui::handle_key(
                             self.active_editor_mut(),
-                            CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                            &CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                         );
                     }
                     VimMode::Visual => {
@@ -221,12 +219,10 @@ impl App {
                                 // Visual-charwise !: filter the row range through a shell command.
                                 let (min_r, max_r) = (start.0.min(end.0), start.0.max(end.0));
                                 // Exit visual mode first, then open the filter prompt.
-                                use crossterm::event::{
-                                    KeyCode, KeyEvent as CtKeyEvent, KeyModifiers,
-                                };
+                                use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                                 hjkl_vim_tui::handle_key(
                                     self.active_editor_mut(),
-                                    CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                                    &CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                                 );
                                 self.open_filter_prompt(min_r, max_r);
                                 return;
@@ -240,10 +236,10 @@ impl App {
                         }
                         // Exit visual mode after the op (except Change, which already
                         // transitioned to Insert above).
-                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                        use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                         hjkl_vim_tui::handle_key(
                             self.active_editor_mut(),
-                            CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                            &CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                         );
                     }
                     VimMode::VisualLine => {
@@ -325,12 +321,10 @@ impl App {
                             hjkl_vim::OperatorKind::Filter => {
                                 // Visual-line !: filter the row range through a shell command.
                                 // Exit visual mode first, then open the filter prompt.
-                                use crossterm::event::{
-                                    KeyCode, KeyEvent as CtKeyEvent, KeyModifiers,
-                                };
+                                use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                                 hjkl_vim_tui::handle_key(
                                     self.active_editor_mut(),
-                                    CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                                    &CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                                 );
                                 self.open_filter_prompt(top_row, bot_row);
                                 return;
@@ -343,10 +337,10 @@ impl App {
                             _ => return,
                         }
                         // Exit visual mode after the op (except Change above).
-                        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                        use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                         hjkl_vim_tui::handle_key(
                             self.active_editor_mut(),
-                            CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                            &CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                         );
                     }
                     _ => {

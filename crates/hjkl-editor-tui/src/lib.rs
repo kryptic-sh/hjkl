@@ -24,7 +24,7 @@
 //! attribute tables for the workspace. The names are kept so existing
 //! callers don't have to switch crates.
 //!
-//! Key-event bridging lives in `hjkl-engine-tui` (`crossterm_to_input`);
+//! Key-event bridging lives in `hjkl-engine-tui` (`ttyr_to_input`);
 //! this crate's own copy was deleted as dead code.
 //!
 //! Lossless within the styles each library can represent. Ratatui-only

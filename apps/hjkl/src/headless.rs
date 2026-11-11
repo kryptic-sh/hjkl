@@ -2,7 +2,7 @@
 //!
 //! Opens each file, dispatches the `+cmd` / `-c` command stream through the
 //! editor ex dispatcher, writes back to disk when `:w` / `:wq` / `:x` runs,
-//! and exits. ratatui and crossterm are never initialised.
+//! and exits. ratatui and the terminal are never initialised.
 //!
 //! # No auto-write
 //!

@@ -61,9 +61,9 @@ fn prompt_ctrl_p_recalls_previous() {
     );
 
     // Now Ctrl-P should recall the most-recent entry ("set nonu").
-    app.handle_command_field_key(crossterm::event::KeyEvent::new(
-        crossterm::event::KeyCode::Char('p'),
-        crossterm::event::KeyModifiers::CONTROL,
+    app.handle_command_field_key(ttyr::event::KeyEvent::new(
+        ttyr::event::KeyCode::Char('p'),
+        ttyr::event::KeyModifiers::CONTROL,
     ));
     let text = app.command_field.as_ref().unwrap().text();
     assert_eq!(text, "set nonu", "Ctrl-P must recall the most recent entry");
@@ -83,17 +83,17 @@ fn prompt_ctrl_n_after_p_advances() {
         "empty `:` prompt must not show a popup"
     );
 
-    let ctrl_p = crossterm::event::KeyEvent::new(
-        crossterm::event::KeyCode::Char('p'),
-        crossterm::event::KeyModifiers::CONTROL,
+    let ctrl_p = ttyr::event::KeyEvent::new(
+        ttyr::event::KeyCode::Char('p'),
+        ttyr::event::KeyModifiers::CONTROL,
     );
-    let ctrl_n = crossterm::event::KeyEvent::new(
-        crossterm::event::KeyCode::Char('n'),
-        crossterm::event::KeyModifiers::CONTROL,
+    let ctrl_n = ttyr::event::KeyEvent::new(
+        ttyr::event::KeyCode::Char('n'),
+        ttyr::event::KeyModifiers::CONTROL,
     );
 
     // Ctrl-P Ctrl-P → idx 1 (second from end = "set nonu").
-    app.handle_command_field_key(ctrl_p);
+    app.handle_command_field_key(ctrl_p.clone());
     app.handle_command_field_key(ctrl_p);
     let text = app.command_field.as_ref().unwrap().text();
     assert_eq!(text, "set nonu", "two Ctrl-P should be 2nd from end");
@@ -219,17 +219,17 @@ fn q_colon_window_quit_without_execute() {
 
 /// Helper: send <C-f> to the command prompt.
 fn ctrl_f_cmd(app: &mut App) {
-    app.handle_command_field_key(crossterm::event::KeyEvent::new(
-        crossterm::event::KeyCode::Char('f'),
-        crossterm::event::KeyModifiers::CONTROL,
+    app.handle_command_field_key(ttyr::event::KeyEvent::new(
+        ttyr::event::KeyCode::Char('f'),
+        ttyr::event::KeyModifiers::CONTROL,
     ));
 }
 
 /// Helper: send <C-f> to the search prompt.
 fn ctrl_f_search(app: &mut App) {
-    app.handle_search_field_key(crossterm::event::KeyEvent::new(
-        crossterm::event::KeyCode::Char('f'),
-        crossterm::event::KeyModifiers::CONTROL,
+    app.handle_search_field_key(ttyr::event::KeyEvent::new(
+        ttyr::event::KeyCode::Char('f'),
+        ttyr::event::KeyModifiers::CONTROL,
     ));
 }
 

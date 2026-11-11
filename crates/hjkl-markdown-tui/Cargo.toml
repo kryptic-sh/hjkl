@@ -14,7 +14,7 @@ readme = "README.md"
 
 [dependencies]
 hjkl-markdown.workspace = true
-ratatui = "0.30"
+ratatui = { version = "0.30", default-features = false, features = ["std", "layout-cache", "underline-color"] }
 unicode-width.workspace = true
 
 [package.metadata.docs.rs]

@@ -2041,12 +2041,12 @@ impl App {
     /// - `y` → load the swap body into the buffer, mark dirty, keep swap.
     /// - `N` / Esc → load the file fresh (already loaded in slot), dismiss prompt.
     /// - `q` → clear the slot content entirely (abort open).
-    pub(crate) fn handle_recovery_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
+    pub(crate) fn handle_recovery_key(&mut self, key: ttyr::event::KeyEvent) -> bool {
+        use ttyr::event::KeyCode;
         let Some(pr) = self.pending_recovery.as_ref() else {
             return false;
         };
-        match key.code {
+        match key.key {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
                 let body = pr.body.clone();
                 let slot_idx = pr.slot_idx;
@@ -2121,15 +2121,15 @@ impl App {
     ///
     /// Returns `true` once the prompt is dismissed (any handled key), so the
     /// caller can request a repaint.
-    pub(crate) fn handle_disk_change_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
+    pub(crate) fn handle_disk_change_key(&mut self, key: ttyr::event::KeyEvent) -> bool {
+        use ttyr::event::KeyCode;
         let Some(pdc) = self.pending_disk_change.as_ref() else {
             return false;
         };
         // The prompt only ever targets the focused slot; bail safely if focus
         // drifted (e.g. a mouse click) so we never reload the wrong buffer.
         let targets_focused = pdc.slot_idx == self.focused_slot_idx();
-        match key.code {
+        match key.key {
             KeyCode::Char('r') | KeyCode::Char('R') if targets_focused => {
                 self.pending_disk_change = None;
                 self.reload_current(true);

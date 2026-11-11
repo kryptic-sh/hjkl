@@ -2,9 +2,9 @@
 //! `hjkl_vim::feed_input`. Relocated from `hjkl-vim/tests/editor_fsm.rs` as
 //! part of #162 phase 3 (dropped `hjkl-vim`'s `crossterm` feature gate).
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::{Editor, Host, VimMode};
 use hjkl_vim::VimEditorExt;
+use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
@@ -49,7 +49,7 @@ fn vim_normal_to_insert() {
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
     assert_eq!(e.vim_mode(), VimMode::Insert);
 }
 
@@ -77,7 +77,7 @@ fn with_options_constructs_from_spec_options() {
     assert_eq!(e.settings().iskeyword, "@,a-z");
     assert_eq!(e.settings().wrap, hjkl_buffer::Wrap::Word);
     // Confirm input plumbing still works.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
     assert_eq!(e.vim_mode(), VimMode::Insert);
 }
 
@@ -161,14 +161,14 @@ fn take_changes_emits_per_row_for_block_insert() {
     // Place cursor at (0, 0), enter visual-block, extend down 2.
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
     );
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('j')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('j')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('j')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('j')));
     // `I` to enter insert mode at the block left edge.
-    hjkl_vim_tui::handle_key(&mut e, shift_key(KeyCode::Char('I')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('X')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut e, &shift_key(KeyCode::Char('I')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('X')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Esc));
 
     let changes = e.take_changes();
     // Expect at least 3 entries — one per row in the 3-row block.
@@ -193,8 +193,8 @@ fn take_changes_drains_after_insert() {
     // Empty initially.
     assert!(e.take_changes().is_empty());
     // Type a char in insert mode.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('X')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('X')));
     let changes = e.take_changes();
     assert!(
         !changes.is_empty(),
@@ -213,9 +213,9 @@ fn selection_highlight_some_in_visual() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello world");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('v')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('l')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('l')));
     let h = e
         .selection_highlight()
         .expect("visual mode should produce a highlight");
@@ -234,10 +234,10 @@ fn highlights_emit_incsearch_during_active_prompt() {
     );
     e.set_content("foo bar foo\nbaz\n");
     // Open the `/` prompt and type `f` `o` `o`.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('/')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('f')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('o')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('o')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('/')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('f')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('o')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('o')));
     // Prompt should be active.
     assert!(e.search_prompt().is_some());
     let hs = e.highlights_for_line(0);
@@ -255,7 +255,7 @@ fn highlights_empty_for_blank_prompt() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("foo");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('/')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('/')));
     // Nothing typed yet — prompt active but text empty.
     assert!(e.search_prompt().is_some());
     assert!(e.highlights_for_line(0).is_empty());
@@ -275,7 +275,7 @@ fn render_frame_reflects_mode_and_cursor() {
     assert_eq!(f.cursor_shape, CursorShape::Block);
     assert_eq!(f.line_count, 2);
 
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
     let f = e.render_frame();
     assert_eq!(f.mode, SnapshotMode::Insert);
     assert_eq!(f.cursor_shape, CursorShape::Bar);
@@ -293,8 +293,8 @@ fn take_content_change_none_until_mutation() {
     e.take_content_change();
     assert!(e.take_content_change().is_none());
     // mutate via insert mode
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('x')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('x')));
     let after = e.take_content_change();
     assert!(after.is_some());
     assert!(after.unwrap().contains('x'));
@@ -307,8 +307,8 @@ fn vim_insert_to_normal() {
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Esc));
     assert_eq!(e.vim_mode(), VimMode::Normal);
 }
 
@@ -319,7 +319,7 @@ fn vim_normal_to_visual() {
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('v')));
     assert_eq!(e.vim_mode(), VimMode::Visual);
 }
 
@@ -330,8 +330,8 @@ fn vim_visual_to_normal() {
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('v')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Esc));
     assert_eq!(e.vim_mode(), VimMode::Normal);
 }
 
@@ -344,7 +344,7 @@ fn vim_shift_i_moves_to_first_non_whitespace() {
     );
     e.set_content("   hello");
     e.jump_cursor(0, 8);
-    hjkl_vim_tui::handle_key(&mut e, shift_key(KeyCode::Char('I')));
+    hjkl_vim_tui::handle_key(&mut e, &shift_key(KeyCode::Char('I')));
     assert_eq!(e.vim_mode(), VimMode::Insert);
     assert_eq!(e.cursor(), (0, 3));
 }
@@ -357,7 +357,7 @@ fn vim_shift_a_moves_to_end_and_insert() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello");
-    hjkl_vim_tui::handle_key(&mut e, shift_key(KeyCode::Char('A')));
+    hjkl_vim_tui::handle_key(&mut e, &shift_key(KeyCode::Char('A')));
     assert_eq!(e.vim_mode(), VimMode::Insert);
     assert_eq!(e.cursor().1, 5);
 }
@@ -377,9 +377,9 @@ fn count_10j_moves_down_10() {
             .as_str(),
     );
     for d in "10".chars() {
-        hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char(d)));
+        hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char(d)));
     }
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('j')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('j')));
     assert_eq!(e.cursor().0, 10);
 }
 
@@ -392,14 +392,14 @@ fn count_o_repeats_insert_on_esc() {
     );
     e.set_content("hello");
     for d in "3".chars() {
-        hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char(d)));
+        hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char(d)));
     }
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('o')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('o')));
     assert_eq!(e.vim_mode(), VimMode::Insert);
     for c in "world".chars() {
-        hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char(c)));
+        hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char(c)));
     }
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Esc));
     assert_eq!(e.vim_mode(), VimMode::Normal);
     assert_eq!(e.buffer().row_count(), 4);
     assert!(
@@ -424,13 +424,13 @@ fn count_i_repeats_text_on_esc() {
     );
     e.set_content("");
     for d in "3".chars() {
-        hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char(d)));
+        hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char(d)));
     }
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
     for c in "ab".chars() {
-        hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char(c)));
+        hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char(c)));
     }
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Esc));
     assert_eq!(e.vim_mode(), VimMode::Normal);
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "ababab");
 }
@@ -443,7 +443,7 @@ fn vim_shift_o_opens_line_above() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello");
-    hjkl_vim_tui::handle_key(&mut e, shift_key(KeyCode::Char('O')));
+    hjkl_vim_tui::handle_key(&mut e, &shift_key(KeyCode::Char('O')));
     assert_eq!(e.vim_mode(), VimMode::Insert);
     assert_eq!(e.cursor(), (0, 0));
     assert_eq!(e.buffer().row_count(), 2);
@@ -458,8 +458,8 @@ fn vim_gg_goes_to_top() {
     );
     e.set_content("a\nb\nc");
     e.jump_cursor(2, 0);
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('g')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('g')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('g')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('g')));
     assert_eq!(e.cursor().0, 0);
 }
 
@@ -471,7 +471,7 @@ fn vim_shift_g_goes_to_bottom() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("a\nb\nc");
-    hjkl_vim_tui::handle_key(&mut e, shift_key(KeyCode::Char('G')));
+    hjkl_vim_tui::handle_key(&mut e, &shift_key(KeyCode::Char('G')));
     assert_eq!(e.cursor().0, 2);
 }
 
@@ -483,8 +483,8 @@ fn vim_dd_deletes_line() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("first\nsecond");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('d')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('d')));
     assert_eq!(e.buffer().row_count(), 1);
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "second");
 }
@@ -497,8 +497,8 @@ fn vim_dw_deletes_word() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello world");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('w')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('d')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('w')));
     assert_eq!(e.vim_mode(), VimMode::Normal);
     assert!(!hjkl_buffer::rope_line_str(&e.buffer().rope(), 0).starts_with("hello"));
 }
@@ -511,8 +511,8 @@ fn vim_yy_yanks_line() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello\nworld");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('y')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('y')));
     assert!(
         e.host_mut()
             .read_clipboard()
@@ -532,8 +532,8 @@ fn vim_yy_does_not_move_cursor() {
     e.set_content("first\nsecond\nthird");
     e.jump_cursor(1, 0);
     let before = e.cursor();
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('y')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('y')));
     assert_eq!(e.cursor(), before);
     assert_eq!(e.vim_mode(), VimMode::Normal);
 }
@@ -546,8 +546,8 @@ fn vim_yw_yanks_word() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello world");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('w')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('y')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('w')));
     assert_eq!(e.vim_mode(), VimMode::Normal);
     assert!(e.host_mut().read_clipboard().is_some());
 }
@@ -560,8 +560,8 @@ fn vim_cc_changes_line() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello\nworld");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('c')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('c')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('c')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('c')));
     assert_eq!(e.vim_mode(), VimMode::Insert);
 }
 
@@ -573,12 +573,12 @@ fn vim_u_undoes_insert_session_as_chunk() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Enter));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Enter));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Enter));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Enter));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Esc));
     assert_eq!(e.buffer().row_count(), 3);
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('u')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('u')));
     assert_eq!(e.buffer().row_count(), 1);
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
 }
@@ -591,15 +591,15 @@ fn vim_undo_redo_roundtrip() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
     for c in "world".chars() {
-        hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char(c)));
+        hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char(c)));
     }
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Esc));
     let after = hjkl_buffer::rope_line_str(&e.buffer().rope(), 0);
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('u')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('u')));
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello");
-    hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('r')));
+    hjkl_vim_tui::handle_key(&mut e, &ctrl_key(KeyCode::Char('r')));
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), after);
 }
 
@@ -611,10 +611,10 @@ fn vim_u_undoes_dd() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("first\nsecond");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('d')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('d')));
     assert_eq!(e.buffer().row_count(), 1);
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('u')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('u')));
     assert_eq!(e.buffer().row_count(), 2);
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "first");
 }
@@ -627,7 +627,7 @@ fn vim_ctrl_r_redoes() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello");
-    hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('r')));
+    hjkl_vim_tui::handle_key(&mut e, &ctrl_key(KeyCode::Char('r')));
 }
 
 #[test]
@@ -638,8 +638,8 @@ fn vim_r_replaces_char() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('r')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('x')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('r')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('x')));
     assert_eq!(
         hjkl_buffer::rope_line_str(&e.buffer().rope(), 0)
             .chars()
@@ -656,7 +656,7 @@ fn vim_tilde_toggles_case() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('~')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('~')));
     assert_eq!(
         hjkl_buffer::rope_line_str(&e.buffer().rope(), 0)
             .chars()
@@ -673,10 +673,10 @@ fn vim_visual_d_cuts() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('v')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('l')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('l')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('d')));
     assert_eq!(e.vim_mode(), VimMode::Normal);
     assert!(e.host_mut().read_clipboard().is_some());
 }
@@ -689,9 +689,9 @@ fn vim_visual_c_enters_insert() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('v')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('l')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('c')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('c')));
     assert_eq!(e.vim_mode(), VimMode::Insert);
 }
 
@@ -703,7 +703,7 @@ fn vim_normal_unknown_key_consumed() {
         hjkl_engine::types::Options::default(),
     );
     // Unknown keys are consumed (swallowed) rather than returning false.
-    let consumed = hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('z')));
+    let consumed = hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('z')));
     assert!(consumed);
 }
 
@@ -714,7 +714,7 @@ fn force_normal_clears_operator() {
         hjkl_engine::types::DefaultHost::new(),
         hjkl_engine::types::Options::default(),
     );
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('d')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('d')));
     e.force_normal();
     assert_eq!(e.vim_mode(), VimMode::Normal);
 }
@@ -729,8 +729,8 @@ fn zz_centers_cursor_in_viewport() {
     e.set_content(&many_lines(100));
     prime_viewport(&mut e, 20);
     e.jump_cursor(50, 0);
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('z')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('z')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('z')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('z')));
     assert_eq!(e.host().viewport().top_row, 40);
     assert_eq!(e.cursor().0, 50);
 }
@@ -745,8 +745,8 @@ fn zt_puts_cursor_at_viewport_top_with_scrolloff() {
     e.set_content(&many_lines(100));
     prime_viewport(&mut e, 20);
     e.jump_cursor(50, 0);
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('z')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('t')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('z')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('t')));
     // Cursor lands at top of viable area = top + SCROLLOFF (5).
     // Viewport top therefore sits at cursor - 5.
     assert_eq!(e.host().viewport().top_row, 45);
@@ -761,7 +761,7 @@ fn ctrl_a_increments_number_at_cursor() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("x = 41");
-    hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('a')));
+    hjkl_vim_tui::handle_key(&mut e, &ctrl_key(KeyCode::Char('a')));
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x = 42");
     assert_eq!(e.cursor(), (0, 5));
 }
@@ -774,7 +774,7 @@ fn ctrl_a_finds_number_to_right_of_cursor() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("foo 99 bar");
-    hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('a')));
+    hjkl_vim_tui::handle_key(&mut e, &ctrl_key(KeyCode::Char('a')));
     assert_eq!(
         hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
         "foo 100 bar"
@@ -791,9 +791,9 @@ fn ctrl_a_with_count_adds_count() {
     );
     e.set_content("x = 10");
     for d in "5".chars() {
-        hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char(d)));
+        hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char(d)));
     }
-    hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('a')));
+    hjkl_vim_tui::handle_key(&mut e, &ctrl_key(KeyCode::Char('a')));
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x = 15");
 }
 
@@ -805,7 +805,7 @@ fn ctrl_x_decrements_number() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("n=5");
-    hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('x')));
+    hjkl_vim_tui::handle_key(&mut e, &ctrl_key(KeyCode::Char('x')));
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "n=4");
 }
 
@@ -817,7 +817,7 @@ fn ctrl_x_crosses_zero_into_negative() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("v=0");
-    hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('x')));
+    hjkl_vim_tui::handle_key(&mut e, &ctrl_key(KeyCode::Char('x')));
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "v=-1");
 }
 
@@ -829,7 +829,7 @@ fn ctrl_a_on_negative_number_increments_toward_zero() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("a = -5");
-    hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('a')));
+    hjkl_vim_tui::handle_key(&mut e, &ctrl_key(KeyCode::Char('a')));
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "a = -4");
 }
 
@@ -841,7 +841,7 @@ fn ctrl_a_noop_when_no_digit_on_line() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("no digits here");
-    hjkl_vim_tui::handle_key(&mut e, ctrl_key(KeyCode::Char('a')));
+    hjkl_vim_tui::handle_key(&mut e, &ctrl_key(KeyCode::Char('a')));
     assert_eq!(
         hjkl_buffer::rope_line_str(&e.buffer().rope(), 0),
         "no digits here"
@@ -858,8 +858,8 @@ fn zb_puts_cursor_at_viewport_bottom_with_scrolloff() {
     e.set_content(&many_lines(100));
     prime_viewport(&mut e, 20);
     e.jump_cursor(50, 0);
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('z')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('b')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('z')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('b')));
     // Cursor lands at bottom of viable area = top + height - 1 -
     // SCROLLOFF. For height 20, scrolloff 5: cursor at top + 14,
     // so top = cursor - 14 = 36.
@@ -883,8 +883,8 @@ fn content_arc_returns_same_arc_until_mutation() {
     );
 
     // Any mutation must invalidate the cache.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('!')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('!')));
     let c = e.content_arc();
     assert!(
         !std::sync::Arc::ptr_eq(&a, &c),
@@ -904,19 +904,19 @@ fn mouse_click_breaks_insert_undo_group_when_undobreak_on() {
     // Default settings.undo_break_on_motion = true.
     assert!(e.settings().undo_break_on_motion);
     // Enter insert mode and type "AAA" before the line content.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('A')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('A')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('A')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('A')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('A')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('A')));
     // Mouse click somewhere else on the line (still insert mode).
     e.mouse_click_doc(0, 8);
     // Type more chars at the new cursor position.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('B')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('B')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('B')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('B')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('B')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('B')));
     // Leave insert and undo once.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('u')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('u')));
     let line = hjkl_buffer::rope_line_str(&e.buffer().rope(), 0);
     assert!(
         line.contains("AAA"),
@@ -937,14 +937,14 @@ fn mouse_click_keeps_one_undo_group_when_undobreak_off() {
     );
     e.set_content("hello world");
     e.settings_mut().undo_break_on_motion = false;
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('A')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('A')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('A')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('A')));
     e.mouse_click_doc(0, 8);
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('B')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('B')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('u')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('B')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('B')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('u')));
     let line = hjkl_buffer::rope_line_str(&e.buffer().rope(), 0);
     assert!(
         !line.contains("AA") && !line.contains("BB"),
@@ -962,8 +962,8 @@ fn host_records_clipboard_on_yank() {
         hjkl_engine::types::Options::default(),
     );
     e.set_content("hello\n");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('y')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('y')));
     // Clipboard cache holds the linewise yank.
     let clip = e.host_mut().read_clipboard();
     assert!(
@@ -1016,9 +1016,9 @@ fn host_cursor_shape_via_shared_recorder() {
     );
     e.set_content("abc");
     // Normal → Insert: Bar emit.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('i')));
     // Insert → Normal: Block emit.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Esc));
     let shapes = shapes_ptr.lock().unwrap().clone();
     assert_eq!(
         shapes,
@@ -1074,12 +1074,12 @@ fn host_now_drives_chord_timeout_deterministically() {
     e.set_content("a\nb\nc\n");
     e.jump_cursor(2, 0);
     // First `g` — host time = 0ms, lands in g-pending.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('g')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('g')));
     // Advance host time well past timeout_len (default 1000ms).
     *now_ptr.lock().unwrap() = core::time::Duration::from_secs(60);
     // Second `g` — chord-timeout fires; bare `g` re-dispatches and
     // does nothing on its own. Cursor must NOT have jumped to row 0.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('g')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('g')));
     assert_eq!(
         e.cursor().0,
         2,
@@ -1092,11 +1092,11 @@ fn after_g_gv_restores_last_visual() {
     // Enter visual, move right, exit, then gv re-enters.
     let mut e = fresh_editor("hello world\n");
     // Enter char-visual at col 0, move to col 3, then exit.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('v')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('l')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('l')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('l')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Esc));
     assert_eq!(e.vim_mode(), VimMode::Normal, "should be Normal after Esc");
     // gv via after_g.
     e.after_g('v', 1);
@@ -1114,7 +1114,7 @@ fn insert_char_appends_in_replace_mode() {
     let mut e = fresh_editor("abc");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT),
+        &KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT),
     );
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Insert);
     e.insert_char('X');
@@ -1131,11 +1131,11 @@ fn insert_paste_register_inserts_text() {
     // Yank "abc" into the unnamed register via `yy`.
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
     );
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
     );
     e.enter_insert_i(1);
     // Paste from unnamed register '"'.
@@ -1149,8 +1149,8 @@ fn paste_after_charwise_inserts_after_cursor() {
     // Use `yw` via FSM to yank "b" without disturbing the registers.
     let mut e = normal_editor("b ac");
     // Yank "b" via `yw` (yank word).
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('w')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('y')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('w')));
     // Cursor is still at col 0; jump to "ac" (col 2) and paste after 'a'.
     e.jump_cursor(0, 2);
     e.paste_after(1);
@@ -1158,8 +1158,8 @@ fn paste_after_charwise_inserts_after_cursor() {
     // Simpler: yank a single char and paste it inline.
     // Restart: use `yl` to yank one char.
     let mut e2 = normal_editor("bac");
-    hjkl_vim_tui::handle_key(&mut e2, key(KeyCode::Char('y')));
-    hjkl_vim_tui::handle_key(&mut e2, key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut e2, &key(KeyCode::Char('y')));
+    hjkl_vim_tui::handle_key(&mut e2, &key(KeyCode::Char('l')));
     // Register now has "b". Move to col 1 and paste after 'b'.
     e2.jump_cursor(0, 1); // on 'a'
     e2.paste_after(1);
@@ -1171,8 +1171,8 @@ fn paste_after_charwise_inserts_after_cursor() {
 fn paste_before_charwise_inserts_before_cursor() {
     let mut e = normal_editor("bac");
     // Yank 'b' with `yl`.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('y')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('l')));
     // Move to col 2 ('c') and paste before it.
     e.jump_cursor(0, 2);
     e.paste_before(1);
@@ -1184,8 +1184,8 @@ fn paste_before_charwise_inserts_before_cursor() {
 fn paste_after_count_3_repeats() {
     let mut e = normal_editor("x");
     // Yank 'x' with `yl`.
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('y')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('y')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('l')));
     e.paste_after(3);
     // "x" + 3 pastes of "x" = "xxxx".
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "xxxx");
@@ -1195,15 +1195,15 @@ fn paste_after_count_3_repeats() {
 fn vim_mode_consistent_with_fsm_after_v_key() {
     // Existing FSM path: pressing 'v' via handle_key should still report Visual.
     let mut e = normal_editor("hello");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('v')));
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Visual);
 }
 
 #[test]
 fn vim_mode_consistent_with_fsm_after_esc_from_visual() {
     let mut e = normal_editor("hello");
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Char('v')));
-    hjkl_vim_tui::handle_key(&mut e, key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(&mut e, &key(KeyCode::Esc));
     assert_eq!(e.vim_mode(), hjkl_engine::VimMode::Normal);
 }
 
@@ -1219,7 +1219,7 @@ fn current_mode_syncs_with_public_mode_after_every_step() {
         (KeyCode::Esc, VimMode::Normal),
     ];
     for (kc, expected) in steps {
-        hjkl_vim_tui::handle_key(&mut e, key(*kc));
+        hjkl_vim_tui::handle_key(&mut e, &key(*kc));
         assert_eq!(e.vim_mode(), *expected, "after key {:?}", kc);
     }
 }

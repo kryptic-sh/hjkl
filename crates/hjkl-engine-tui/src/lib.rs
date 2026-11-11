@@ -14,31 +14,33 @@
 //!   exposes `install_ratatui_syntax_spans` and
 //!   `patch_ratatui_syntax_spans_range`. Extracted from `hjkl-engine`'s
 //!   `ratatui` feature gate as part of #162 phase 2.
-//! - [`KeyEvent`] — re-export of [`crossterm::event::KeyEvent`] for
-//!   downstream convenience.
-//! - [`crossterm_to_input`] — convert a crossterm `KeyEvent` to the
-//!   engine-agnostic [`hjkl_engine::Input`] type. Moved from `hjkl-engine`'s
-//!   `crossterm` feature gate as part of #162 phase 3.
+//! - [`KeyEvent`] — re-export of [`ttyr::event::KeyEvent`] for downstream
+//!   convenience.
+//! - [`ttyr_to_input`] — convert a ttyr `KeyEvent` to the engine-agnostic
+//!   [`hjkl_engine::Input`] type.
 
-use crossterm::event::{KeyCode, KeyModifiers};
 use hjkl_engine::{
     Editor, Input, Key,
     types::{Attrs, Color, Host, Style},
 };
 use ratatui::style::{Color as RColor, Modifier as RMod, Style as RStyle};
+use ttyr::event::{KeyCode, KeyModifiers};
 
-/// Re-export of [`crossterm::event::KeyEvent`] for downstream convenience.
-pub use crossterm::event::KeyEvent;
+/// Re-export of [`ttyr::event::KeyEvent`] for downstream convenience.
+pub use ttyr::event::KeyEvent;
 
-/// Convert a crossterm [`KeyEvent`] to the engine-agnostic [`hjkl_engine::Input`].
+/// Convert a ttyr [`KeyEvent`] to the engine-agnostic [`hjkl_engine::Input`].
+///
+/// A character key becomes the character it typed
+/// ([`KeyEvent::logical_char`]), with Shift dropped where that character
+/// already carries it, so Shift+a is `A` from every encoding.
 ///
 /// Keys the engine FSM does not model (`KeyCode::F(_)`, `KeyCode::Insert`, and
 /// any other unrecognised variant) map to [`hjkl_engine::Key::Null`]; callers
-/// should early-return or discard such inputs. Moved from `hjkl-engine`'s
-/// `crossterm` feature gate as part of #162 phase 3.
-pub fn crossterm_to_input(key: KeyEvent) -> Input {
-    let k = match key.code {
-        KeyCode::Char(c) => Key::Char(c),
+/// should early-return or discard such inputs.
+pub fn ttyr_to_input(key: &KeyEvent) -> Input {
+    let k = match key.key {
+        KeyCode::Char(_) => key.logical_char().map_or(Key::Null, Key::Char),
         KeyCode::Backspace => Key::Backspace,
         KeyCode::Delete => Key::Delete,
         KeyCode::Enter => Key::Enter,
@@ -52,11 +54,12 @@ pub fn crossterm_to_input(key: KeyEvent) -> Input {
         KeyCode::Esc => Key::Esc,
         _ => Key::Null,
     };
+    let modifiers = key.logical_modifiers();
     Input {
         key: k,
-        ctrl: key.modifiers.contains(KeyModifiers::CONTROL),
-        alt: key.modifiers.contains(KeyModifiers::ALT),
-        shift: key.modifiers.contains(KeyModifiers::SHIFT),
+        ctrl: modifiers.contains(KeyModifiers::CONTROL),
+        alt: modifiers.contains(KeyModifiers::ALT),
+        shift: modifiers.contains(KeyModifiers::SHIFT),
     }
 }
 

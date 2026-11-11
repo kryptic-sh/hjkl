@@ -265,9 +265,9 @@ impl App {
         self.bus.info(format!("copied: {s}"));
     }
 
-    pub(crate) fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent) {
+    pub(crate) fn handle_picker_key(&mut self, key: ttyr::event::KeyEvent) {
         let event = match self.picker.as_mut() {
-            Some(p) => hjkl_picker_tui::handle_key(p, key),
+            Some(p) => hjkl_picker_tui::handle_key(p, &key),
             None => return,
         };
         match event {

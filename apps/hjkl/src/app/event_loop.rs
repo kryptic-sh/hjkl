@@ -1,15 +1,15 @@
 use anyhow::Result;
-use crossterm::{
-    cursor::SetCursorStyle,
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    execute,
-};
 use hjkl_engine::{CursorShape, Host, VimMode};
 use hjkl_keymap::{Chord as KmChord, KeyEvent as KmKeyEvent};
 use hjkl_vim::VimEditorExt;
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::Terminal;
 use std::io::Stdout;
 use std::time::Duration;
+use ttyr::backend::TtyrBackend;
+use ttyr::cursor::SetCursorStyle;
+use ttyr::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ttyr::execute;
+use ttyr::reader::Reader;
 
 use super::{App, STATUS_LINE_HEIGHT, prompt_cursor_shape};
 use crate::render;
@@ -43,13 +43,31 @@ pub enum MouseOutcome {
     FallThrough,
 }
 
-/// Translate a crossterm `KeyEvent` to a `hjkl_keymap::KeyEvent`.
+/// Translate a ttyr `KeyEvent` to a `hjkl_keymap::KeyEvent`.
 /// Returns `None` for release events or unsupported key codes.
 fn to_km_event(key: KeyEvent) -> Option<KmKeyEvent> {
-    crate::keymap_translate::from_crossterm(&key)
+    crate::keymap_translate::from_ttyr(&key)
 }
 
-/// Replay a slice of `hjkl_keymap::KeyEvent`s to the engine via crossterm
+/// The key as the app reads it, from a key as the terminal sent it.
+///
+/// Under kitty's `DISAMBIGUATE_ESCAPE_CODES`, Ctrl+[ ≠ Esc, Ctrl+I ≠ Tab and
+/// Ctrl+M ≠ Enter at the terminal level; they are mapped back to the legacy
+/// aliases vim expects. A character key becomes the character it typed, with
+/// Shift dropped where that character carries it: Shift+a is `A` whether the
+/// terminal sent `A` (legacy), `a` + Shift (kitty) or both, so the app's
+/// `KeyCode::Char('A')` matches read one key.
+fn typed_key(key: KeyEvent) -> KeyEvent {
+    let key = key.normalize_legacy();
+    match (key.key, key.logical_char()) {
+        (KeyCode::Char(_), Some(c)) => KeyEvent::new(KeyCode::Char(c), key.logical_modifiers())
+            .with_kind(key.kind)
+            .with_state(key.state),
+        _ => key,
+    }
+}
+
+/// Replay a slice of `hjkl_keymap::KeyEvent`s to the engine via ttyr
 /// `KeyEvent`s. Thin wrapper delegating to `App::replay_to_engine`; kept
 /// for callers inside this file that pass `app` as a plain `&mut App` arg.
 fn replay_to_engine(app: &mut App, events: &[KmKeyEvent]) {
@@ -99,8 +117,8 @@ impl App {
     /// here. After that single normal command the engine's end-of-step hook
     /// flips back to Insert.
     pub(crate) fn dispatch_insert_key(&mut self, key: KeyEvent) {
-        use crossterm::event::{KeyCode, KeyModifiers};
         use hjkl_engine::InsertDir;
+        use ttyr::event::{KeyCode, KeyModifiers};
 
         // Macro recording for keys that reach this dispatcher happens upstream
         // in `handle_keypress`'s Insert-mode block (the single hook there
@@ -114,7 +132,7 @@ impl App {
             // Clear the flag first (mirrors step_insert which clears before
             // calling insert_paste_register_bridge).
             self.active_editor_mut().clear_insert_register_pending();
-            if let (KeyCode::Char(c), mods) = (key.code, key.modifiers)
+            if let (KeyCode::Char(c), mods) = (key.key, key.modifiers)
                 && !mods.contains(KeyModifiers::CONTROL)
             {
                 self.active_editor_mut().insert_paste_register(c);
@@ -123,7 +141,7 @@ impl App {
             return;
         }
 
-        match (key.code, key.modifiers) {
+        match (key.key, key.modifiers) {
             // Printable characters (including shifted variants like 'A', '!', …).
             // Crossterm sets SHIFT for capital letters but the char `c` already
             // contains the upper-cased glyph, so we just forward `c` directly.
@@ -213,7 +231,7 @@ impl App {
             self.dispatch_insert_key(key);
             self.active_editor_mut().emit_cursor_shape_if_changed();
         } else {
-            hjkl_vim_tui::handle_key(self.active_editor_mut(), key);
+            hjkl_vim_tui::handle_key(self.active_editor_mut(), &key);
         }
 
         self.sync_viewport_from_editor();
@@ -540,8 +558,8 @@ impl App {
     /// [`Self::handle_keypress`], and dispatch to the engine on fall-through.
     ///
     /// Releases must be dropped here, before anything acts on the key: the
-    /// Windows console reports a `Release` for every key-up (crossterm sets
-    /// `kind` there unconditionally), so without this filter every keystroke
+    /// Windows console reports a `Release` for every key-up (its key records
+    /// carry one for every key), so without this filter every keystroke
     /// on Windows is handled twice — `:qa` types `::qqaa`. `Repeat` is kept:
     /// it is a held key and must keep acting.
     ///
@@ -552,7 +570,7 @@ impl App {
     /// Played-back keys are not recorded again.
     fn record_prompt_key(&mut self, key: KeyEvent) {
         if self.active_editor().is_recording_macro() && !self.active_editor().is_replaying_macro() {
-            let input = hjkl_engine_tui::crossterm_to_input(key);
+            let input = hjkl_engine_tui::ttyr_to_input(&key);
             if input.key != hjkl_engine::Key::Null {
                 self.active_editor_mut().record_input(input);
             }
@@ -580,11 +598,8 @@ impl App {
         if key.kind == KeyEventKind::Release {
             return KeyOutcome::Continue;
         }
-        // Under DISAMBIGUATE_ESCAPE_CODES, Ctrl+[ ≠ Esc, Ctrl+I ≠ Tab,
-        // Ctrl+M ≠ Enter at the terminal level. Normalize back to the legacy
-        // aliases vim expects.
-        let key = hjkl_kitty::normalize_legacy(key);
-        let outcome = self.handle_keypress(key);
+        let key = typed_key(key);
+        let outcome = self.handle_keypress(key.clone());
         if let KeyOutcome::FallThrough = outcome {
             self.dispatch_fallthrough_key(key);
         }
@@ -597,7 +612,7 @@ impl App {
     /// All overlay handling, Normal-mode pre-routing (count prefix, Esc,
     /// which-key Backspace), and keymap chord routing live here.
     pub(crate) fn handle_keypress(&mut self, key: KeyEvent) -> KeyOutcome {
-        if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if key.key == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             if self.command_field.is_some() {
                 self.command_field = None;
                 self.completion = None;
@@ -636,7 +651,7 @@ impl App {
         // while active. Any non-char key cancels (Esc explicitly, others
         // via the None path in hop_handle_key).
         if self.hop.is_some() {
-            match key.code {
+            match key.key {
                 KeyCode::Esc => self.hop_handle_key(None, true),
                 KeyCode::Char(c)
                     if key.modifiers == KeyModifiers::NONE
@@ -660,7 +675,7 @@ impl App {
         if self.is_bottom_dock(self.focused_window())
             && self.active_editor().vim_mode() == VimMode::Normal
             && self.pending_state.is_none()
-            && key.code == KeyCode::Enter
+            && key.key == KeyCode::Enter
             && key.modifiers == KeyModifiers::NONE
         {
             self.qf_dock_jump_at_cursor();
@@ -680,7 +695,7 @@ impl App {
         // cmdline window commits the line rather than opening a new line
         // below (o) or doing nothing in Normal mode.
         if self.is_cmdline_win_focused()
-            && key.code == KeyCode::Enter
+            && key.key == KeyCode::Enter
             && key.modifiers == KeyModifiers::NONE
         {
             self.commit_cmdline_window();
@@ -740,7 +755,7 @@ impl App {
 
         // ── Context menu keyboard navigation (Phase 2, Round A) ───
         if self.context_menu.is_some() {
-            let consumed = self.handle_context_menu_key(key);
+            let consumed = self.handle_context_menu_key(key.clone());
             if consumed {
                 return KeyOutcome::Continue;
             }
@@ -758,7 +773,7 @@ impl App {
         // A macro holds what is typed into a prompt and its `<CR>`, as vim's
         // does, or `@q` replays only the key that opened it.
         if self.prompt_is_open() {
-            self.record_prompt_key(key);
+            self.record_prompt_key(key.clone());
             self.feed_open_prompt(key);
             if self.exit_requested {
                 return KeyOutcome::Break;
@@ -788,7 +803,7 @@ impl App {
             // `u` — undo the last explorer fs transaction (journal-based,
             // not vim buffer undo; the buffer is set_content-reset after
             // each reconcile so vim undo is meaningless here).
-            if let KeyCode::Char('u') = key.code {
+            if let KeyCode::Char('u') = key.key {
                 self.explorer_undo();
                 return KeyOutcome::Continue;
             }
@@ -796,14 +811,14 @@ impl App {
             // indent, line below). `O` is left as the normal open-line-above,
             // which autoindents to the current line's depth = a sibling. On a
             // file, `o` also falls through to the normal open-line-below.
-            if key.code == KeyCode::Char('o') && self.explorer_open_in_dir() {
+            if key.key == KeyCode::Char('o') && self.explorer_open_in_dir() {
                 return KeyOutcome::Continue;
             }
             // `p` on a DIRECTORY → paste the cut/yanked entries INSIDE the dir
             // (re-indented as children), so `dd` a dir then `p` on another dir
             // MOVES it into that dir. On a file (or empty register) it falls
             // through to the normal sibling paste.
-            if key.code == KeyCode::Char('p') && self.explorer_paste_in_dir() {
+            if key.key == KeyCode::Char('p') && self.explorer_paste_in_dir() {
                 return KeyOutcome::Continue;
             }
         }
@@ -812,7 +827,7 @@ impl App {
         if self.explorer_buf_focused()
             && self.active_editor().vim_mode() == VimMode::Normal
             && self.pending_state.is_none()
-            && key.code == KeyCode::Char('r')
+            && key.key == KeyCode::Char('r')
             && key.modifiers.contains(KeyModifiers::CONTROL)
         {
             self.explorer_redo();
@@ -823,7 +838,7 @@ impl App {
         // Must run BEFORE route_chord_key so a pending_state from a
         // prior chord (e.g. first `g` in Visual mode) does not eat
         // the `:` key. Visual `:` is not a chord continuation.
-        if key.code == KeyCode::Char(':')
+        if key.key == KeyCode::Char(':')
             && key.modifiers == KeyModifiers::NONE
             && matches!(
                 self.active_editor().vim_mode(),
@@ -835,7 +850,7 @@ impl App {
             // marks so :'<,'> resolves.
             hjkl_vim_tui::handle_key(
                 self.active_editor_mut(),
-                KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                &KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
             );
             self.open_command_prompt_with("'<,'>");
             return KeyOutcome::Continue;
@@ -871,7 +886,7 @@ impl App {
             // the engine's internal count state. route_chord_key below owns
             // the key in that situation.
             if self.pending_state.is_none() && key.modifiers == KeyModifiers::NONE {
-                if let KeyCode::Char(d @ '0'..='9') = key.code {
+                if let KeyCode::Char(d @ '0'..='9') = key.key {
                     // try_accumulate returns false for '0' with empty buffer
                     // (vim's LineStart quirk); in that case fall through to keymap.
                     if self.pending_count.try_accumulate(d) {
@@ -891,7 +906,7 @@ impl App {
                     // mutating the pending-chord state.
                     use hjkl_vim::Mode;
                     let could_start_chord = !self.app_keymap.pending(Mode::Normal).is_empty()
-                        || to_km_event(key).is_some_and(|km_ev| {
+                        || to_km_event(key.clone()).is_some_and(|km_ev| {
                             let root = self
                                 .app_keymap
                                 .children_all(Mode::Normal, &KmChord::from_events(vec![]));
@@ -911,14 +926,14 @@ impl App {
                 // For non-Ctrl modifier keys (Alt, etc.) flush now as
                 // before — they are not keymap-bound count consumers.
                 let is_ctrl_char =
-                    key.modifiers == KeyModifiers::CONTROL && matches!(key.code, KeyCode::Char(_));
+                    key.modifiers == KeyModifiers::CONTROL && matches!(key.key, KeyCode::Char(_));
                 if !is_ctrl_char && !self.pending_count.is_empty() {
                     self.flush_pending_count_to_engine();
                 }
             }
 
             // ── Escape: cancel any pending chord, else toggle which-key ─────────
-            if key.code == KeyCode::Esc {
+            if key.key == KeyCode::Esc {
                 // BLAME is a Normal-only read-only view; Esc must leave it. The
                 // engine's normal-mode Esc handler does exit_blame + force_normal,
                 // but the which-key toggle below returns before Esc ever reaches
@@ -958,7 +973,7 @@ impl App {
             }
 
             // ── Backspace: pop one chord level, else toggle which-key ───────────
-            if key.code == KeyCode::Backspace
+            if key.key == KeyCode::Backspace
                 && key.modifiers == KeyModifiers::NONE
                 && self.active_editor().vim_mode() == VimMode::Normal
             {
@@ -971,7 +986,7 @@ impl App {
                     hist.pop();
                     self.cancel_all_pending();
                     for ev in hist {
-                        self.chord_history.push(ev);
+                        self.chord_history.push(ev.clone());
                         self.route_chord_key(ev);
                     }
                     if self.chord_history.is_empty() {
@@ -1013,13 +1028,13 @@ impl App {
             self.app_keymap.reset(hjkl_vim::Mode::Normal);
             self.explorer_keymap.reset(hjkl_vim::Mode::Normal);
             self.clear_prefix_state();
-            if key.code == KeyCode::Esc {
+            if key.key == KeyCode::Esc {
                 // Cancel a half-typed count; the engine still receives Esc
                 // below to exit visual mode.
                 self.pending_count.reset();
             } else if self.pending_state.is_none()
                 && key.modifiers == KeyModifiers::NONE
-                && let KeyCode::Char(d @ '0'..='9') = key.code
+                && let KeyCode::Char(d @ '0'..='9') = key.key
             {
                 // try_accumulate buffers the digit; `0` with an empty buffer
                 // returns false (LineStart motion) and falls through.
@@ -1048,11 +1063,11 @@ impl App {
         // while a chord is still pending afterwards, otherwise the chord
         // committed/cancelled and the history resets.
         let track_chord = self.active_editor().vim_mode() == VimMode::Normal
-            && !matches!(key.code, KeyCode::Backspace | KeyCode::Esc);
+            && !matches!(key.key, KeyCode::Backspace | KeyCode::Esc);
         if track_chord {
-            self.chord_history.push(key);
+            self.chord_history.push(key.clone());
         }
-        if self.route_chord_key(key) {
+        if self.route_chord_key(key.clone()) {
             if track_chord && !self.any_chord_pending() {
                 self.chord_history.clear();
             }
@@ -1078,16 +1093,16 @@ impl App {
             // inputs don't append to the active recording. Keys that
             // fall through this block to dispatch_insert_key get their
             // recording from dispatch_insert_key's own hook.
-            self.record_prompt_key(key);
+            self.record_prompt_key(key.clone());
 
             // <C-x><C-o> manual omni-completion trigger.
-            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('x') {
+            if key.modifiers.contains(KeyModifiers::CONTROL) && key.key == KeyCode::Char('x') {
                 self.pending_ctrl_x = true;
                 return KeyOutcome::Continue;
             }
             if self.pending_ctrl_x {
                 self.pending_ctrl_x = false;
-                if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('o') {
+                if key.modifiers.contains(KeyModifiers::CONTROL) && key.key == KeyCode::Char('o') {
                     self.lsp_request_completion();
                     return KeyOutcome::Continue;
                 }
@@ -1096,7 +1111,7 @@ impl App {
 
             // Keys that navigate/accept/dismiss the popup (popup must be open).
             if self.completion.is_some() {
-                match key.code {
+                match key.key {
                     // <C-n> / <C-p> navigate selection.
                     KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         if let Some(ref mut p) = self.completion {
@@ -1302,14 +1317,14 @@ impl App {
             } else {
                 // Popup is closed. Handle <C-n>/<C-p> as manual trigger.
                 if key.modifiers.contains(KeyModifiers::CONTROL)
-                    && matches!(key.code, KeyCode::Char('n') | KeyCode::Char('p'))
+                    && matches!(key.key, KeyCode::Char('n') | KeyCode::Char('p'))
                 {
                     self.lsp_request_completion();
                     return KeyOutcome::Continue;
                 }
                 // Auto-trigger on trigger chars.
                 if key.modifiers == KeyModifiers::NONE
-                    && let KeyCode::Char(c) = key.code
+                    && let KeyCode::Char(c) = key.key
                 {
                     // Phase 6.5: call insert primitive directly.
                     self.active_editor_mut().insert_char(c);
@@ -1351,8 +1366,8 @@ impl App {
 
     /// Handle a single mouse event. Returns a [`MouseOutcome`] indicating
     /// whether the loop should `continue` or fall through.
-    pub(crate) fn handle_mouse(&mut self, me: crossterm::event::MouseEvent) -> MouseOutcome {
-        use crossterm::event::{MouseButton, MouseEventKind};
+    pub(crate) fn handle_mouse(&mut self, me: ttyr::event::MouseEvent) -> MouseOutcome {
+        use ttyr::event::{MouseButton, MouseEventKind};
         // Skip while these overlays are active — no mouse handling exists
         // for them yet.
         if self.command_field.is_some() || self.search_field.is_some() || self.info_popup.is_some()
@@ -1382,7 +1397,7 @@ impl App {
         }
         // 3 lines/cols per wheel notch — vim's `mousescroll` default.
         const WHEEL_TICKS: i16 = 3;
-        use crossterm::event::KeyModifiers;
+        use ttyr::event::KeyModifiers;
         /// Route scroll to the window under the cursor, focusing it
         /// if needed. Returns `false` when the pointer is outside
         /// every window (e.g. over the status bar) — caller should
@@ -1975,9 +1990,9 @@ impl App {
     /// - Everything else (drag, middle-click, hover) is swallowed: no
     ///   behavior exists for it, and letting it fall through would reach
     ///   the window/editor behind the overlay.
-    pub(crate) fn handle_picker_mouse(&mut self, me: crossterm::event::MouseEvent) -> MouseOutcome {
+    pub(crate) fn handle_picker_mouse(&mut self, me: ttyr::event::MouseEvent) -> MouseOutcome {
         use crate::app::mouse;
-        use crossterm::event::{MouseButton, MouseEventKind};
+        use ttyr::event::{MouseButton, MouseEventKind};
 
         match me.kind {
             MouseEventKind::Down(MouseButton::Left) => {
@@ -2039,7 +2054,11 @@ impl App {
     ///    initial parse via this flush.
     /// 4. Order is fixed: lsp drain → viewport → cursor shape → FLUSH →
     ///    draw → async polls → poll(timeout) → read → handle + drain.
-    pub fn run(&mut self, terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
+    pub fn run(
+        &mut self,
+        terminal: &mut Terminal<TtyrBackend<Stdout>>,
+        reader: &mut Reader,
+    ) -> Result<()> {
         // Toast visibility as of the previous iteration. Toasts expire on a
         // wall clock while `frame_is_time_animated` only keeps repainting
         // while one is VISIBLE — the tick that flips Some→None must request
@@ -2189,7 +2208,7 @@ impl App {
             let poll_timeout = self.compute_poll_timeout();
 
             // ── Wait for event ────────────────────────────────────
-            if !event::poll(poll_timeout)? {
+            if !reader.poll(poll_timeout)? {
                 let now = std::time::Instant::now();
                 // Timeout-triggered UI changes (which-key popup, chord
                 // resolution, hover popup show/expiry, indent-flash end) all
@@ -2264,7 +2283,7 @@ impl App {
             // the renderer reads can never be missed (conservative default:
             // draw when in doubt).
             self.needs_draw = true;
-            match event::read()? {
+            match reader.read()? {
                 Event::Key(key) => {
                     // Record keystroke time for the idle swap-write timer (#185).
                     self.last_input_at = std::time::Instant::now();
@@ -2301,9 +2320,9 @@ impl App {
             // so we collapse the whole burst into one sync query install.
             let t_drain = std::time::Instant::now();
             let mut drained = 0usize;
-            while event::poll(Duration::from_millis(0)).unwrap_or(false) {
+            while reader.poll(Duration::from_millis(0)).unwrap_or(false) {
                 drained += 1;
-                if let Ok(extra) = event::read() {
+                if let Ok(extra) = reader.read() {
                     match extra {
                         // Drain-loop mirror of the primary key arm above —
                         // routes through the same shared method so the two

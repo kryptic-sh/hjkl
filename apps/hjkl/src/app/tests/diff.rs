@@ -190,8 +190,7 @@ fn fallthrough_key_edit_refreshes_diff_alignment_and_avoids_stale_row_panic() {
     app.sync_viewport_from_editor();
     app.active_editor_mut().enter_insert_i(1);
     app.sync_after_engine_mutation();
-    let delete_key =
-        crossterm::event::KeyEvent::new(crossterm::event::KeyCode::Delete, KeyModifiers::NONE);
+    let delete_key = ttyr::event::KeyEvent::new(ttyr::event::KeyCode::Delete, KeyModifiers::NONE);
     for _ in 0..40 {
         // Mirror `App::run` exactly: `handle_keypress` first, and only on
         // `FallThrough` call `dispatch_fallthrough_key` — the method this fix
@@ -200,8 +199,8 @@ fn fallthrough_key_edit_refreshes_diff_alignment_and_avoids_stale_row_panic() {
         // this path in production (unlike most Normal-mode operators, which
         // route entirely through `route_chord_key` + `sync_after_engine_mutation`
         // already).
-        if let KeyOutcome::FallThrough = app.handle_keypress(delete_key) {
-            app.dispatch_fallthrough_key(delete_key);
+        if let KeyOutcome::FallThrough = app.handle_keypress(delete_key.clone()) {
+            app.dispatch_fallthrough_key(delete_key.clone());
         }
     }
     assert_eq!(

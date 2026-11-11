@@ -1,8 +1,8 @@
 use super::*;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::VimMode;
 use hjkl_engine::rope_util::rope_to_lines_vec;
 use std::time::Duration;
+use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn key(code: KeyCode) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE)
@@ -171,7 +171,7 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
     // App-level pending-state reducer (hjkl-vim): takes priority over everything.
     if let Some(state) = app.pending_state {
         use hjkl_vim::{Key as VimKey, Outcome};
-        let vim_key = match ct_key.code {
+        let vim_key = match ct_key.key {
             KeyCode::Char(c) => Some(VimKey::Char(c)),
             KeyCode::Esc => Some(VimKey::Esc),
             KeyCode::Enter => Some(VimKey::Enter),
@@ -405,14 +405,14 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
     }
     // Engine pending bypass: if the engine is mid-chord, skip the trie.
     if app.active_editor().is_chord_pending() {
-        hjkl_vim_tui::handle_key(app.active_editor_mut(), ct_key);
+        hjkl_vim_tui::handle_key(app.active_editor_mut(), &ct_key);
         app.sync_viewport_from_editor();
         return;
     }
     // Try the keymap trie.
-    let Some(km_ev) = crate::keymap_translate::from_crossterm(&ct_key) else {
+    let Some(km_ev) = crate::keymap_translate::from_ttyr(&ct_key) else {
         // Untranslatable key — forward direct to engine.
-        hjkl_vim_tui::handle_key(app.active_editor_mut(), ct_key);
+        hjkl_vim_tui::handle_key(app.active_editor_mut(), &ct_key);
         app.sync_viewport_from_editor();
         return;
     };
@@ -423,8 +423,8 @@ fn drive_key(app: &mut App, ct_key: KeyEvent) {
     }
     // Unbound: forward all replay keys (including multi-key) to the engine.
     for ev in &replay {
-        let back = crate::keymap_translate::to_crossterm(ev);
-        hjkl_vim_tui::handle_key(app.active_editor_mut(), back);
+        let back = crate::keymap_translate::to_ttyr(ev);
+        hjkl_vim_tui::handle_key(app.active_editor_mut(), &back);
     }
     app.sync_viewport_from_editor();
 }
@@ -437,7 +437,7 @@ fn km_prefix(app: &App, notation: &str) -> Vec<hjkl_keymap::KeyEvent> {
 }
 
 fn feed_km_key(app: &mut App, ct_key: KeyEvent) -> bool {
-    let Some(km_ev) = crate::keymap_translate::from_crossterm(&ct_key) else {
+    let Some(km_ev) = crate::keymap_translate::from_ttyr(&ct_key) else {
         return false;
     };
     let mut replay = Vec::new();
@@ -495,18 +495,18 @@ fn ck(c: char) -> KeyEvent {
 
 fn macro_key_seq(app: &mut App, keys: &[KeyEvent]) {
     use crate::app::event_loop::KeyOutcome;
-    for &k in keys {
+    for k in keys {
         // Mirror the live event loop exactly: handle_keypress first (which
         // itself calls route_chord_key + the Insert-mode completion-aware
         // inline dispatcher), and only fall through to dispatch_insert_key /
         // hjkl_vim_tui::handle_key when handle_keypress returns FallThrough.
         // Anything less leaves the test exercising a different code path than
         // production and masks bugs in the handle_keypress inline dispatcher.
-        match app.handle_keypress(k) {
+        match app.handle_keypress(k.clone()) {
             KeyOutcome::Break | KeyOutcome::Continue => {}
             KeyOutcome::FallThrough => {
                 if app.active_editor().vim_mode() == VimMode::Insert {
-                    app.dispatch_insert_key(k);
+                    app.dispatch_insert_key(k.clone());
                 } else {
                     hjkl_vim_tui::handle_key(app.active_editor_mut(), k);
                 }
@@ -530,7 +530,7 @@ fn seed_numbered_lines(app: &mut App, count: usize) {
 fn rck(app: &mut App, keys: &[char]) {
     for &c in keys {
         if !app.route_chord_key(ck(c)) {
-            hjkl_vim_tui::handle_key(app.active_editor_mut(), ck(c));
+            hjkl_vim_tui::handle_key(app.active_editor_mut(), &ck(c));
         }
         app.sync_viewport_from_editor();
     }

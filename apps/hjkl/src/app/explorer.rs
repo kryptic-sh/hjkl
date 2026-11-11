@@ -1754,9 +1754,9 @@ impl super::App {
         // bridge and is never the dispatched editor.
         hjkl_vim_tui::handle_key(
             self.active_editor_mut(),
-            crossterm::event::KeyEvent::new(
-                crossterm::event::KeyCode::Char('o'),
-                crossterm::event::KeyModifiers::NONE,
+            &ttyr::event::KeyEvent::new(
+                ttyr::event::KeyCode::Char('o'),
+                ttyr::event::KeyModifiers::NONE,
             ),
         );
         // Indent the new line to CHILD depth (dir.depth + 1) so reconcile nests
@@ -2124,12 +2124,9 @@ impl super::App {
     }
 
     /// Route a key when `explorer_git_discard_confirm` is active.
-    pub(crate) fn handle_explorer_git_discard_confirm_key(
-        &mut self,
-        key: crossterm::event::KeyEvent,
-    ) {
-        use crossterm::event::KeyCode;
-        match key.code {
+    pub(crate) fn handle_explorer_git_discard_confirm_key(&mut self, key: ttyr::event::KeyEvent) {
+        use ttyr::event::KeyCode;
+        match key.key {
             KeyCode::Char('y') | KeyCode::Char('Y') => {
                 self.explorer_commit_git_discard();
             }
@@ -2359,7 +2356,7 @@ mod tests {
     #[test]
     fn slash_in_explorer_opens_fuzzy_finder() {
         use crate::keymap_actions::AppAction;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), b"x").unwrap();
         let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
@@ -2431,7 +2428,7 @@ mod tests {
     #[test]
     fn explorer_o_type_esc_creates_file_real_flow() {
         use crate::keymap_actions::AppAction;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("existing.txt"), "hi").unwrap();
         let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
@@ -2447,14 +2444,14 @@ mod tests {
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
-                app.handle_keypress(key),
+                app.handle_keypress(key.clone()),
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
                 if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key);
                 }
             }
             app.reconcile_window_editors();
@@ -2526,8 +2523,8 @@ mod tests {
     fn explorer_dd_trashes_file_and_drops_it_from_list() {
         use crate::app::event_loop::KeyOutcome;
         use crate::keymap_actions::AppAction;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("victim.txt"), "bye").unwrap();
         let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
@@ -2539,14 +2536,14 @@ mod tests {
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
-                app.handle_keypress(key),
+                app.handle_keypress(key.clone()),
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
                 if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key);
                 }
             }
             app.reconcile_window_editors();
@@ -2745,8 +2742,8 @@ mod tests {
     fn create_keeps_focus_in_explorer() {
         use crate::app::event_loop::KeyOutcome;
         use crate::keymap_actions::AppAction;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("existing.txt"), "hi").unwrap();
         let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
@@ -2756,14 +2753,14 @@ mod tests {
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
-                app.handle_keypress(key),
+                app.handle_keypress(key.clone()),
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
                 if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key);
                 }
             }
             app.reconcile_window_editors();
@@ -2788,8 +2785,8 @@ mod tests {
     fn paste_moves_cursor_to_pasted_file() {
         use crate::app::event_loop::KeyOutcome;
         use crate::keymap_actions::AppAction;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), "a").unwrap();
         std::fs::write(tmp.path().join("z.txt"), "z").unwrap();
@@ -2803,14 +2800,14 @@ mod tests {
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
-                app.handle_keypress(key),
+                app.handle_keypress(key.clone()),
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
                 if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key);
                 }
             }
             app.reconcile_window_editors();
@@ -2840,8 +2837,8 @@ mod tests {
     fn o_on_dir_creates_child_inside() {
         use crate::app::event_loop::KeyOutcome;
         use crate::keymap_actions::AppAction;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("sub")).unwrap();
         let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
@@ -2851,14 +2848,14 @@ mod tests {
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
-                app.handle_keypress(key),
+                app.handle_keypress(key.clone()),
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
                 if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key);
                 }
             }
             app.reconcile_window_editors();
@@ -2893,8 +2890,8 @@ mod tests {
         // Expect `twin.txt` at root, NOT inside aaa/.
         use crate::app::event_loop::KeyOutcome;
         use crate::keymap_actions::AppAction;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("aaa")).unwrap();
         std::fs::write(tmp.path().join("aaa").join("kid.txt"), b"").unwrap();
@@ -2906,14 +2903,14 @@ mod tests {
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
-                app.handle_keypress(key),
+                app.handle_keypress(key.clone()),
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
                 if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key);
                 }
             }
             app.reconcile_window_editors();
@@ -3389,8 +3386,8 @@ mod tests {
     fn dd_open_dir_deletes_subtree_no_orphans() {
         use crate::app::event_loop::KeyOutcome;
         use crate::keymap_actions::AppAction;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("d")).unwrap();
         std::fs::write(tmp.path().join("d").join("a.rs"), b"a").unwrap();
@@ -3407,14 +3404,14 @@ mod tests {
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
-                app.handle_keypress(key),
+                app.handle_keypress(key.clone()),
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
                 if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key);
                 }
             }
             app.reconcile_window_editors();
@@ -3454,8 +3451,8 @@ mod tests {
     fn dd_dir_then_p_on_dir_moves_into_target() {
         use crate::app::event_loop::KeyOutcome;
         use crate::keymap_actions::AppAction;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let tmp = tempfile::tempdir().unwrap();
         std::fs::create_dir(tmp.path().join("mover")).unwrap();
         std::fs::write(tmp.path().join("mover").join("inner.txt"), b"CONTENT").unwrap();
@@ -3471,14 +3468,14 @@ mod tests {
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
-                app.handle_keypress(key),
+                app.handle_keypress(key.clone()),
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
                 if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key);
                 }
             }
             app.reconcile_window_editors();
@@ -3835,8 +3832,8 @@ mod tests {
     fn o_then_esc_leaves_no_blank_line() {
         use crate::app::event_loop::KeyOutcome;
         use crate::keymap_actions::AppAction;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("a.txt"), b"").unwrap();
         let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
@@ -3846,14 +3843,14 @@ mod tests {
         let press = |app: &mut super::super::App, code: KeyCode| {
             let key = KeyEvent::new(code, KeyModifiers::NONE);
             let consumed = matches!(
-                app.handle_keypress(key),
+                app.handle_keypress(key.clone()),
                 KeyOutcome::Continue | KeyOutcome::Break
             );
             if !consumed {
                 if app.active_editor().vim_mode() == VimMode::Insert {
                     app.dispatch_insert_key(key);
                 } else {
-                    hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
+                    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key);
                 }
             }
             app.reconcile_window_editors();
@@ -3964,20 +3961,20 @@ mod tests {
     }
 
     /// Press a key through the full event loop path (same as existing tests).
-    fn press(app: &mut super::super::App, code: crossterm::event::KeyCode) {
+    fn press(app: &mut super::super::App, code: ttyr::event::KeyCode) {
         use crate::app::event_loop::KeyOutcome;
-        use crossterm::event::{KeyEvent, KeyModifiers};
         use hjkl_engine::VimMode;
+        use ttyr::event::{KeyEvent, KeyModifiers};
         let key = KeyEvent::new(code, KeyModifiers::NONE);
         let consumed = matches!(
-            app.handle_keypress(key),
+            app.handle_keypress(key.clone()),
             KeyOutcome::Continue | KeyOutcome::Break
         );
         if !consumed {
             if app.active_editor().vim_mode() == VimMode::Insert {
                 app.dispatch_insert_key(key);
             } else {
-                hjkl_vim_tui::handle_key(app.active_editor_mut(), key);
+                hjkl_vim_tui::handle_key(app.active_editor_mut(), &key);
             }
         }
         app.reconcile_window_editors();
@@ -3991,7 +3988,7 @@ mod tests {
     #[test]
     fn ddu_restores_file() {
         use crate::keymap_actions::AppAction;
-        use crossterm::event::KeyCode;
+        use ttyr::event::KeyCode;
 
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("victim.txt"), "content").unwrap();
@@ -4047,7 +4044,7 @@ mod tests {
     #[test]
     fn dd_trashes_into_the_injected_root_only() {
         use crate::keymap_actions::AppAction;
-        use crossterm::event::KeyCode;
+        use ttyr::event::KeyCode;
 
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("victim.txt"), "content").unwrap();
@@ -4085,7 +4082,7 @@ mod tests {
     #[test]
     fn create_then_undo_removes_file() {
         use crate::keymap_actions::AppAction;
-        use crossterm::event::KeyCode;
+        use ttyr::event::KeyCode;
 
         let tmp = tempfile::tempdir().unwrap();
         let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
@@ -4148,7 +4145,7 @@ mod tests {
     #[test]
     fn git_repo_dd_tracked_stays_red() {
         use crate::keymap_actions::AppAction;
-        use crossterm::event::KeyCode;
+        use ttyr::event::KeyCode;
 
         // Create an isolated git repo with one committed file.
         let tmp = tempfile::tempdir().unwrap();
@@ -4211,7 +4208,7 @@ mod tests {
     #[test]
     fn non_git_dd_vanishes() {
         use crate::keymap_actions::AppAction;
-        use crossterm::event::KeyCode;
+        use ttyr::event::KeyCode;
 
         // Temp dir that is NOT a git repo.
         let tmp = tempfile::tempdir().unwrap();
@@ -4246,7 +4243,7 @@ mod tests {
     #[test]
     fn dd_then_u_restores() {
         use crate::keymap_actions::AppAction;
-        use crossterm::event::KeyCode;
+        use ttyr::event::KeyCode;
 
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("recover.txt"), "restore_me").unwrap();
@@ -4299,7 +4296,7 @@ mod tests {
     fn dd_u_then_ctrl_r_retrashes() {
         use crate::app::event_loop::KeyOutcome;
         use crate::keymap_actions::AppAction;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("trashable.txt"), "yo").unwrap();
@@ -4320,11 +4317,11 @@ mod tests {
         // <C-r> redo
         let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
         let consumed = matches!(
-            app.handle_keypress(ctrl_r),
+            app.handle_keypress(ctrl_r.clone()),
             KeyOutcome::Continue | KeyOutcome::Break
         );
         if !consumed {
-            hjkl_vim_tui::handle_key(app.active_editor_mut(), ctrl_r);
+            hjkl_vim_tui::handle_key(app.active_editor_mut(), &ctrl_r);
         }
         app.reconcile_window_editors();
         app.maybe_reconcile_explorer();
@@ -4344,7 +4341,7 @@ mod tests {
     #[test]
     fn create_then_u_removes() {
         use crate::keymap_actions::AppAction;
-        use crossterm::event::KeyCode;
+        use ttyr::event::KeyCode;
 
         let tmp = tempfile::tempdir().unwrap();
         let _cwd = crate::test_cwd::CwdGuard::enter(tmp.path());
@@ -4387,7 +4384,7 @@ mod tests {
     fn ddu_then_redo_retrashes() {
         use crate::app::event_loop::KeyOutcome;
         use crate::keymap_actions::AppAction;
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 
         let tmp = tempfile::tempdir().unwrap();
         std::fs::write(tmp.path().join("victim.txt"), "data").unwrap();
@@ -4411,11 +4408,11 @@ mod tests {
         // Ctrl+r is handled by hjkl_vim_tui::handle_key (not handle_keypress).
         let ctrl_r = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
         let consumed = matches!(
-            app.handle_keypress(ctrl_r),
+            app.handle_keypress(ctrl_r.clone()),
             KeyOutcome::Continue | KeyOutcome::Break
         );
         if !consumed {
-            hjkl_vim_tui::handle_key(app.active_editor_mut(), ctrl_r);
+            hjkl_vim_tui::handle_key(app.active_editor_mut(), &ctrl_r);
         }
         app.reconcile_window_editors();
         app.maybe_reconcile_explorer();
@@ -4484,9 +4481,9 @@ mod tests {
     #[test]
     fn scrolling_keeps_explorer_rows_aligned() {
         use crate::keymap_actions::AppAction;
-        use crossterm::event::KeyCode;
         use ratatui::style::Modifier;
         use ratatui::{Terminal, backend::TestBackend};
+        use ttyr::event::KeyCode;
 
         // A tree taller than the 23-row pane so `e` motions force a scroll.
         let tmp = tempfile::tempdir().unwrap();
@@ -4670,7 +4667,7 @@ mod tests {
     #[test]
     fn activate_dir_expands_and_collapses_tree() {
         use crate::keymap_actions::AppAction;
-        use crossterm::event::KeyCode;
+        use ttyr::event::KeyCode;
 
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("subdir")).unwrap();
@@ -4745,10 +4742,10 @@ mod tests {
     fn scrolling_animated_frame_keeps_explorer_rows_aligned() {
         use crate::app::ScrollAnim;
         use crate::keymap_actions::AppAction;
-        use crossterm::event::KeyCode;
         use ratatui::style::Modifier;
         use ratatui::{Terminal, backend::TestBackend};
         use std::time::{Duration, Instant};
+        use ttyr::event::KeyCode;
 
         let tmp = tempfile::tempdir().unwrap();
         for d in ["aaa", "bbb", "ccc", "ddd", "eee", "fff"] {

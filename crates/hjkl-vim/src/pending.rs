@@ -131,8 +131,8 @@ pub enum Outcome {
     Forward,
 }
 
-/// `Key` is intentionally minimal — hjkl-vim should not depend on
-/// crossterm. Hosts translate their native keys into this shape.
+/// `Key` is intentionally minimal — hjkl-vim should not depend on a
+/// terminal library. Hosts translate their native keys into this shape.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Key {
     Char(char),

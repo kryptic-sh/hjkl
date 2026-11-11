@@ -2011,7 +2011,7 @@ mod tests {
     /// the post-scroll `top_row` and every such click came out offset.
     #[test]
     fn click_into_unfocused_pane_not_offset_by_focus_scroll() {
-        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use ttyr::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
         let mut app = make_vsplit_app();
         // Tall shared buffer (both windows view slot 0).
@@ -2571,7 +2571,7 @@ mod tests {
     /// `hit_test_zone`, so `picker.selected` stayed at its initial value 0.
     #[test]
     fn handle_mouse_picker_left_click_selects_row() {
-        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use ttyr::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
         let (mut app, col, row) = make_app_with_open_picker();
         assert_eq!(app.picker.as_ref().unwrap().selected, 0, "starts at row 0");
@@ -2599,7 +2599,7 @@ mod tests {
     /// this whole zone was unreachable — `context_menu` stayed `None`.
     #[test]
     fn handle_mouse_picker_right_click_opens_menu() {
-        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+        use ttyr::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
         let (mut app, col, row) = make_app_with_open_picker();
 
@@ -2628,7 +2628,7 @@ mod tests {
     /// moved.
     #[test]
     fn handle_mouse_picker_scroll_moves_selection() {
-        use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+        use ttyr::event::{KeyModifiers, MouseEvent, MouseEventKind};
 
         let (mut app, col, row) = make_app_with_open_picker();
         assert_eq!(app.picker.as_ref().unwrap().selected, 0);

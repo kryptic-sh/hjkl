@@ -9,8 +9,8 @@
 //! - `q` / `Esc` — abort (keep any already-accepted matches).
 //! - `l` — accept current then finish ("last").
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::{Query, apply_collected_matches};
+use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::{App, ConfirmingSubstitute};
 
@@ -20,7 +20,7 @@ impl App {
     /// Called from `handle_keypress` when `confirming_substitute.is_some()`.
     /// Returns `true` when the key was consumed (always true for this handler).
     pub(crate) fn handle_confirm_substitute_key(&mut self, key: KeyEvent) -> bool {
-        let action = match (key.code, key.modifiers) {
+        let action = match (key.key, key.modifiers) {
             (KeyCode::Char('y'), KeyModifiers::NONE) => ConfirmAction::Accept,
             (KeyCode::Char('n'), KeyModifiers::NONE) => ConfirmAction::Skip,
             (KeyCode::Char('a'), KeyModifiers::NONE) => ConfirmAction::AcceptAll,

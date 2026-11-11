@@ -1,6 +1,6 @@
 [workspace]
 
-# Standalone fuzz workspace — unify hjkl-* and crossterm versions across
+# Standalone fuzz workspace — unify hjkl-* and ttyr versions across
 # the direct path deps below and the transitive deps pulled by hjkl-engine
 # from crates.io. Without this patch, two copies appear in the dep graph
 # and KeyEvent / Buffer types stop matching.
@@ -34,7 +34,7 @@ hjkl-vim-tui = { path = "../../hjkl-vim-tui" }
 hjkl-buffer = { path = "../../hjkl-buffer" }
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
-crossterm = "0.29"
+ttyr = { version = "0.1.0" }
 
 [[bin]]
 name = "handle_key"

@@ -6,6 +6,11 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `handle_key` takes `&hjkl_engine_tui::KeyEvent`, now ttyr's
+  `KeyEvent`, in place of a crossterm `KeyEvent` by value.
+
 ## [0.25.1] - 2026-05-19
 
 ### Added

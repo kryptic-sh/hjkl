@@ -9,7 +9,7 @@
 #![no_main]
 
 use arbitrary::{Arbitrary, Unstructured};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::types::{DefaultHost, Options};
 use libfuzzer_sys::fuzz_target;
 
@@ -116,7 +116,7 @@ fuzz_target!(|data: &[u8]| {
     for (key, mods) in input.keys.into_iter().take(256) {
         let code = to_keycode(key);
         let modifiers: KeyModifiers = mods.into();
-        let _ = hjkl_vim_tui::handle_key(&mut ed, KeyEvent::new(code, modifiers));
+        let _ = hjkl_vim_tui::handle_key(&mut ed, &KeyEvent::new(code, modifiers));
     }
 
     // Drain any buffered effects so internal caches exercise too.

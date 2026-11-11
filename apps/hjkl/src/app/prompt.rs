@@ -1,7 +1,7 @@
-use crossterm::event::{KeyCode, KeyModifiers};
 use hjkl_engine::{CursorShape, Input as EngineInput, Key as EngineKey};
 use hjkl_form::TextFieldEditor;
 use hjkl_prompt::{history_next, history_prev, push_history};
+use ttyr::event::{KeyCode, KeyModifiers};
 
 use super::{App, CmdLineKind, CmdLineWindow, SearchDir};
 use crate::completion::{Completion, CompletionItem, CompletionKind};
@@ -515,9 +515,9 @@ impl App {
         }
     }
 
-    pub(crate) fn handle_command_field_key(&mut self, key: crossterm::event::KeyEvent) {
+    pub(crate) fn handle_command_field_key(&mut self, key: ttyr::event::KeyEvent) {
         // ── Tab / S-Tab ──────────────────────────────────────────────────────
-        if key.code == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::CONTROL) {
+        if key.key == KeyCode::Tab && !key.modifiers.contains(KeyModifiers::CONTROL) {
             // Tab-time inline expansion (%, #, <cword>) takes priority.
             if self.command_field.is_some() {
                 let field = self
@@ -560,7 +560,7 @@ impl App {
             self.refresh_command_completion();
             return;
         }
-        if key.code == KeyCode::BackTab {
+        if key.key == KeyCode::BackTab {
             if let Some(ref mut popup) = self.completion {
                 popup.cycle_up();
                 self.preview_selected_colorscheme();
@@ -570,10 +570,10 @@ impl App {
         }
 
         // ── Up / Down / C-p / C-n ───────────────────────────────────────────
-        let is_ctrl_p = key.code == KeyCode::Up
-            || (key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL));
-        let is_ctrl_n = key.code == KeyCode::Down
-            || (key.code == KeyCode::Char('n') && key.modifiers.contains(KeyModifiers::CONTROL));
+        let is_ctrl_p = key.key == KeyCode::Up
+            || (key.key == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL));
+        let is_ctrl_n = key.key == KeyCode::Down
+            || (key.key == KeyCode::Char('n') && key.modifiers.contains(KeyModifiers::CONTROL));
 
         if is_ctrl_p || is_ctrl_n {
             // If popup is open, navigate it.
@@ -604,7 +604,7 @@ impl App {
         }
 
         // ── <C-f> mid-prompt: switch into the ex cmdline window ──────────────
-        if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if key.key == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
             if let Some(field) = self.command_field.take() {
                 let text = field.text();
                 let (_, col) = field.cursor();
@@ -620,7 +620,7 @@ impl App {
         }
 
         // ── Esc / C-e: dismiss popup or close prompt ─────────────────────────
-        let input: EngineInput = hjkl_engine_tui::crossterm_to_input(key);
+        let input: EngineInput = hjkl_engine_tui::ttyr_to_input(&key);
 
         if input.key == EngineKey::Esc {
             // Dismiss the popup if open, but DON'T stop here — Esc must also
@@ -765,11 +765,11 @@ impl App {
         self.restore_last_search_pattern();
     }
 
-    pub(crate) fn handle_search_field_key(&mut self, key: crossterm::event::KeyEvent) {
-        let is_ctrl_p = key.code == KeyCode::Up
-            || (key.code == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL));
-        let is_ctrl_n = key.code == KeyCode::Down
-            || (key.code == KeyCode::Char('n') && key.modifiers.contains(KeyModifiers::CONTROL));
+    pub(crate) fn handle_search_field_key(&mut self, key: ttyr::event::KeyEvent) {
+        let is_ctrl_p = key.key == KeyCode::Up
+            || (key.key == KeyCode::Char('p') && key.modifiers.contains(KeyModifiers::CONTROL));
+        let is_ctrl_n = key.key == KeyCode::Down
+            || (key.key == KeyCode::Char('n') && key.modifiers.contains(KeyModifiers::CONTROL));
 
         if is_ctrl_p || is_ctrl_n {
             let history = if self.search_dir == SearchDir::Forward {
@@ -796,7 +796,7 @@ impl App {
         // (issue #132). Capture text + cursor col, close the search prompt
         // WITHOUT committing or updating the last-search pattern, then open
         // q/ or q? with the in-progress text as the trailing line.
-        if key.code == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
+        if key.key == KeyCode::Char('f') && key.modifiers.contains(KeyModifiers::CONTROL) {
             if let Some(field) = self.search_field.take() {
                 let text = field.text();
                 let (_, col) = field.cursor();
@@ -814,7 +814,7 @@ impl App {
             return;
         }
 
-        let input: EngineInput = hjkl_engine_tui::crossterm_to_input(key);
+        let input: EngineInput = hjkl_engine_tui::ttyr_to_input(&key);
         let Some(field) = self.search_field.as_mut() else {
             return;
         };
@@ -949,8 +949,8 @@ impl App {
     }
 
     /// Handle a key event while the `!` filter prompt is active.
-    pub(crate) fn handle_filter_field_key(&mut self, key: crossterm::event::KeyEvent) {
-        let input: EngineInput = hjkl_engine_tui::crossterm_to_input(key);
+    pub(crate) fn handle_filter_field_key(&mut self, key: ttyr::event::KeyEvent) {
+        let input: EngineInput = hjkl_engine_tui::ttyr_to_input(&key);
         let Some(field) = self.filter_field.as_mut() else {
             return;
         };
@@ -1115,7 +1115,7 @@ impl App {
         self.reconcile_window_editors();
         self.seed_window_editor(new_win_id, win_cursor_row, win_cursor_col, 0, 0);
 
-        let total_h = crossterm::terminal::size()
+        let total_h = ttyr::terminal::size()
             .map_or(24, |(_, h)| h as usize)
             .saturating_sub(1);
         let ratio_b = (win_rows as f32 / total_h as f32).clamp(0.05, 0.45);

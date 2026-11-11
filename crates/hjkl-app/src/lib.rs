@@ -2,7 +2,7 @@
 //!
 //! Re-exports the modules that both the TUI (apps/hjkl) and GUI
 //! (apps/hjkl-gui) binaries share. This crate must stay free of
-//! ratatui / crossterm / floem imports — anything UI-flavored
+//! ratatui / ttyr / floem imports — anything UI-flavored
 //! belongs in the host binary.
 
 pub mod config;

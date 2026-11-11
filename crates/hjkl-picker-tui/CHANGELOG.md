@@ -8,6 +8,12 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** `handle_key` takes `&ttyr::event::KeyEvent` in place of a
+  crossterm `KeyEvent`. Pass the event as ttyr read it; Shift is resolved here.
+- ratatui without its default features: no crossterm in the dependency tree.
+
 ## [0.4.1] - 2026-05-18
 
 ### Changed

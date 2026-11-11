@@ -1007,7 +1007,7 @@ fn dock_enter_jumps_to_entry_and_focus_lands_on_a_regular_window() {
 
     // Move to entry 1 (a.txt row 1 col 2) and jump.
     super::macro_key_seq(&mut app, &[super::ck('j')]);
-    super::macro_key_seq(&mut app, &[super::key(crossterm::event::KeyCode::Enter)]);
+    super::macro_key_seq(&mut app, &[super::key(ttyr::event::KeyCode::Enter)]);
 
     assert_eq!(
         app.quickfix.cursor(),
@@ -1058,7 +1058,7 @@ fn dock_buffer_is_readonly_and_rejects_edits() {
         &[
             super::ck('i'),
             super::ck('X'),
-            super::key(crossterm::event::KeyCode::Esc),
+            super::key(ttyr::event::KeyCode::Esc),
         ],
     );
     assert_eq!(

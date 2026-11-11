@@ -1,21 +1,22 @@
 //! Interactive demo for `hjkl-form`.
 //!
-//! Builds a form with one of every field type, runs a crossterm raw-mode
-//! event loop, and prints the submitted values to stderr on `Submit`.
+//! Builds a form with one of every field type, runs a raw-mode event loop, and prints the submitted values to stderr on `Submit`.
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyEventKind};
-use crossterm::{execute, terminal};
 use hjkl_editor_tui::form::{FormPalette, draw_form};
-use hjkl_engine_tui::crossterm_to_input;
+use hjkl_engine_tui::ttyr_to_input;
 use hjkl_form::{
     CheckboxField, Field, FieldMeta, Form, FormEvent, SelectField, SubmitField, SubmitOutcome,
     TextFieldEditor,
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
-use std::io::{self, stdout};
+use ratatui::Terminal;
+use std::io::{self, Write as _, stdout};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use ttyr::backend::TtyrBackend;
+use ttyr::event::{Event, KeyEventKind};
+use ttyr::reader::Reader;
+use ttyr::terminal::{self, Mode};
 
 fn build_form(should_quit: Arc<AtomicBool>) -> Form {
     let mut name = TextFieldEditor::with_meta(
@@ -85,9 +86,13 @@ fn main() -> Result<()> {
     let should_quit = Arc::new(AtomicBool::new(false));
     let mut form = build_form(should_quit.clone());
 
+    let mut reader = Reader::open()?;
+    terminal::restore_on_panic();
     terminal::enable_raw_mode()?;
-    execute!(stdout(), terminal::EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout());
+    let mut out = stdout();
+    terminal::enable(&mut out, Mode::AlternateScreen)?;
+    out.flush()?;
+    let backend = TtyrBackend::new(out);
     let mut terminal = Terminal::new(backend)?;
     let palette = FormPalette::dark();
 
@@ -108,11 +113,11 @@ fn main() -> Result<()> {
             terminal.hide_cursor()?;
         }
 
-        let ev = event::read()?;
+        let ev = reader.read()?;
         if let Event::Key(key) = ev
             && key.kind != KeyEventKind::Release
         {
-            let input = crossterm_to_input(key);
+            let input = ttyr_to_input(&key);
             if let Some(form_ev) = form.handle_input(input) {
                 match form_ev {
                     FormEvent::Cancelled => break Ok(()),
@@ -130,7 +135,6 @@ fn main() -> Result<()> {
         }
     };
 
-    let _ = terminal::disable_raw_mode();
-    let _ = execute!(io::stdout(), terminal::LeaveAlternateScreen);
+    let _ = terminal::restore(&mut io::stdout());
     result
 }

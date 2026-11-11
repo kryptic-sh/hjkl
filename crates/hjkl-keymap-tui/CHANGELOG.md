@@ -8,6 +8,13 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** the adapter is between `hjkl_keymap::KeyEvent` and
+  `ttyr::event::KeyEvent`: `from_crossterm` / `to_crossterm` are `from_ttyr` /
+  `to_ttyr`. A character key is the character it typed, so from a kitty terminal
+  Alt+Shift+a is `A` with Alt (`<M-A>`), not `a` with Alt.
+
 ## [0.45.0] - 2026-11-04
 
 ### Added

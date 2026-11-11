@@ -1,7 +1,7 @@
 [package]
 name = "hjkl-keymap-tui"
-description = "Ratatui/crossterm KeyEvent ↔ hjkl-keymap KeyEvent adapter. The TUI-side input boundary for hjkl, per the -tui adapter convention."
-keywords = ["editor", "keymap", "crossterm", "tui"]
+description = "ttyr KeyEvent ↔ hjkl-keymap KeyEvent adapter. The TUI-side input boundary for hjkl, per the -tui adapter convention."
+keywords = ["editor", "keymap", "terminal", "tui"]
 categories = ["text-editors"]
 version.workspace = true
 edition = "2024"
@@ -14,8 +14,8 @@ readme = "README.md"
 # publish=true (default) — required for apps/hjkl publish to resolve us from crates.io.
 
 [dependencies]
-crossterm = "0.29"
 hjkl-keymap.workspace = true
+ttyr = { version = "0.1.0" }
 
 [lints]
 workspace = true

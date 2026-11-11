@@ -8,8 +8,34 @@ patch bumps.
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** hjkl reads and draws the terminal through
+  [ttyr](https://crates.io/crates/ttyr) 0.1 in place of crossterm. The public
+  key types of `hjkl-engine-tui`, `hjkl-keymap-tui`, `hjkl-picker-tui` and
+  `hjkl-vim-tui` are now ttyr's: `hjkl_engine_tui::KeyEvent` re-exports
+  `ttyr::event::KeyEvent`; `crossterm_to_input` is `ttyr_to_input(&KeyEvent)`;
+  `hjkl_keymap_tui::from_crossterm` / `to_crossterm` are `from_ttyr` /
+  `to_ttyr`; and `hjkl_picker_tui::handle_key` and `hjkl_vim_tui::handle_key`
+  take the key by reference, as ttyr's `KeyEvent` is not `Copy`.
+- Every `-tui` crate depends on ratatui without its default features (`std`,
+  `layout-cache` and `underline-color` only), so crossterm is no longer in the
+  dependency tree of any of them. A consumer that used ratatui's crossterm
+  backend through them enables ratatui's `crossterm` feature itself.
+
+### Added
+
+- The terminal is restored after a panic: raw mode, the alternate screen, mouse
+  capture, bracketed paste, focus reports and the kitty keyboard flags are
+  turned off by ttyr's panic hook, as on a normal exit. Before, a panic left the
+  shell in raw mode on the alternate screen.
+
 ### Fixed
 
+- From a terminal with the kitty keyboard protocol, a shifted letter typed with
+  Alt or Ctrl reads as the capital letter: Alt+Shift+a is `<M-A>`, no longer
+  `<M-a>`, and Ctrl+Shift+h is `<C-H>`, no longer `<C-h>`. The kitty protocol
+  reports only the unshifted key with Shift held, and the Shift was dropped.
 - `is` and `as` on a Visual block taller than one row land where vim's do, in
   both directions. They now take the same walk as a charwise selection, so a
   count or a repeated object alternates sentences with the blanks between them:

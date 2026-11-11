@@ -34,16 +34,15 @@ pub(crate) mod test_cwd;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use crossterm::{
-    event,
-    event::{KeyCode, KeyEvent, KeyModifiers},
-    execute, terminal,
-};
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::Terminal;
 use std::fmt::Write as _;
-use std::io::{self, stdout};
+use std::io::{self, Stdout, Write as _, stdout};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
+use ttyr::backend::TtyrBackend;
+use ttyr::event::{KeyCode, KeyEvent, KeyModifiers, KeyboardEnhancementFlags};
+use ttyr::reader::Reader;
+use ttyr::terminal::{self, Mode};
 
 /// ASCII-art banner. Regenerate with:
 ///
@@ -89,7 +88,7 @@ struct Cli {
 
     /// Run without a terminal: load FILEs, dispatch any +cmd / -c CMD ex
     /// commands in order, write back to disk if a command asks (e.g. +':wq'),
-    /// then exit. No ratatui, no crossterm. Useful for scripted edits in CI.
+    /// then exit. No ratatui, no terminal. Useful for scripted edits in CI.
     #[arg(long)]
     headless: bool,
 
@@ -183,7 +182,7 @@ pub struct Args {
     /// from the bundled defaults, without persisting runtime changes to disk.
     /// Mirrors `nvim --clean`.
     pub clean: bool,
-    /// Run without a terminal (no ratatui/crossterm). Phase 1 of issue #26.
+    /// Run without a terminal (no ratatui). Phase 1 of issue #26.
     pub headless: bool,
     /// Run as JSON-RPC 2.0 server over stdin/stdout. Phase 2 of issue #26.
     /// Implies headless; +cmd / -c CMD are ignored in this mode.
@@ -230,7 +229,7 @@ fn is_stdin_arg(p: &std::path::Path) -> bool {
     p.as_os_str() == "-"
 }
 
-/// Decode ONE character from a `-s <scriptin>` file into the crossterm
+/// Decode ONE character from a `-s <scriptin>` file into the ttyr
 /// [`KeyEvent`] a live terminal would have produced for that keystroke.
 /// Mirrors `vim -s` / `nvim -s`: the scriptin file is a raw byte stream of
 /// what the user would have typed, not a structured script format.
@@ -562,7 +561,7 @@ fn main() -> Result<()> {
         std::process::exit(code);
     }
 
-    // Headless script mode — no TUI, no crossterm, no ratatui.
+    // Headless script mode — no TUI, no terminal, no ratatui.
     if args.headless {
         let code = headless::run(args.files, args.commands)?;
         std::process::exit(code);
@@ -677,7 +676,7 @@ fn main() -> Result<()> {
     }
     // `hjkl -`: read all of stdin into the unnamed active buffer built above.
     // Safe to consume fd 0 here even though we're about to go interactive —
-    // crossterm's Unix event source reads keystrokes from `/dev/tty`, not
+    // ttyr's `Reader` reads keystrokes from `/dev/tty` on Unix, not
     // fd 0, so draining stdin never steals input the TUI needs. When stdin
     // is a real TTY (no pipe) this blocks until EOF (Ctrl-D), same as vim.
     // The 256 MiB cap (security fix H3 — `hjkl - < /dev/zero` must not allocate
@@ -804,7 +803,7 @@ fn main() -> Result<()> {
                     // `dispatch_fallthrough_key` the same way `run()` does —
                     // otherwise scripted inserts would never actually reach
                     // the buffer.
-                    match app.handle_keypress(key) {
+                    match app.handle_keypress(key.clone()) {
                         app::event_loop::KeyOutcome::FallThrough => {
                             app.dispatch_fallthrough_key(key);
                         }
@@ -826,45 +825,33 @@ fn main() -> Result<()> {
         }
     }
 
-    terminal::enable_raw_mode()?;
-    execute!(
-        stdout(),
-        terminal::EnterAlternateScreen,
-        event::EnableFocusChange,
-        // Bracketed paste: the terminal wraps pasted text in ESC[200~ … ESC[201~
-        // so it arrives as one atomic `Event::Paste(text)` with real newlines.
-        // Without this, in raw mode crossterm maps a pasted `\n` (0x0A) to Ctrl+J
-        // — which the insert dispatcher drops — so pasted lines bunch together.
-        event::EnableBracketedPaste
-    )?;
-    if app.mouse_enabled {
-        execute!(stdout(), event::EnableMouseCapture)?;
-    }
-    // Push kitty keyboard enhancement (DISAMBIGUATE_ESCAPE_CODES) unconditionally.
-    // Non-supporting terminals silently ignore this escape; no blocking query needed.
-    let _ = hjkl_kitty::enable(&mut stdout());
-    let backend = CrosstermBackend::new(stdout());
-    let mut terminal = Terminal::new(backend)?;
+    // The one reader of the terminal's input: it reads `/dev/tty` on Unix
+    // (the console on Windows), not fd 0, so a stdin drained above never
+    // steals input the TUI needs.
+    let mut reader = Reader::open()?;
+    // Every mode goes through ttyr's restore guard, so the panic hook and
+    // the exit path below turn off exactly what was turned on, in reverse —
+    // including a `:set mouse` toggled since startup. A setup step that fails
+    // part way restores what the steps before it turned on.
+    terminal::restore_on_panic();
+    let mut terminal = match enter_terminal(app.mouse_enabled, &mut reader) {
+        Ok(terminal) => terminal,
+        Err(e) => {
+            let _ = terminal::restore(&mut io::stdout());
+            return Err(e.into());
+        }
+    };
 
     // Start event-driven autoreload (#242). Best-effort: on failure the
     // poll-based `:checktime` / focus-regain path still autoreloads.
     app.enable_fs_watch();
 
-    let result = app.run(&mut terminal);
+    let result = app.run(&mut terminal, &mut reader);
 
-    // Restore terminal regardless of outcome. The capture command
-    // sequence is idempotent on most terminals; emit unconditionally
-    // to recover from a runtime `:set mouse` that may have toggled
-    // state since startup.
-    let _ = hjkl_kitty::disable(&mut io::stdout());
-    let _ = terminal::disable_raw_mode();
-    let _ = execute!(
-        io::stdout(),
-        event::DisableMouseCapture,
-        event::DisableFocusChange,
-        event::DisableBracketedPaste,
-        terminal::LeaveAlternateScreen
-    );
+    // Restore the terminal regardless of outcome: every mode the guard
+    // recorded is turned off in reverse, the cursor shown, and raw mode off.
+    reader.set_kitty_keyboard(false);
+    let _ = terminal::restore(&mut io::stdout());
 
     // Shut the LSP subsystem down on every normal exit path — including the
     // error path — so a spawned language server (rust-analyzer, gopls,
@@ -875,6 +862,40 @@ fn main() -> Result<()> {
     app.shutdown();
 
     result
+}
+
+/// Puts the terminal in the state the editor runs in: raw mode, the
+/// alternate screen, focus reports, bracketed paste, mouse capture when
+/// `mouse` is on, and the kitty keyboard flags, each recorded by ttyr's
+/// restore guard. Returns the ratatui terminal drawing to stdout.
+fn enter_terminal(mouse: bool, reader: &mut Reader) -> io::Result<Terminal<TtyrBackend<Stdout>>> {
+    terminal::enable_raw_mode()?;
+    let mut out = stdout();
+    // Bracketed paste: the terminal wraps pasted text in ESC[200~ … ESC[201~
+    // so it arrives as one atomic `Event::Paste(text)` with real newlines.
+    // Without it, a pasted `\n` (0x0A) arrives in raw mode as Ctrl+J — which
+    // the insert dispatcher drops — so pasted lines bunch together.
+    for mode in [
+        Mode::AlternateScreen,
+        Mode::FocusChange,
+        Mode::BracketedPaste,
+    ] {
+        terminal::enable(&mut out, mode)?;
+    }
+    if mouse {
+        terminal::enable(&mut out, app::MOUSE_MODE)?;
+    }
+    // Push kitty keyboard enhancement (DISAMBIGUATE_ESCAPE_CODES)
+    // unconditionally. Non-supporting terminals silently ignore this escape;
+    // no blocking query needed. The reader is told, as it decides what
+    // modifier bit 8 means (Super under kitty, Meta otherwise).
+    terminal::enable(
+        &mut out,
+        Mode::KeyboardFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES),
+    )?;
+    reader.set_kitty_keyboard(true);
+    out.flush()?;
+    Terminal::new(TtyrBackend::new(out))
 }
 
 fn init_tracing() {

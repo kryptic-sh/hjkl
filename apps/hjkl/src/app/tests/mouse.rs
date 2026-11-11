@@ -131,7 +131,7 @@ fn mouse_flags_as_flags_str_roundtrip() {
 
 #[test]
 fn shift_click_enters_visual_and_extends_selection() {
-    use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+    use ttyr::event::{MouseButton, MouseEvent, MouseEventKind};
 
     let mut app = App::new(None, false, None, None).unwrap();
 
@@ -731,7 +731,7 @@ mod border_drag_tests {
     /// was a no-op, and the user had to press Esc explicitly.
     #[test]
     fn backspace_on_empty_command_prompt_dismisses() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut app = App::new(None, false, None, None).unwrap();
         app.open_command_prompt();
         assert!(app.command_field.is_some(), "prompt should be open");
@@ -754,7 +754,7 @@ mod border_drag_tests {
     /// Same behavior for the `/` and `?` search prompts.
     #[test]
     fn backspace_on_empty_forward_search_prompt_dismisses() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut app = App::new(None, false, None, None).unwrap();
         app.open_search_prompt(SearchDir::Forward);
         assert!(app.search_field.is_some(), "search prompt should be open");
@@ -771,7 +771,7 @@ mod border_drag_tests {
 
     #[test]
     fn backspace_on_empty_backward_search_prompt_dismisses() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let mut app = App::new(None, false, None, None).unwrap();
         app.open_search_prompt(SearchDir::Backward);
         assert!(app.search_field.is_some());
@@ -988,8 +988,8 @@ mod border_drag_tests {
     // ── P10: gutter left-click fold toggle ─────────────────────────────────────
 
     /// Synthesise a left-click `MouseEvent` at `(col, row)` with no modifiers.
-    fn left_down(col: u16, row: u16) -> crossterm::event::MouseEvent {
-        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    fn left_down(col: u16, row: u16) -> ttyr::event::MouseEvent {
+        use ttyr::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column: col,
@@ -1045,8 +1045,8 @@ mod border_drag_tests {
     /// Left-clicking the gutter on a row WITHOUT a fold must not create or
     /// toggle any fold (guards the P10 arm against over-firing).
     /// Build a right-button Down event at (col, row).
-    fn right_down(col: u16, row: u16) -> crossterm::event::MouseEvent {
-        use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    fn right_down(col: u16, row: u16) -> ttyr::event::MouseEvent {
+        use ttyr::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
         MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Right),
             column: col,

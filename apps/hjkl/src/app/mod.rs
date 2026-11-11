@@ -114,6 +114,14 @@ impl From<crate::keymap_actions::CmdLineWindowKind> for CmdLineKind {
 /// screen, when shown (either more than one slot or more than one tab).
 pub const TOP_BAR_HEIGHT: u16 = 1;
 
+/// The mouse reports hjkl turns on: every press, release, drag, motion and
+/// wheel event, in SGR's form — what crossterm's `EnableMouseCapture` turned
+/// on, which the hover popups' motion tracking relies on.
+pub const MOUSE_MODE: ttyr::terminal::Mode = ttyr::terminal::Mode::Mouse {
+    tracking: ttyr::terminal::MouseTracking::Any,
+    sgr: true,
+};
+
 /// Close glyph appended to every tab and buffer-line entry. 1 display column,
 /// 3 UTF-8 bytes — all width math must use `.chars().count()`.
 pub const TAB_CLOSE_GLYPH: char = '✕';
@@ -479,7 +487,7 @@ pub struct App {
     /// while any chord is pending (app keymap trie, app `pending_state`, or the
     /// engine's own pending). Cleared when the chord commits/cancels. Used by
     /// Backspace to pop one level: cancel all pending, then replay all-but-last.
-    pub(crate) chord_history: Vec<crossterm::event::KeyEvent>,
+    pub(crate) chord_history: Vec<ttyr::event::KeyEvent>,
     /// Suppresses the `"file" NL` open notice for the next `do_edit` call. Set
     /// by the explorer when opening a file under the cursor — the buffer visibly
     /// changes, so the toast is just noise.
@@ -1675,7 +1683,7 @@ impl App {
                 (vp.width, vp.height)
             })
             .or_else(|| {
-                crossterm::terminal::size()
+                ttyr::terminal::size()
                     .ok()
                     .map(|(w, h)| (w, h.saturating_sub(STATUS_LINE_HEIGHT)))
             })
@@ -2471,7 +2479,7 @@ impl App {
             replay_depth: 0,
             macro_replay: None,
             // Default to bundled config's value; main overrides via with_config
-            // before crossterm capture is enabled.
+            // before mouse capture is enabled.
             mouse_enabled: hjkl_app::config::Config::default().editor.mouse,
             mouse_flags: MouseFlags::all(),
             app_keymap: {
@@ -2613,9 +2621,10 @@ impl App {
     /// rules still take precedence over user-config fallbacks.
     ///
     /// Readonly state on each slot is preserved.
-    /// Toggle terminal mouse capture at runtime. Drives the corresponding
-    /// crossterm Enable/DisableMouseCapture commands against stdout so
-    /// the change takes effect on the next event poll. Idempotent —
+    /// Toggle terminal mouse capture at runtime. Turns ttyr's
+    /// [`MOUSE_MODE`] on or off through its restore guard, against stdout,
+    /// so the change takes effect on the next event poll and is undone on
+    /// exit. Idempotent —
     /// flipping to the current state is a no-op for the terminal but
     /// still updates `mouse_enabled` so the field remains the source of
     /// truth.
@@ -2624,11 +2633,13 @@ impl App {
             self.bus.info(if on { "mouse" } else { "nomouse" });
             return;
         }
+        let mut out = std::io::stdout();
         let res = if on {
-            crossterm::execute!(std::io::stdout(), crossterm::event::EnableMouseCapture)
+            ttyr::terminal::enable(&mut out, MOUSE_MODE)
         } else {
-            crossterm::execute!(std::io::stdout(), crossterm::event::DisableMouseCapture)
-        };
+            ttyr::terminal::disable(&mut out, MOUSE_MODE)
+        }
+        .and_then(|()| std::io::Write::flush(&mut out));
         match res {
             Ok(()) => {
                 self.mouse_enabled = on;
@@ -2824,9 +2835,9 @@ impl App {
     /// `continue` the event loop). Returns `false` when the key is not a
     /// menu-nav key — caller should then dismiss the menu and fall through
     /// to normal dispatch.
-    pub(crate) fn handle_context_menu_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
-        match key.code {
+    pub(crate) fn handle_context_menu_key(&mut self, key: ttyr::event::KeyEvent) -> bool {
+        use ttyr::event::KeyCode;
+        match key.key {
             // Navigation.
             KeyCode::Up | KeyCode::Char('k') => {
                 if let Some(ref mut m) = self.context_menu {
@@ -2970,10 +2981,10 @@ impl App {
                     self.active_editor_mut()
                         .delete_block(top_row, bot_row, left_col, right_col, '"');
                     // Exit visual mode.
-                    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                    use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                     hjkl_vim_tui::handle_key(
                         self.active_editor_mut(),
-                        CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                        &CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                     );
                 }
             }
@@ -2982,10 +2993,10 @@ impl App {
                     let (from, to, kind) =
                         hjkl_vim::charwise_visual_range(self.active_editor(), start, end);
                     self.active_editor_mut().delete_range(from, to, kind, '"');
-                    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                    use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                     hjkl_vim_tui::handle_key(
                         self.active_editor_mut(),
-                        CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                        &CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                     );
                 }
             }
@@ -2997,10 +3008,10 @@ impl App {
                         RangeKind::Linewise,
                         '"',
                     );
-                    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+                    use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
                     hjkl_vim_tui::handle_key(
                         self.active_editor_mut(),
-                        CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
+                        &CtKeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
                     );
                 }
             }
@@ -3115,7 +3126,7 @@ impl App {
         Vec::new()
     }
 
-    // km_to_crossterm, replay_to_engine, route_chord_key, route_chord_key_inner moved to chord_routing.rs
+    // km_to_ttyr, replay_to_engine, route_chord_key, route_chord_key_inner moved to chord_routing.rs
 
     /// Push `entry` into a history ring (cap 100, skip consecutive duplicates).
     /// Delegates to [`hjkl_prompt::push_history`].
@@ -3132,11 +3143,11 @@ impl App {
     }
 
     /// Replay a slice of `hjkl_keymap::KeyEvent`s straight to the engine,
-    /// converting each one to a crossterm `KeyEvent` via the shared translator.
+    /// converting each one to a ttyr `KeyEvent` via the shared translator.
     pub(crate) fn replay_km_events_to_engine(&mut self, events: &[hjkl_keymap::KeyEvent]) {
         for km_ev in events {
-            let ct_ev = crate::keymap_translate::to_crossterm(km_ev);
-            hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_ev);
+            let ct_ev = crate::keymap_translate::to_ttyr(km_ev);
+            hjkl_vim_tui::handle_key(self.active_editor_mut(), &ct_ev);
         }
     }
 }

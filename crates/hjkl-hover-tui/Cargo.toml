@@ -16,7 +16,7 @@ readme = "README.md"
 hjkl-hover.workspace = true
 hjkl-markdown.workspace = true
 hjkl-markdown-tui.workspace = true
-ratatui = "0.30"
+ratatui = { version = "0.30", default-features = false, features = ["std", "layout-cache", "underline-color"] }
 
 [package.metadata.docs.rs]
 all-features = true

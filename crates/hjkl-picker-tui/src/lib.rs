@@ -1,17 +1,16 @@
 //! Ratatui adapter for [`hjkl_picker`].
 //!
 //! Provides:
-//! - [`handle_key`]: translate a `crossterm::event::KeyEvent` into the
+//! - [`handle_key`]: translate a `ttyr::event::KeyEvent` into the
 //!   appropriate `Picker` method call, returning a `PickerEvent`.
 //! - [`preview_pane`]: render the picker's preview surface into a `ratatui::Frame`.
 //! - [`PreviewTheme`]: pre-computed styles consumed by `preview_pane`.
 //!
 //! The agnostic [`hjkl_picker::Picker`] owns the state and scoring logic;
-//! this crate owns the ratatui + crossterm surface.
+//! this crate owns the ratatui + ttyr surface.
 
 #![forbid(unsafe_code)]
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_buffer::Viewport;
 use hjkl_buffer_tui::{BufferView, Gutter};
 use hjkl_engine::Input;
@@ -20,8 +19,9 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use ratatui::widgets::{Block, Borders, Paragraph};
+use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 
-/// Translate a crossterm key event into picker state changes.
+/// Translate a ttyr key event into picker state changes.
 ///
 /// Handles the same shape the old `Picker::handle_key` did:
 /// - `Esc` / `C-c` → `Cancel`
@@ -30,19 +30,19 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 /// - `Up`   / `C-p` → `select_prev`
 /// - Other keys: first offered to the source's `handle_key`; if it returns
 ///   `Some(action)`, emitted as `Select`. Otherwise forwarded to the query field.
-pub fn handle_key(picker: &mut Picker, key: KeyEvent) -> PickerEvent {
-    if key.code == KeyCode::Esc {
+pub fn handle_key(picker: &mut Picker, key: &KeyEvent) -> PickerEvent {
+    if key.key == KeyCode::Esc {
         return picker.cancel();
     }
-    if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
+    if key.key == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
         return picker.cancel();
     }
-    if key.code == KeyCode::Enter {
+    if key.key == KeyCode::Enter {
         return picker.accept();
     }
 
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    match key.code {
+    match key.key {
         KeyCode::Down => {
             picker.select_next();
             return PickerEvent::None;
@@ -62,7 +62,7 @@ pub fn handle_key(picker: &mut Picker, key: KeyEvent) -> PickerEvent {
         _ => {}
     }
 
-    let input: Input = hjkl_engine_tui::crossterm_to_input(key);
+    let input: Input = hjkl_engine_tui::ttyr_to_input(key);
     if let Some(action) = picker.handle_source_key(input) {
         return PickerEvent::Select(action);
     }

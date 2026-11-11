@@ -146,7 +146,7 @@ impl App {
         }
     }
 
-    /// Feed a crossterm key event through the app-level chord keymap and
+    /// Feed a terminal key event through the app-level chord keymap and
     /// dispatch any resolved action. Returns `true` if the key was consumed
     /// (either resolved or still pending), `false` if the keymap returned
     /// `Unbound` and the caller should replay the events to the engine.

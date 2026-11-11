@@ -32,7 +32,7 @@ name = "syntax_spans"
 harness = false
 
 [dependencies]
-# Ratatui + crossterm adapter surface lives in `hjkl-engine-tui` (#162 phase 3).
+# Ratatui + ttyr adapter surface lives in `hjkl-engine-tui` (#162 phase 3).
 # `serde` is optional; wasm / no_std hosts opt out via `default-features = false`.
 hjkl-buffer.workspace = true
 hjkl-lang.workspace = true

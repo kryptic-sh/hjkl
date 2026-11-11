@@ -16,7 +16,7 @@ use super::*;
 fn paste_dismisses_open_completion_popup() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "fn foo");
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
     app.sync_after_engine_mutation();
     assert_eq!(app.active_editor().vim_mode(), VimMode::Insert);
 
@@ -44,7 +44,7 @@ fn paste_dismisses_open_completion_popup() {
 fn paste_with_no_popup_open_is_unaffected() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "");
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
     app.sync_after_engine_mutation();
 
     app.handle_paste("hi".to_string());
@@ -102,7 +102,7 @@ fn record_macro_with_paste_replays_the_paste() {
 fn paste_outside_recording_does_not_start_a_recording() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "");
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
     app.sync_after_engine_mutation();
 
     app.handle_paste("hi".to_string());

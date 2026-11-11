@@ -4,8 +4,8 @@
 //! / `tui_textarea::Key` with these in-crate equivalents so the
 //! editor can drop the `tui-textarea` dependency entirely.
 
-/// A key code, mirroring the subset of [`crossterm::event::KeyCode`]
-/// the vim engine actually consumes. `Null` is the conventional
+/// A key code, mirroring the subset of a terminal's key codes the vim
+/// engine actually consumes. `Null` is the conventional
 /// sentinel for "no input" (matching the previous `tui_textarea::Key`
 /// shape) so call sites can early-return on unsupported keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
@@ -181,7 +181,7 @@ pub fn from_planned(planned: crate::types::Input) -> Option<Input> {
                 SpecialKey::Tab => Key::Tab,
                 // Engine's internal `Key` doesn't model BackTab as a
                 // distinct variant — fall through to the FSM as
-                // shift+Tab, matching crossterm semantics.
+                // shift+Tab, as the terminal adapter reads BackTab.
                 SpecialKey::BackTab => Key::Tab,
                 SpecialKey::Up => Key::Up,
                 SpecialKey::Down => Key::Down,
@@ -192,8 +192,8 @@ pub fn from_planned(planned: crate::types::Input) -> Option<Input> {
                 SpecialKey::PageUp => Key::PageUp,
                 SpecialKey::PageDown => Key::PageDown,
                 // Engine's `Key` has no Insert / F(n) — drop to Null
-                // (FSM ignores it) which matches the crossterm path
-                // (`crossterm_to_input` mapped these to Null too).
+                // (FSM ignores it) which matches the terminal path
+                // (`hjkl_engine_tui::ttyr_to_input` maps these to Null too).
                 SpecialKey::Insert => Key::Null,
                 SpecialKey::Delete => Key::Delete,
                 SpecialKey::F(_) => Key::Null,

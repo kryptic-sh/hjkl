@@ -172,11 +172,11 @@ pub fn parse_key_sequence(text: &str, leader: char) -> Result<Vec<Input>, String
 ///
 /// Returns `None` for key codes the engine cannot represent (`Insert`, `F(n)`).
 ///
-/// SHIFT handling mirrors `hjkl_keymap_tui::from_crossterm`: on ASCII letters it
+/// SHIFT handling mirrors `hjkl_keymap_tui::from_ttyr`: on ASCII letters it
 /// folds into the uppercase char and the flag is cleared (vim convention, and
 /// what the runtime delivers); on every other key code it is preserved, so
 /// `<S-Tab>` stays distinct from `<Tab>` and matches the Tab+SHIFT event that
-/// crossterm's `BackTab` becomes.
+/// the terminal's `BackTab` becomes.
 fn chord_event_to_input(ev: &KeyEvent) -> Option<Input> {
     let ctrl = ev.modifiers.contains(KeyModifiers::CTRL);
     let alt = ev.modifiers.contains(KeyModifiers::ALT);

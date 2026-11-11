@@ -8,6 +8,11 @@ and this project adheres to
 
 ## [Unreleased]
 
+### Changed
+
+- ratatui without its default features (`std`, `layout-cache` and
+  `underline-color` only): crossterm is no longer in the dependency tree.
+
 ## [0.1.1] - 2026-05-18
 
 ### Changed

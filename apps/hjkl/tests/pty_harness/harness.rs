@@ -616,7 +616,7 @@ impl TerminalSession {
     ///
     /// A bare Esc (`<Esc>` followed by more keys) is flushed in its own
     /// write with a pacing gap: when an Esc and the byte after it land in
-    /// one `read()`, crossterm decodes them as a single Alt+key (dropped
+    /// one `read()`, the terminal decoder reads them as a single Alt+key (dropped
     /// by the app) instead of Esc-then-key. macOS ptys deliver a burst in
     /// one read far more consistently than Linux — this is the mechanism
     /// behind the "`:cmd\r` typed as literal Insert text" flake class that
@@ -987,14 +987,13 @@ fn vim_notation_to_bytes(seq: &str) -> Vec<u8> {
                 "s-home" => out.extend_from_slice(b"\x1b[1;2H"),
                 "s-end" => out.extend_from_slice(b"\x1b[1;2F"),
                 // Function keys F1–F4 (SS3 sequences, xterm-256color).
-                // crossterm decodes: ESC O P→F1, Q→F2, R→F3, S→F4.
+                // ttyr decodes: ESC O P→F1, Q→F2, R→F3, S→F4.
                 "f1" => out.extend_from_slice(b"\x1bOP"),
                 "f2" => out.extend_from_slice(b"\x1bOQ"),
                 "f3" => out.extend_from_slice(b"\x1bOR"),
                 "f4" => out.extend_from_slice(b"\x1bOS"),
                 // Shift+F3 — CSI modifier-key sequence: ESC [ 1 ; 2 R
-                // crossterm parse_csi_modifier_key_code: final byte 'R' → F(3),
-                // modifier-mask 2 → SHIFT.
+                // Decoded as final byte 'R' → F(3), modifier-mask 2 → SHIFT.
                 "s-f3" => out.extend_from_slice(b"\x1b[1;2R"),
                 // Ctrl+Arrow — ANSI CSI modifier sequences (modifier=5 → CONTROL).
                 "c-right" => out.extend_from_slice(b"\x1b[1;5C"),

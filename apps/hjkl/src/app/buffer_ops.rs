@@ -196,7 +196,7 @@ impl App {
         // Rebuild the focused window's view editor onto the new slot's Buffer
         // (#151 Phase D) so active_editor() below sees the switched buffer.
         self.reconcile_window_editors();
-        if let Ok(size) = crossterm::terminal::size() {
+        if let Ok(size) = ttyr::terminal::size() {
             let vp = self.active_editor_mut().host_mut().viewport_mut();
             vp.width = size.0;
             vp.height = size.1.saturating_sub(STATUS_LINE_HEIGHT);

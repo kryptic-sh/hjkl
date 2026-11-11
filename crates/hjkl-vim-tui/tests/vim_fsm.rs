@@ -2,10 +2,10 @@
 //! Relocated from `hjkl-vim/tests/vim_fsm.rs` as part of #162 phase 3
 //! (dropped `hjkl-vim`'s `crossterm` feature gate).
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use hjkl_engine::rope_util::rope_to_lines_vec;
 use hjkl_engine::{Editor, Host, VimMode};
 use hjkl_vim::VimEditorExt;
+use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn run_keys<H: hjkl_engine::types::Host>(e: &mut Editor<hjkl_buffer::View, H>, keys: &str) {
     // Minimal notation:
@@ -40,14 +40,14 @@ fn run_keys<H: hjkl_engine::types::Host>(e: &mut Editor<hjkl_buffer::View, H>, k
                 }
                 _ => continue,
             };
-            hjkl_vim_tui::handle_key(e, ev);
+            hjkl_vim_tui::handle_key(e, &ev);
         } else {
             let mods = if c.is_uppercase() {
                 KeyModifiers::SHIFT
             } else {
                 KeyModifiers::NONE
             };
-            hjkl_vim_tui::handle_key(e, KeyEvent::new(KeyCode::Char(c), mods));
+            hjkl_vim_tui::handle_key(e, &KeyEvent::new(KeyCode::Char(c), mods));
         }
     }
 }
@@ -2011,7 +2011,7 @@ fn insert_ctrl_w_deletes_word_back() {
     let mut e = editor_with("");
     run_keys(&mut e, "i");
     for c in "hello world".chars() {
-        hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
     run_keys(&mut e, "<C-w>");
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "hello ");
@@ -2030,7 +2030,7 @@ fn insert_ctrl_w_at_col0_joins_with_prev_word() {
     run_keys(&mut e, "i");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
     );
     assert_eq!(
         rope_to_lines_vec(&e.buffer().rope()),
@@ -2050,7 +2050,7 @@ fn insert_ctrl_w_at_col0_keeps_prefix_words() {
     run_keys(&mut e, "i");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL),
     );
     assert_eq!(
         rope_to_lines_vec(&e.buffer().rope()),
@@ -2064,7 +2064,7 @@ fn insert_ctrl_u_deletes_to_line_start() {
     let mut e = editor_with("");
     run_keys(&mut e, "i");
     for c in "hello world".chars() {
-        hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
     run_keys(&mut e, "<C-u>");
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "");
@@ -2144,7 +2144,7 @@ fn esc_from_insert_sticky_tracks_arrow_nav() {
     run_keys(&mut e, "i");
     run_keys(&mut e, "abc");
     for _ in 0..2 {
-        hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
     }
     run_keys(&mut e, "<Esc>");
     assert_eq!(e.cursor(), (0, 0));
@@ -2162,7 +2162,7 @@ fn esc_from_insert_at_col_14_followed_by_j() {
     e.jump_cursor(0, 14);
     run_keys(&mut e, "i");
     for c in "test ".chars() {
-        hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
     }
     run_keys(&mut e, "<Esc>");
     assert_eq!(e.cursor(), (0, 18));
@@ -2658,10 +2658,10 @@ fn search_prompt_backspace_and_enter() {
     run_keys(&mut e, "/worlx");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
     assert_eq!(e.search_prompt().unwrap().text, "worl");
-    hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     // Prompt closed, last_search set, cursor advanced to match.
     assert!(e.search_prompt().is_none());
     assert_eq!(e.last_search(), Some("worl".to_string()));
@@ -2672,11 +2672,11 @@ fn search_prompt_backspace_and_enter() {
 fn empty_search_prompt_enter_repeats_last_search() {
     let mut e = editor_with("foo bar foo baz foo");
     run_keys(&mut e, "/foo");
-    hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(e.cursor().1, 8);
     // Empty `/<CR>` should advance to the next match, not clear last_search.
     run_keys(&mut e, "/");
-    hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(e.cursor().1, 16);
     assert_eq!(e.last_search(), Some("foo".to_string()));
 }
@@ -2712,18 +2712,18 @@ fn ctrl_p_walks_history_backward() {
     assert_eq!(e.search_prompt().unwrap().text, "");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
     );
     assert_eq!(e.search_prompt().unwrap().text, "beta");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
     );
     assert_eq!(e.search_prompt().unwrap().text, "alpha");
     // At the oldest entry; further Ctrl-P is a no-op.
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
     );
     assert_eq!(e.search_prompt().unwrap().text, "alpha");
 }
@@ -2739,24 +2739,24 @@ fn ctrl_n_walks_history_forward_after_ctrl_p() {
     for _ in 0..3 {
         hjkl_vim_tui::handle_key(
             &mut e,
-            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+            &KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
         );
     }
     assert_eq!(e.search_prompt().unwrap().text, "a");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
     );
     assert_eq!(e.search_prompt().unwrap().text, "b");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
     );
     assert_eq!(e.search_prompt().unwrap().text, "c");
     // Past the newest — stays at "c".
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
     );
     assert_eq!(e.search_prompt().unwrap().text, "c");
 }
@@ -2768,19 +2768,19 @@ fn typing_after_history_walk_resets_cursor() {
     run_keys(&mut e, "/");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
     );
     assert_eq!(e.search_prompt().unwrap().text, "foo");
     // User edits — append a char. Next Ctrl-P should restart from
     // the newest entry, not continue walking older.
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );
     assert_eq!(e.search_prompt().unwrap().text, "foox");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
     );
     assert_eq!(e.search_prompt().unwrap().text, "foo");
 }
@@ -2790,10 +2790,10 @@ fn empty_backward_search_prompt_enter_repeats_last_search() {
     let mut e = editor_with("foo bar foo baz foo");
     // Forward to col 8, then `?<CR>` should walk backward to col 0.
     run_keys(&mut e, "/foo");
-    hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(e.cursor().1, 8);
     run_keys(&mut e, "?");
-    hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(e.cursor().1, 0);
     assert_eq!(e.last_search(), Some("foo".to_string()));
 }
@@ -2802,7 +2802,7 @@ fn empty_backward_search_prompt_enter_repeats_last_search() {
 fn search_prompt_esc_cancels_but_keeps_last_search() {
     let mut e = editor_with("foo bar\nbaz");
     run_keys(&mut e, "/bar");
-    hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+    hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
     assert!(e.search_prompt().is_none());
     assert_eq!(e.last_search(), Some("bar".to_string()));
 }
@@ -2811,7 +2811,7 @@ fn search_prompt_esc_cancels_but_keeps_last_search() {
 fn search_then_n_and_shift_n_navigate() {
     let mut e = editor_with("foo bar foo baz foo");
     run_keys(&mut e, "/foo");
-    hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     // `/foo` + Enter jumps forward; we land on the next match after col 0.
     assert_eq!(e.cursor().1, 8);
     run_keys(&mut e, "n");
@@ -2825,7 +2825,7 @@ fn question_mark_searches_backward_on_enter() {
     let mut e = editor_with("foo bar foo baz");
     e.jump_cursor(0, 10);
     run_keys(&mut e, "?foo");
-    hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+    hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
     // Cursor jumps backward to the closest match before col 10.
     assert_eq!(e.cursor(), (0, 8));
 }
@@ -3243,7 +3243,7 @@ fn tab_acts_as_ctrl_i() {
     run_keys(&mut e, "G");
     let post = e.cursor();
     run_keys(&mut e, "<C-o>");
-    hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(e.cursor(), post);
 }
 
@@ -3983,7 +3983,7 @@ fn tab_inserts_literal_tab_when_noexpandtab() {
     e.settings_mut().expandtab = false;
     e.settings_mut().softtabstop = 0;
     run_keys(&mut e, "i");
-    hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "\t");
 }
 
@@ -3993,7 +3993,7 @@ fn tab_inserts_spaces_when_expandtab() {
     e.settings_mut().expandtab = true;
     e.settings_mut().tabstop = 4;
     run_keys(&mut e, "i");
-    hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "    ");
 }
 
@@ -4005,7 +4005,7 @@ fn tab_with_softtabstop_fills_to_next_boundary() {
     e.settings_mut().tabstop = 8;
     e.settings_mut().softtabstop = 4;
     run_keys(&mut e, "A"); // append at end (col 2)
-    hjkl_vim_tui::handle_key(&mut e, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+    hjkl_vim_tui::handle_key(&mut e, &KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "ab  ");
 }
 
@@ -4019,7 +4019,7 @@ fn backspace_deletes_softtab_run() {
     run_keys(&mut e, "fxi");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "x");
 }
@@ -4033,7 +4033,7 @@ fn backspace_falls_back_to_single_char_when_run_not_aligned() {
     run_keys(&mut e, "fxi");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
     );
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "    x");
 }
@@ -4122,11 +4122,11 @@ fn ctrl_r_in_insert_pastes_named_register() {
     assert_eq!(e.vim_mode(), VimMode::Insert);
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
     );
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
     );
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "hello ");
     // Cursor sits at end of inserted payload (col 6).
@@ -4135,7 +4135,7 @@ fn ctrl_r_in_insert_pastes_named_register() {
     assert_eq!(e.vim_mode(), VimMode::Insert);
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('X'), KeyModifiers::NONE),
     );
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 1), "hello X");
 }
@@ -4148,11 +4148,11 @@ fn ctrl_r_with_unnamed_register() {
     // Unnamed register paste via `"`.
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
     );
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE),
     );
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "foo foo");
 }
@@ -4163,17 +4163,17 @@ fn ctrl_r_unknown_selector_is_no_op() {
     run_keys(&mut e, "A");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
     );
     // `?` isn't a valid register selector — paste skipped, the
     // armed flag still clears so the next key types normally.
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE),
     );
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::NONE),
     );
     assert_eq!(hjkl_buffer::rope_line_str(&e.buffer().rope(), 0), "abcZ");
 }
@@ -4193,11 +4193,11 @@ fn ctrl_r_multiline_register_pastes_with_newlines() {
     run_keys(&mut e, "Go");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
     );
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
     );
     // The buffer should now contain the original 3 lines plus the
     // pasted 2-line payload (with its own newline) on its own line.
@@ -4780,7 +4780,7 @@ fn ctrl_o_runs_exactly_one_normal_command() {
     run_keys(&mut e, "i");
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
+        &KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL),
     );
     run_keys(&mut e, "dw");
     // First `dw` ran in normal; we're back in insert.
@@ -5095,13 +5095,13 @@ fn is_chord_pending_tracks_replace_state() {
     // Press `r` — engine enters Pending::Replace.
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
     );
     assert!(e.is_chord_pending(), "engine should be pending after r");
     // Press a char to complete — pending clears.
     hjkl_vim_tui::handle_key(
         &mut e,
-        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );
     assert!(
         !e.is_chord_pending(),

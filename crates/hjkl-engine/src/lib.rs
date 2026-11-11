@@ -5,7 +5,7 @@
 //! text-object operators, dot-repeat, and ex-command handling
 //! (`:s/foo/bar/g`, `:w`, `:q`, `:noh`, ...). Rendering goes through
 //! `hjkl_buffer::BufferView`; selection / gutter highlights are painted in
-//! the same single-pass as text. TUI/crossterm adapters live in the
+//! the same single-pass as text. TUI/ttyr adapters live in the
 //! `hjkl-engine-tui` companion crate.
 //!
 //! Imported wholesale from sqeel-vim with full git history. The trait

@@ -1303,7 +1303,7 @@ fn register_prefix_then_x_targets_register() {
     );
 
     // `x` — engine-handled delete-char. Feed via engine (x is not in app keymap).
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('x'));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &ck('x'));
     app.sync_viewport_from_editor();
 
     let lines = rope_to_lines_vec(&app.active_editor().buffer().rope());
@@ -1420,7 +1420,7 @@ fn count_then_dot_5_dot_repeats_five_times() {
     app.sync_viewport_from_editor();
 
     // `x` — delete 'h', establishes last_change.
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), ck('x'));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &ck('x'));
     app.sync_viewport_from_editor();
 
     let lines_after_x = rope_to_lines_vec(&app.active_editor().buffer().rope());

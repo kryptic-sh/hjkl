@@ -70,7 +70,7 @@ fn scriptin_replay_ihello_esc_inserts_text_and_returns_to_normal() {
     let mut app = App::new(None, false, None, None).unwrap();
     for c in "ihello\u{1b}".chars() {
         let key = crate::scriptin_char_to_key(c);
-        match app.handle_keypress(key) {
+        match app.handle_keypress(key.clone()) {
             KeyOutcome::FallThrough => app.dispatch_fallthrough_key(key),
             KeyOutcome::Continue | KeyOutcome::Break => {}
         }
@@ -135,8 +135,8 @@ fn ex_goto_line_100_via_dispatch() {
 #[test]
 fn dot_repeat_replays_last_change() {
     use crate::keymap_actions::AppAction;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use hjkl_buffer::{Edit, Position};
+    use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = App::new(None, false, None, None).unwrap();
     app.active_editor_mut().mutate_edit(Edit::InsertStr {
         at: Position::new(0, 0),
@@ -146,7 +146,7 @@ fn dot_repeat_replays_last_change() {
     // Set up a last_change by feeding `x` through the engine (single-char delete).
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );
     // View now "bc". Dot-repeat should delete one more char.
     app.dispatch_action(AppAction::DotRepeat { count: 1 }, 1);
@@ -160,8 +160,8 @@ fn dot_repeat_replays_last_change() {
 #[test]
 fn dot_repeat_with_count_3_replays_three_times() {
     use crate::keymap_actions::AppAction;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use hjkl_buffer::{Edit, Position};
+    use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = App::new(None, false, None, None).unwrap();
     app.active_editor_mut().mutate_edit(Edit::InsertStr {
         at: Position::new(0, 0),
@@ -170,7 +170,7 @@ fn dot_repeat_with_count_3_replays_three_times() {
     app.active_editor_mut().jump_cursor(0, 0);
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
     );
     // View "bcdef". `3.` deletes 3 more. Seed pending_count to simulate
     // the keymap layer's count-prefix accumulation.
@@ -185,8 +185,8 @@ fn dot_repeat_with_count_3_replays_three_times() {
 
 #[test]
 fn ex_goto_line_100_via_command_field_keys() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use hjkl_buffer::{Edit, Position};
+    use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
     let mut app = App::new(None, false, None, None).unwrap();
     let buf: String = (1..=120)
         .map(|n| format!("line{n}"))
@@ -1459,8 +1459,8 @@ fn set_nohlsearch_keeps_the_pattern_armed() {
 /// user is still typing it.
 #[test]
 fn set_noincsearch_suppresses_the_live_preview() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use hjkl_buffer::{Edit, Position};
+    use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let mut app = App::new(None, false, None, None).unwrap();
     app.active_editor_mut().mutate_edit(Edit::InsertStr {
@@ -1487,8 +1487,8 @@ fn set_noincsearch_suppresses_the_live_preview() {
 /// typed — the control case for the test above.
 #[test]
 fn incsearch_on_arms_the_pattern_while_typing() {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use hjkl_buffer::{Edit, Position};
+    use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let mut app = App::new(None, false, None, None).unwrap();
     app.active_editor_mut().mutate_edit(Edit::InsertStr {

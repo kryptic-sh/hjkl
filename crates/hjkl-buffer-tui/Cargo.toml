@@ -14,7 +14,7 @@ readme = "README.md"
 
 [dependencies]
 hjkl-buffer.workspace = true
-ratatui = "0.30"
+ratatui = { version = "0.30", default-features = false, features = ["std", "layout-cache", "underline-color"] }
 regex = "1"
 unicode-width = "0.2"
 

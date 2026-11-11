@@ -15,12 +15,12 @@ impl App {
     /// `is_empty` guard if they prefer — the existing guards are kept at
     /// call sites for clarity and symmetry with the surrounding flow.
     pub(crate) fn flush_pending_count_to_engine(&mut self) {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
         let digits = self.pending_count.drain_as_digits();
         for d in digits.chars() {
             hjkl_vim_tui::handle_key(
                 self.active_editor_mut(),
-                KeyEvent::new(KeyCode::Char(d), KeyModifiers::NONE),
+                &KeyEvent::new(KeyCode::Char(d), KeyModifiers::NONE),
             );
         }
     }

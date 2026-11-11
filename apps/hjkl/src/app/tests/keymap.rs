@@ -57,7 +57,7 @@ fn imap_jj_enters_normal_mode() {
     let mut app = App::new(None, false, None, None).unwrap();
     app.dispatch_ex("imap jj <Esc>");
     // Enter insert mode.
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
     assert_eq!(app.active_editor().vim_mode(), VimMode::Insert);
 
     use hjkl_keymap::{KeyCode as KmCode, KeyEvent as KmEvent, KeyModifiers as KmMods};
@@ -444,11 +444,11 @@ fn count_engine_motion_5j_moves_cursor_five_rows() {
     // 2. On 'j', replay '5' then 'j' to the engine.
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE),
     );
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
     );
 
     let (end_row, _) = app.active_editor().cursor();
@@ -467,7 +467,7 @@ fn zero_with_empty_count_is_start_of_line() {
     // Move to end of first line.
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE),
     );
     let (_, col_after_dollar) = app.active_editor().cursor();
     assert!(col_after_dollar > 0, "$ must move to end of line");
@@ -477,7 +477,7 @@ fn zero_with_empty_count_is_start_of_line() {
     assert!(app.pending_count.is_empty());
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE),
     );
     let (_, col_after_zero) = app.active_editor().cursor();
     assert_eq!(
@@ -488,7 +488,7 @@ fn zero_with_empty_count_is_start_of_line() {
 
 // ── Dispatch-path tests (engine-pending bypass + always-forward Unbound) ──
 
-/// Feed a crossterm key through the same dispatch path used by the event_loop:
+/// Feed a terminal key through the same dispatch path used by the event_loop:
 /// app pending-state reducer first, then engine-pending bypass, then trie,
 /// then engine forwarding.
 #[test]
@@ -776,11 +776,11 @@ fn gv_restores_last_visual() {
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello world\n");
     // Enter visual and select a few chars.
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('v')));
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('l')));
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('l')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('l')));
     // Exit visual.
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Esc));
     assert_eq!(
         app.active_editor().vim_mode(),
         hjkl_engine::VimMode::Normal,
@@ -2939,9 +2939,9 @@ fn visual_g_u_uppercases_selection() {
     app.active_editor_mut().jump_cursor(0, 0);
 
     // Enter visual mode and select "hello" (5 chars).
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('v')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('v')));
     for _ in 0..4 {
-        hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('l')));
+        hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('l')));
     }
     assert_eq!(
         app.active_editor().vim_mode(),
@@ -2951,8 +2951,8 @@ fn visual_g_u_uppercases_selection() {
 
     // In visual mode: 'g' goes through engine FSM (pending_state not in visual path),
     // engine sets Pending::G. Then 'U' → engine Pending::G + 'U' → Uppercase selection.
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('g')));
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('U')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('g')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('U')));
 
     // Should be back in Normal mode after visual-mode gU.
     assert_eq!(
@@ -2999,7 +2999,7 @@ fn j_motion_via_keymap_updates_window_cursor() {
 
     // Dispatch `j` through the canonical chord routing path.
     let km_ev = km_char('j');
-    app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_ev));
+    app.route_chord_key(hjkl_keymap_tui::to_ttyr(&km_ev));
 
     assert_eq!(
         win_cursor_row(&app),
@@ -3022,7 +3022,7 @@ fn k_motion_via_keymap_updates_window_cursor() {
     );
 
     let km_ev = km_char('k');
-    app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_ev));
+    app.route_chord_key(hjkl_keymap_tui::to_ttyr(&km_ev));
 
     assert_eq!(
         win_cursor_row(&app),
@@ -3046,7 +3046,7 @@ fn line_start_zero_motion_via_keymap_updates_window_cursor() {
 
     // `0` with empty pending_count routes through the keymap as LineStart.
     let km_ev = km_char('0');
-    app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_ev));
+    app.route_chord_key(hjkl_keymap_tui::to_ttyr(&km_ev));
 
     assert_eq!(
         win_cursor_col(&app),
@@ -3069,7 +3069,7 @@ fn line_end_dollar_motion_via_keymap_updates_window_cursor() {
     );
 
     let km_ev = km_char('$');
-    app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_ev));
+    app.route_chord_key(hjkl_keymap_tui::to_ttyr(&km_ev));
 
     // "hello" has 5 chars; `$` lands on the last char (index 4).
     assert_eq!(
@@ -3110,7 +3110,7 @@ fn motion_via_keymap_scrolls_viewport_to_follow_cursor() {
     // Drive `j` 20 times — well past the viewport bottom + scrolloff margin.
     let km_ev = km_char('j');
     for _ in 0..20 {
-        app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_ev));
+        app.route_chord_key(hjkl_keymap_tui::to_ttyr(&km_ev));
     }
 
     let fw = app.focused_window();
@@ -3167,7 +3167,7 @@ fn gg_via_pending_state_scrolls_viewport_to_top() {
 
     // Press g — enters AfterG pending state via keymap.
     let km_g = km_char('g');
-    app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_g));
+    app.route_chord_key(hjkl_keymap_tui::to_ttyr(&km_g));
     assert!(
         app.pending_state.is_some(),
         "after first g, pending_state must be Some(AfterG)"
@@ -3211,7 +3211,7 @@ fn count_prefix_motion_via_keymap_updates_window_cursor() {
     );
 
     let km_ev = km_char('j');
-    app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_ev));
+    app.route_chord_key(hjkl_keymap_tui::to_ttyr(&km_ev));
 
     assert_eq!(
         win_cursor_row(&app),
@@ -3311,10 +3311,10 @@ fn visual_block_h_l_extend_selection() {
 
     // Enter VisualBlock mode (Ctrl-V). Engine handles the mode entry.
     {
-        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+        use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
         hjkl_vim_tui::handle_key(
             app.active_editor_mut(),
-            CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+            &CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
         );
     }
     assert_eq!(
@@ -3327,7 +3327,7 @@ fn visual_block_h_l_extend_selection() {
     // Dispatch `l` via the canonical chord routing path 3 times.
     let km_l = km_char('l');
     for _ in 0..3 {
-        app.route_chord_key(hjkl_keymap_tui::to_crossterm(&km_l));
+        app.route_chord_key(hjkl_keymap_tui::to_ttyr(&km_l));
     }
 
     // Cursor should be at col 5 after 3 l's.
@@ -3382,10 +3382,10 @@ fn gg_via_pending_state_in_visual_mode() {
 
     // Enter Visual mode.
     {
-        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+        use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
         hjkl_vim_tui::handle_key(
             app.active_editor_mut(),
-            CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+            &CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
         );
     }
     assert_eq!(
@@ -3422,10 +3422,10 @@ fn gg_via_pending_state_in_visual_line_mode() {
 
     // Enter VisualLine mode.
     {
-        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+        use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
         hjkl_vim_tui::handle_key(
             app.active_editor_mut(),
-            CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
+            &CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
         );
     }
     assert_eq!(
@@ -3460,10 +3460,10 @@ fn gg_via_pending_state_in_visual_block_mode() {
 
     // Enter VisualBlock mode.
     {
-        use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+        use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
         hjkl_vim_tui::handle_key(
             app.active_editor_mut(),
-            CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+            &CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
         );
     }
     assert_eq!(
@@ -3509,12 +3509,12 @@ fn gg_full_sequence_in_visual_line_via_keymap() {
     app.active_editor_mut().jump_cursor(20, 0);
     app.sync_viewport_from_editor();
 
-    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+    use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
 
     // Enter VisualLine via `V`.
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
+        &CtKeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE),
     );
     assert_eq!(
         app.active_editor().vim_mode(),
@@ -3524,7 +3524,7 @@ fn gg_full_sequence_in_visual_line_via_keymap() {
 
     // First `g` — goes through Non-Normal dispatch → BeginPendingAfterG.
     let g_key = CtKeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
-    let consumed = app.route_chord_key(g_key);
+    let consumed = app.route_chord_key(g_key.clone());
     assert!(consumed, "first g must be consumed");
     assert!(
         matches!(
@@ -3561,12 +3561,12 @@ fn gg_full_sequence_in_visual_mode_via_keymap() {
     app.active_editor_mut().jump_cursor(20, 0);
     app.sync_viewport_from_editor();
 
-    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+    use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
 
     // Enter Visual via `v`.
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+        &CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
     );
     assert_eq!(
         app.active_editor().vim_mode(),
@@ -3576,7 +3576,7 @@ fn gg_full_sequence_in_visual_mode_via_keymap() {
 
     let g_key = CtKeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
 
-    let consumed = app.route_chord_key(g_key);
+    let consumed = app.route_chord_key(g_key.clone());
     assert!(consumed, "first g must be consumed");
     assert!(
         matches!(
@@ -3611,12 +3611,12 @@ fn gg_full_sequence_in_visual_block_mode_via_keymap() {
     app.active_editor_mut().jump_cursor(20, 0);
     app.sync_viewport_from_editor();
 
-    use crossterm::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
+    use ttyr::event::{KeyCode, KeyEvent as CtKeyEvent, KeyModifiers};
 
     // Enter VisualBlock via Ctrl-V.
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
+        &CtKeyEvent::new(KeyCode::Char('v'), KeyModifiers::CONTROL),
     );
     assert_eq!(
         app.active_editor().vim_mode(),
@@ -3626,7 +3626,7 @@ fn gg_full_sequence_in_visual_block_mode_via_keymap() {
 
     let g_key = CtKeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
 
-    let consumed = app.route_chord_key(g_key);
+    let consumed = app.route_chord_key(g_key.clone());
     assert!(consumed, "first g must be consumed");
     assert!(
         matches!(
@@ -4081,7 +4081,7 @@ fn p64_u_undoes_last_change() {
 
 #[test]
 fn p64_ctrl_r_redoes_after_undo() {
-    use crossterm::event::KeyModifiers;
+    use ttyr::event::KeyModifiers;
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello");
     app.active_editor_mut().jump_cursor(0, 0);
@@ -4142,7 +4142,7 @@ fn p64_big_v_enters_visual_line_mode() {
 
 #[test]
 fn p64_ctrl_v_enters_visual_block_mode() {
-    use crossterm::event::KeyModifiers;
+    use ttyr::event::KeyModifiers;
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "hello\nworld");
     app.active_editor_mut().jump_cursor(0, 0);
@@ -4218,12 +4218,12 @@ fn p64_n_repeats_search_forward() {
     for c in ['f', 'o', 'o'] {
         app.handle_search_field_key(KeyEvent::new(
             KeyCode::Char(c),
-            crossterm::event::KeyModifiers::NONE,
+            ttyr::event::KeyModifiers::NONE,
         ));
     }
     app.handle_search_field_key(KeyEvent::new(
         KeyCode::Enter,
-        crossterm::event::KeyModifiers::NONE,
+        ttyr::event::KeyModifiers::NONE,
     ));
 
     let (_, col_after_first) = app.active_editor().cursor();
@@ -4263,7 +4263,7 @@ fn p64_star_searches_word_under_cursor() {
 fn p64_ctrl_e_is_consumed_by_keymap() {
     // Verify <C-e> is consumed as ScrollLine without crashing.
     // (Viewport math depends on terminal height, which is 0 in unit tests.)
-    use crossterm::event::KeyModifiers;
+    use ttyr::event::KeyModifiers;
     let mut app = App::new(None, false, None, None).unwrap();
     let content: String = (1..=50)
         .map(|i| format!("line{i}"))
@@ -4287,7 +4287,7 @@ fn p64_ctrl_e_is_consumed_by_keymap() {
 fn p64_ctrl_y_is_consumed_by_keymap() {
     // Verify <C-y> is consumed as ScrollLine without crashing.
     // (Viewport math depends on terminal height, which is 0 in unit tests.)
-    use crossterm::event::KeyModifiers;
+    use ttyr::event::KeyModifiers;
     let mut app = App::new(None, false, None, None).unwrap();
     let content: String = (1..=50)
         .map(|i| format!("line{i}"))
@@ -4343,7 +4343,7 @@ fn p64_ctrl_o_is_consumed_by_keymap() {
     // Verify <C-o> is consumed as JumpBack without crashing.
     // Jumplist population requires engine-level navigation events; for this
     // dispatch test we just verify the key is consumed and mode stays Normal.
-    use crossterm::event::KeyModifiers;
+    use ttyr::event::KeyModifiers;
     let mut app = App::new(None, false, None, None).unwrap();
     seed_numbered_lines(&mut app, 20);
     app.active_editor_mut().jump_cursor(0, 0);
@@ -4358,7 +4358,7 @@ fn p64_ctrl_o_is_consumed_by_keymap() {
 
 #[test]
 fn p64_ctrl_o_jumps_back_with_recorded_jump() {
-    use crossterm::event::KeyModifiers;
+    use ttyr::event::KeyModifiers;
     let mut app = App::new(None, false, None, None).unwrap();
     seed_numbered_lines(&mut app, 20);
 
@@ -4414,7 +4414,7 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
     for c in ['H', 'e', 'l', 'l', 'o'] {
         hjkl_vim_tui::handle_key(
             app.active_editor_mut(),
-            KeyEvent::new(KeyCode::Char(c), crossterm::event::KeyModifiers::NONE),
+            &KeyEvent::new(KeyCode::Char(c), ttyr::event::KeyModifiers::NONE),
         );
     }
     app.sync_after_engine_mutation();
@@ -4422,7 +4422,7 @@ fn p64_macro_qa_insert_hello_esc_q_at_a_roundtrip() {
     // `<Esc>` — exit Insert.
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Esc, ttyr::event::KeyModifiers::NONE),
     );
     app.sync_after_engine_mutation();
     assert_eq!(
@@ -4853,7 +4853,7 @@ fn p65_ctrl_o_one_shot_normal_round_trip() {
     // path because vim_mode() == Normal after <C-o>.
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
     );
     app.sync_after_engine_mutation();
 
@@ -4896,19 +4896,19 @@ fn p65_ctrl_r_register_paste() {
     // Simplest: yank the word via engine handle_key ("ayy").
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('"'), KeyModifiers::NONE),
     );
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
     );
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
     );
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
     );
     app.sync_after_engine_mutation();
 
@@ -5060,7 +5060,7 @@ fn e_then_jjj_preserves_column_across_empty_line() {
     macro_rules! dispatch_with_sync {
         ($app:expr, $key:expr) => {{
             $app.sync_viewport_to_editor();
-            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), &$key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -5111,7 +5111,7 @@ fn j_through_empty_line_preserves_column_app_level() {
     // Dispatch WITHOUT pre-keypress sync_to — that is the new contract.
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), &$key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -5140,7 +5140,7 @@ fn j_through_short_line_preserves_column_app_level() {
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), &$key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -5168,7 +5168,7 @@ fn gj_through_empty_line_preserves_column_app_level() {
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), &$key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -5199,7 +5199,7 @@ fn gk_through_empty_line_preserves_column_app_level() {
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), &$key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -5232,7 +5232,7 @@ fn search_n_preserves_column_through_event_loop() {
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), &$key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -5264,7 +5264,7 @@ fn mark_jump_resets_sticky_through_event_loop() {
 
     macro_rules! dk {
         ($app:expr, $key:expr) => {{
-            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), $key);
+            hjkl_vim_tui::handle_key(&mut $app.active_editor_mut(), &$key);
             $app.sync_viewport_from_editor();
         }};
     }
@@ -5332,8 +5332,8 @@ fn split_then_independent_cursors() {
     }
 
     // Win 0 is focused. Move cursor down to row 2.
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('j')));
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('j')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('j')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('j')));
     app.sync_viewport_from_editor();
     let (row0, _) = app.active_editor().cursor();
     assert_eq!(row0, 2, "win0 cursor should be at row 2");
@@ -5379,11 +5379,11 @@ fn split_then_edit_in_one_window_snapshot_stable_in_other() {
     );
 
     // Win0 focused — make an edit (insert a char).
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('X')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('X')));
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Esc, ttyr::event::KeyModifiers::NONE),
     );
     app.sync_viewport_from_editor();
 
@@ -5429,10 +5429,10 @@ fn edit_in_one_window_rebases_sibling_cursor_below() {
 
     // Win0 (focused, row 0): `O` opens a line above, inserting a row at the top
     // and pushing every existing row — including win1's cursor — down by one.
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('O')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('O')));
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Esc, ttyr::event::KeyModifiers::NONE),
     );
     app.sync_after_engine_mutation();
 
@@ -5636,7 +5636,7 @@ fn parse_f5_errors() {
 }
 
 /// `<S-Tab>` produces Tab key with the SHIFT flag preserved — on non-char key
-/// codes SHIFT is distinguishing (it is what crossterm `BackTab` arrives as).
+/// codes SHIFT is distinguishing (it is what the terminal's `BackTab` arrives as).
 #[test]
 fn parse_shift_tab_produces_shifted_tab() {
     use super::super::keymap::parse_key_sequence;
@@ -5655,7 +5655,7 @@ fn parse_shift_tab_produces_shifted_tab() {
 
 /// Regression: `<S-Tab>` and `<Tab>` must not parse to the same `Input`.
 /// They used to be identical, so an `<S-Tab>` mapping hijacked plain Tab and
-/// could never match a real Shift-Tab (crossterm `BackTab` → Tab + SHIFT).
+/// could never match a real Shift-Tab (the terminal's `BackTab` → Tab + SHIFT).
 #[test]
 fn parse_shift_tab_differs_from_plain_tab() {
     use super::super::keymap::{input_to_km_event, parse_key_sequence};
@@ -5669,7 +5669,7 @@ fn parse_shift_tab_differs_from_plain_tab() {
     );
 
     // The stored lhs must round-trip to the same km event the runtime produces
-    // for crossterm BackTab (hjkl_keymap_tui::from_crossterm → Tab + SHIFT).
+    // for the terminal's BackTab (hjkl_keymap_tui::from_ttyr → Tab + SHIFT).
     let ev = input_to_km_event(shifted[0]);
     assert_eq!(ev.code, hjkl_keymap::KeyCode::Tab);
     assert!(

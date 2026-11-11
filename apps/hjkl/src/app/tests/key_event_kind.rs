@@ -8,10 +8,10 @@
 //! CI runs, not only on a Windows console.
 
 use super::*;
-use crossterm::event::KeyEventKind;
+use ttyr::event::KeyEventKind;
 
 fn with_kind(code: KeyCode, kind: KeyEventKind) -> KeyEvent {
-    KeyEvent::new_with_kind(code, KeyModifiers::NONE, kind)
+    KeyEvent::new(code, KeyModifiers::NONE).with_kind(kind)
 }
 
 /// One physical keystroke as the Windows console delivers it.

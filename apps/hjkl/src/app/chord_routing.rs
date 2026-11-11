@@ -1,7 +1,7 @@
-//! Chord routing — converts raw crossterm key events into app actions or
+//! Chord routing — converts raw terminal key events into app actions or
 //! engine key events, driving the pending-state FSM and keymap trie.
 //!
-//! Owns: [`hjkl_keymap_tui::to_crossterm`], [`App::replay_to_engine`],
+//! Owns: [`hjkl_keymap_tui::to_ttyr`], [`App::replay_to_engine`],
 //! [`App::route_chord_key`], [`App::route_chord_key_inner`].
 
 use super::App;
@@ -53,15 +53,15 @@ pub struct MacroReplayState {
 }
 
 impl App {
-    /// Replay a slice of `hjkl_keymap::KeyEvent`s to the engine via crossterm
-    /// `KeyEvent`s. Each keymap event is converted back to a crossterm event
+    /// Replay a slice of `hjkl_keymap::KeyEvent`s to the engine via ttyr
+    /// `KeyEvent`s. Each keymap event is converted back to a ttyr event
     /// and forwarded to `editor.handle_key`.
     ///
     /// Moved here from `event_loop.rs` (option A) for testability.
     pub(crate) fn replay_to_engine(&mut self, events: &[hjkl_keymap::KeyEvent]) {
         for km_ev in events {
-            let ct_ev = hjkl_keymap_tui::to_crossterm(km_ev);
-            hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_ev);
+            let ct_ev = hjkl_keymap_tui::to_ttyr(km_ev);
+            hjkl_vim_tui::handle_key(self.active_editor_mut(), &ct_ev);
         }
     }
 
@@ -86,9 +86,9 @@ impl App {
                 // Step 2b is gated on `pending_state.is_none()` so it is
                 // skipped automatically, preventing re-entry into the explorer
                 // keymap.
-                let ct_ev = hjkl_keymap_tui::to_crossterm(&ev);
-                if !self.route_chord_key(ct_ev) {
-                    hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_ev);
+                let ct_ev = hjkl_keymap_tui::to_ttyr(&ev);
+                if !self.route_chord_key(ct_ev.clone()) {
+                    hjkl_vim_tui::handle_key(self.active_editor_mut(), &ct_ev);
                 }
             } else {
                 // No chord in flight — go through the global app_keymap trie
@@ -128,7 +128,7 @@ impl App {
     /// does `sync_after_engine_mutation` (including on abort — vim
     /// semantics: the buffer keeps whatever state the replay reached).
     fn run_macro_replay(&mut self, reg: char, count: usize) {
-        use crossterm::event::KeyCode;
+        use ttyr::event::KeyCode;
         debug_assert!(
             self.macro_replay.is_none(),
             "run_macro_replay must only start at top level"
@@ -183,15 +183,15 @@ impl App {
                     break 'reps;
                 }
                 let ct_key = engine_input_to_key_event(input);
-                if ct_key.code == KeyCode::Null {
+                if ct_key.key == KeyCode::Null {
                     continue;
                 }
                 // A replayed `/`, `:` or `!` opened the app's prompt: the
                 // keys after it are typed there, as live ones are.
                 if self.prompt_is_open() {
                     self.feed_open_prompt(ct_key);
-                } else if !self.route_chord_key(ct_key) {
-                    hjkl_vim_tui::handle_key(self.active_editor_mut(), ct_key);
+                } else if !self.route_chord_key(ct_key.clone()) {
+                    hjkl_vim_tui::handle_key(self.active_editor_mut(), &ct_key);
                 }
                 // A nested `@{reg}` splice may have tripped a cap — abort the
                 // entire replay chain (vim stops the whole replay on error).
@@ -291,7 +291,7 @@ impl App {
     ///   - `:` → `AppAction::OpenCommandPrompt`
     ///   - `/` / `?` → `AppAction::OpenSearchPrompt`
     ///   - `<C-^>` / `<C-6>` → `AppAction::BufferAlt`
-    pub(crate) fn route_chord_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+    pub(crate) fn route_chord_key(&mut self, key: ttyr::event::KeyEvent) -> bool {
         // Snapshot recording state BEFORE dispatch so we can detect the moment
         // a new recording starts (StartMacroRecord arm) — the register-name key
         // that triggered the start is a bookkeeping key and must NOT be recorded.
@@ -307,7 +307,7 @@ impl App {
             self.pending_state,
             Some(hjkl_vim::PendingState::PlayMacroTarget { .. })
         );
-        let consumed = self.route_chord_key_inner(key);
+        let consumed = self.route_chord_key_inner(key.clone());
         // Recorder hook: append the consumed key to the active macro recording
         // (if any) so replays reproduce the same sequence. Skip:
         //   1. When not consumed (key was not processed).
@@ -327,7 +327,7 @@ impl App {
             && !just_started_recording
             && !register_name_of_play
         {
-            let input = hjkl_engine_tui::crossterm_to_input(key);
+            let input = hjkl_engine_tui::ttyr_to_input(&key);
             if input.key != hjkl_engine::Key::Null {
                 self.active_editor_mut().record_input(input);
             }
@@ -337,9 +337,9 @@ impl App {
 
     /// Inner implementation of `route_chord_key`. Returns `true` if the key
     /// was consumed. The public wrapper adds the recorder hook on top.
-    fn route_chord_key_inner(&mut self, key: crossterm::event::KeyEvent) -> bool {
-        use crossterm::event::KeyCode;
+    fn route_chord_key_inner(&mut self, key: ttyr::event::KeyEvent) -> bool {
         use hjkl_vim::{Key as VimKey, Outcome};
+        use ttyr::event::KeyCode;
 
         // (1) pending_state reducer — fires in all modes when state is Some.
         // Must precede the Non-Normal trie dispatch so the second key of a
@@ -352,9 +352,9 @@ impl App {
         if matches!(
             self.pending_state,
             Some(hjkl_vim::PendingState::RecordMacroTarget)
-        ) && key.modifiers == crossterm::event::KeyModifiers::NONE
+        ) && key.modifiers == ttyr::event::KeyModifiers::NONE
         {
-            let kind = match key.code {
+            let kind = match key.key {
                 KeyCode::Char(':') => Some(crate::app::CmdLineKind::Ex),
                 KeyCode::Char('/') => Some(crate::app::CmdLineKind::SearchForward),
                 KeyCode::Char('?') => Some(crate::app::CmdLineKind::SearchBackward),
@@ -368,7 +368,7 @@ impl App {
         }
 
         if let Some(state) = self.pending_state {
-            let vim_key = match key.code {
+            let vim_key = match key.key {
                 KeyCode::Char(c) => Some(VimKey::Char(c)),
                 KeyCode::Esc => Some(VimKey::Esc),
                 KeyCode::Enter => Some(VimKey::Enter),
@@ -847,7 +847,7 @@ impl App {
         // the reducer's commit arm above, not re-fire the trie.
         if self.pending_state.is_none()
             && self.active_editor().vim_mode() != hjkl_engine::VimMode::Normal
-            && let Some(km_ev) = crate::keymap_translate::from_crossterm(&key)
+            && let Some(km_ev) = crate::keymap_translate::from_ttyr(&key)
             && let Some(km_mode) = super::current_km_mode(self)
         {
             // Visual-mode count prefix: the digit buffer is populated in
@@ -881,7 +881,7 @@ impl App {
             && self.active_editor().vim_mode() == hjkl_engine::VimMode::Normal
             && !self.active_editor().is_chord_pending()
             && self.app_keymap.pending(hjkl_vim::Mode::Normal).is_empty()
-            && let Some(km_ev) = crate::keymap_translate::from_crossterm(&key)
+            && let Some(km_ev) = crate::keymap_translate::from_ttyr(&key)
         {
             use hjkl_keymap::KeyResolve;
             let mode = hjkl_vim::Mode::Normal;
@@ -916,7 +916,7 @@ impl App {
         // call and set up the correct state for dispatch_keymap to read.
         if self.pending_state.is_none()
             && self.active_editor().vim_mode() == hjkl_engine::VimMode::Normal
-            && let Some(km_ev) = crate::keymap_translate::from_crossterm(&key)
+            && let Some(km_ev) = crate::keymap_translate::from_ttyr(&key)
         {
             let engine_pending = self.active_editor().is_chord_pending();
             if !engine_pending {

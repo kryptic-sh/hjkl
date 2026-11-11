@@ -81,7 +81,7 @@ fn palette_ctrl_c_cancels_without_quitting_app() {
     type_str(&mut app, "wq");
     let cc = ctrl_key('c');
     if app.command_field.is_some()
-        && cc.code == KeyCode::Char('c')
+        && cc.key == KeyCode::Char('c')
         && cc.modifiers.contains(KeyModifiers::CONTROL)
     {
         app.command_field = None;
@@ -991,7 +991,7 @@ fn running_another_command_after_a_preview_restores_the_theme() {
 /// <C-c> abandons the prompt outright; the preview goes with it.
 #[test]
 fn ctrl_c_on_the_prompt_restores_the_pre_preview_theme() {
-    use crossterm::event::{KeyEvent, KeyModifiers};
+    use ttyr::event::{KeyEvent, KeyModifiers};
     let mut app = App::new(None, false, None, None).unwrap();
     let before = app.colorscheme.clone();
     preview_a_different_scheme(&mut app);

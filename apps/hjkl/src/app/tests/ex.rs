@@ -165,14 +165,14 @@ fn undo_to_saved_state_clears_dirty() {
     std::fs::write(&path, "alpha\nbravo\n").unwrap();
     let mut app = App::new(Some(path.clone()), false, None, None).unwrap();
     assert!(!app.active().dirty);
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('X')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('X')));
     if app.active_editor_mut().take_dirty() {
         app.active_mut().refresh_dirty_against_saved();
     }
     assert!(app.active().dirty, "edit should mark dirty");
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Esc));
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('u')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Esc));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('u')));
     if app.active_editor_mut().take_dirty() {
         app.active_mut().refresh_dirty_against_saved();
     }
@@ -2624,7 +2624,7 @@ fn recovery_y_loads_swap_body() {
     assert!(app.pending_recovery.is_some(), "must be in recovery state");
 
     // Simulate pressing 'y'.
-    app.handle_recovery_key(key(crossterm::event::KeyCode::Char('y')));
+    app.handle_recovery_key(key(ttyr::event::KeyCode::Char('y')));
     assert!(
         app.pending_recovery.is_none(),
         "pending_recovery must be cleared after 'y'"
@@ -2680,7 +2680,7 @@ fn recovery_q_on_sole_slot_aborts_with_message_and_resets_to_scratch() {
     assert_eq!(app.slots.len(), 1, "this test targets the sole-slot launch");
 
     // Simulate pressing 'q'.
-    app.handle_recovery_key(key(crossterm::event::KeyCode::Char('q')));
+    app.handle_recovery_key(key(ttyr::event::KeyCode::Char('q')));
 
     assert!(
         app.pending_recovery.is_none(),

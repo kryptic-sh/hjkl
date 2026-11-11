@@ -271,11 +271,11 @@ fn gg_scrolls_window_viewport_to_top() {
     // second `g` triggers the gg motion (cursor → top + auto-scroll).
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
     );
     hjkl_vim_tui::handle_key(
         app.active_editor_mut(),
-        KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+        &KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
     );
     // The Unbound replay path in event_loop.rs syncs the editor's
     // auto-scrolled viewport back to the focused window.
@@ -314,7 +314,7 @@ fn plus_slash_argv_scrolls_window_viewport_to_match() {
     }
     // Set viewport_height atomic via a fake App + apply_viewport_height
     // before the search runs. App::new builds the slot with
-    // crossterm::terminal::size() — under tests that may return 0,
+    // ttyr::terminal::size() — under tests that may return 0,
     // disabling scrolloff. Pre-set the atomic by dropping in via the
     // test helper.
     // Easier path: build a small file where the first match is on row 5
@@ -323,7 +323,7 @@ fn plus_slash_argv_scrolls_window_viewport_to_match() {
     let (row, _col) = app.active_editor().cursor();
     assert_eq!(row, 80, "+/target must move cursor to row 80");
     // The window's stored top_row should reflect the editor's scrolled
-    // viewport. With crossterm::terminal::size returning 0 in test
+    // viewport. With ttyr::terminal::size returning 0 in test
     // contexts the scroll math is a no-op, so set the height atomic
     // and re-run ensure_cursor_in_scrolloff to verify the scroll path.
     app.active_editor_mut().set_viewport_height(20);
@@ -1269,7 +1269,7 @@ fn lsp_request_works_with_relative_filename() {
 fn completion_response_opens_popup() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Enter insert mode so the guard passes.
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
     // Give the buffer a filename so buffer_id matches.
     app.active_mut().filename = Some(tmp_path("test.rs"));
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
@@ -1286,7 +1286,7 @@ fn completion_response_opens_popup() {
 #[test]
 fn completion_response_empty_no_popup() {
     let mut app = App::new(None, false, None, None).unwrap();
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
     app.active_mut().filename = Some(tmp_path("test.rs"));
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
 
@@ -1308,7 +1308,7 @@ fn completion_response_empty_no_popup() {
 fn completion_request_pending_routes_to_handler() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Simulate a pending completion request.
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
     app.active_mut().filename = Some(tmp_path("test.rs"));
     let buffer_id = app.active().buffer_id as hjkl_lsp::BufferId;
 
@@ -1428,7 +1428,7 @@ fn accept_completion_inserts_selected_item() {
     let mut app = App::new(None, false, None, None).unwrap();
     // Seed buffer with some text and enter insert mode at col 0.
     seed_buffer(&mut app, "fn foo");
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
     // Open popup anchored at col 0 row 0 with two items.
     let items = vec![make_completion_item("hello"), make_completion_item("world")];
     app.completion = Some(crate::completion::Completion::new(0, 0, items));
@@ -1528,7 +1528,7 @@ fn accept_completion_records_content_edit_for_resync() {
     // stale parse-error / diagnostic gutter signs linger.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "fn foo");
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
     app.completion = Some(crate::completion::Completion::new(
         0,
         0,
@@ -1548,7 +1548,7 @@ fn accept_function_completion_places_cursor_in_parens() {
     // Bare name "foo" with kind=Function → inserts "foo()" with cursor between parens.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "");
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
 
     // Anchor at col 0, row 0; insert_text = "foo", kind = Function.
     let mut item = crate::completion::CompletionItem::new("foo");
@@ -1578,7 +1578,7 @@ fn accept_function_completion_with_existing_parens() {
     // insert_text already contains "bar()" → cursor placed between existing parens.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "");
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
 
     let mut item = crate::completion::CompletionItem::new("bar()");
     item.kind = crate::completion::CompletionKind::Method;
@@ -1608,7 +1608,7 @@ fn accept_variable_completion_cursor_at_end() {
     // kind=Variable → no parens added, cursor at end of inserted text.
     let mut app = App::new(None, false, None, None).unwrap();
     seed_buffer(&mut app, "");
-    hjkl_vim_tui::handle_key(app.active_editor_mut(), key(KeyCode::Char('i')));
+    hjkl_vim_tui::handle_key(app.active_editor_mut(), &key(KeyCode::Char('i')));
 
     let mut item = crate::completion::CompletionItem::new("x");
     item.kind = crate::completion::CompletionKind::Variable;

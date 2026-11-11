@@ -14,8 +14,7 @@ readme = "README.md"
 
 [dev-dependencies]
 proptest = "1"
-crossterm = { version = "0.29.0", features = ["event-stream"] }
-ratatui = { version = "0.30" }
+ratatui = { version = "0.30", default-features = false, features = ["std", "layout-cache", "underline-color"] }
 
 [dependencies]
 hjkl-engine.workspace = true

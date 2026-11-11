@@ -1,5 +1,5 @@
 //! Keymap construction — builds the app-level chord trie and provides the
-//! engine-input-to-crossterm translation used by macro replay.
+//! engine-input-to-terminal-key translation used by macro replay.
 //!
 //! Owns: [`build_app_keymap`], [`engine_input_to_key_event`].
 
@@ -453,8 +453,8 @@ pub fn build_app_keymap(leader: char) -> Keymap<AppAction, hjkl_vim::Mode> {
         ("<C-j>", NavDir::Down, "focus down or tmux down"),
         ("<C-k>", NavDir::Up, "focus up or tmux up"),
         ("<C-l>", NavDir::Right, "focus right or tmux right"),
-        // <C-BS> is the alias for <C-h> delivered by some terminals (crossterm
-        // decodes it as Backspace+CONTROL rather than Char('h')+CONTROL).
+        // <C-BS> is the alias for <C-h> delivered by some terminals, which
+        // send Ctrl+Backspace where the user meant Ctrl+H.
         ("<C-BS>", NavDir::Left, "focus left or tmux left"),
     ] {
         if let Err(e) = km.add(Mode::Normal, chord, AppAction::TmuxNavigate(dir), desc) {
@@ -825,16 +825,16 @@ pub fn build_explorer_keymap(leader: char) -> Keymap<AppAction, hjkl_vim::Mode> 
     km
 }
 
-/// Translate an `hjkl_engine::Input` back to a `crossterm::event::KeyEvent`
+/// Translate an `hjkl_engine::Input` back to a `ttyr::event::KeyEvent`
 /// for re-feeding through `route_chord_key` during macro replay.
 ///
-/// This is the inverse of `Editor::handle_key`'s `crossterm_to_input` path.
+/// This is the inverse of `hjkl_engine_tui::ttyr_to_input`.
 /// Modifier flags (ctrl, alt, shift) are preserved. Keys that have no
-/// crossterm equivalent (e.g. `Key::Null`, `Key::PageUp` without a standard
+/// terminal equivalent (e.g. `Key::Null`, `Key::PageUp` without a standard
 /// mapping) produce a `KeyCode::Null` sentinel that the replay loop skips.
-pub fn engine_input_to_key_event(input: hjkl_engine::Input) -> crossterm::event::KeyEvent {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+pub fn engine_input_to_key_event(input: hjkl_engine::Input) -> ttyr::event::KeyEvent {
     use hjkl_engine::Key;
+    use ttyr::event::{KeyCode, KeyEvent, KeyModifiers};
 
     let code = match input.key {
         Key::Char(c) => KeyCode::Char(c),
