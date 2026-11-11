@@ -85,7 +85,7 @@ mimalloc = { version = "0.1", default-features = false }
 ahash = { version = "0.8", default-features = false, features = ["std"] }
 ropey = "1.6"
 memchr = "2"
-ttyr = { version = "0.1.0", features = ["ratatui"] }
+ttyr = { version = "0.2.0", features = ["ratatui"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

@@ -34,7 +34,7 @@ hjkl-vim-tui = { path = "../../hjkl-vim-tui" }
 hjkl-buffer = { path = "../../hjkl-buffer" }
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
-ttyr = { version = "0.1.0" }
+ttyr = "0.2.0"
 
 [[bin]]
 name = "handle_key"

@@ -11,7 +11,7 @@ patch bumps.
 ### Changed
 
 - **Breaking:** hjkl reads and draws the terminal through
-  [ttyr](https://crates.io/crates/ttyr) 0.1 in place of crossterm. The public
+  [ttyr](https://crates.io/crates/ttyr) 0.2 in place of crossterm. The public
   key types of `hjkl-engine-tui`, `hjkl-keymap-tui`, `hjkl-picker-tui` and
   `hjkl-vim-tui` are now ttyr's: `hjkl_engine_tui::KeyEvent` re-exports
   `ttyr::event::KeyEvent`; `crossterm_to_input` is `ttyr_to_input(&KeyEvent)`;

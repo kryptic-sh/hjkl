@@ -79,6 +79,8 @@ fn tt_code_to_keymap(code: TtKeyCode) -> Option<KeyCode> {
         | TtKeyCode::KeypadBegin
         | TtKeyCode::Media(_)
         | TtKeyCode::Modifier(_) => return None,
+        // Keys a later ttyr adds have no keymap name yet.
+        _ => return None,
     })
 }
 

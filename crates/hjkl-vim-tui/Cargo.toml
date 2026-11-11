@@ -21,7 +21,7 @@ hjkl-buffer.workspace = true
 [dev-dependencies]
 proptest = "1"
 ratatui = { version = "0.30", default-features = false, features = ["std", "layout-cache", "underline-color"] }
-ttyr = { version = "0.1.0" }
+ttyr = "0.2.0"
 
 [package.metadata.docs.rs]
 all-features = true
