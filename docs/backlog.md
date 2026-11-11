@@ -853,9 +853,14 @@ completion.
    shifted letter arrives already as its capital without Shift, so only keys
    whose shifted character was not reported (Alt+Shift+1 under kitty flag 1)
    still differ; phase 1 of
-   [the kitty keyboard plan](./plan/01-kitty-keyboard.md) decides them. Unifying
-   is a behavior decision (which rule wins, and any bindings that depend on
-   `<S-x>` for non-letters must be checked), not a mechanical fix. Tidy §11 #9
+   [the kitty keyboard plan](./plan/01-kitty-keyboard.md) decides them. ttyr 0.2
+   offers one rule for both paths: `KeyEvent::chord()` / `KeyChord::new` give a
+   key and modifiers normalised across encodings, with documented gaps (Shift on
+   a symbol kept as written; Ctrl+Shift+digit differs between kitty flags 1 and
+   4). Adopting it would replace `from_ttyr`'s Shift rule and
+   `chord_event_to_input`'s, and is the same behavior decision. Unifying is a
+   behavior decision (which rule wins, and any bindings that depend on `<S-x>`
+   for non-letters must be checked), not a mechanical fix. Tidy §11 #9
    (`truncate_desc` ≡ `truncate_to_width`) was declined per its own
    recommendation — only worth sharing if a third consumer appears. _All other
    items from the 2026-08-10 sweep are closed — see the §7 session entry below._
