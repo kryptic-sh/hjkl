@@ -79,8 +79,9 @@ Read in the tree on 2026-11-11, after phase 3:
    `CSI = flags ; 1 u` (ttyr's `SetKeyboardEnhancementFlags`) inside the pushed
    level so it does not grow the stack.
 3. **Move from crossterm to `ttyr`.** Done 2026-11-11, on ttyr from crates.io
-   (0.2.0 since the same day). Left over, in the backlog: Windows VT input
-   (§1.14 #3), and whether to delete `hjkl-kitty` (Decisions below).
+   (0.2.0 since the same day). Windows VT input followed with the ttyr release
+   that reads win32 records inside a bracketed paste. Left over: whether to
+   delete `hjkl-kitty` (Decisions below).
 4. **Push all five flags** once phase 3 can read what they produce. Flag 8 turns
    Enter / Tab / Backspace and plain text into escape codes, so the insert path
    must take text from flag 16's associated text (or the key) rather than

@@ -865,9 +865,10 @@ fn main() -> Result<()> {
 }
 
 /// Puts the terminal in the state the editor runs in: raw mode, the
-/// alternate screen, focus reports, bracketed paste, mouse capture when
-/// `mouse` is on, and the kitty keyboard flags, each recorded by ttyr's
-/// restore guard. Returns the ratatui terminal drawing to stdout.
+/// alternate screen, focus reports, bracketed paste, on Windows VT input and
+/// win32-input-mode, mouse capture when `mouse` is on, and the kitty
+/// keyboard flags, each recorded by ttyr's restore guard. Returns the
+/// ratatui terminal drawing to stdout.
 fn enter_terminal(mouse: bool, reader: &mut Reader) -> io::Result<Terminal<TtyrBackend<Stdout>>> {
     terminal::enable_raw_mode()?;
     let mut out = stdout();
@@ -880,6 +881,15 @@ fn enter_terminal(mouse: bool, reader: &mut Reader) -> io::Result<Terminal<TtyrB
         Mode::FocusChange,
         Mode::BracketedPaste,
     ] {
+        terminal::enable(&mut out, mode)?;
+    }
+    // The Windows console's key records carry no paste, so a paste would
+    // arrive as keystrokes. VT input hands over the terminal's bytes
+    // instead, where bracketed paste comes through; win32-input-mode keeps
+    // keys the bytes alone cannot tell apart (Tab and <C-i>, Esc and <C-[>)
+    // distinct, and a host that does not know it ignores it.
+    #[cfg(windows)]
+    for mode in [Mode::VirtualTerminalInput, Mode::Win32Input] {
         terminal::enable(&mut out, mode)?;
     }
     if mouse {

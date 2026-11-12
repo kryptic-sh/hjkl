@@ -946,46 +946,11 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    feeds it the German AltGr+Q record). That the real console sends that record
    shape is documented, not observed: it needs a person typing on a non-US
    layout (AltGr+Q in Insert mode on German should insert `@`). Then delete this
-   entry. With VT input on (#3) AltGr characters arrive as plain text instead,
-   so this path only matters while records are read.
-3. **Bracketed paste never arrives on Windows — waiting on a ttyr release.**
-   hjkl reads the console's key records (ttyr's console reader, as crossterm's
-   did), which carry no `Event::Paste`, so pastes arrive as keystrokes:
-   autoindent/autopair cascade, and `App::handle_paste`'s CRLF normalization is
-   bypassed. The fix is `Mode::VirtualTerminalInput` and `Mode::Win32Input`
-   (with `Mode::BracketedPaste`, already on) in `enter_terminal` (`main.rs`),
-   `#[cfg(windows)]`. What the ttyr session measured on 2026-11-13 (Windows 11
-   build 26300), by host:
-   - **System ConPTY under tmxr 0.15, VT input + `?2004`:** a paste arrives as
-     one `Event::Paste`, its newlines as `\r` (`handle_paste` turns a lone `\r`
-     into `\n`).
-   - **Same host, `?9001` (win32-input-mode, ttyr's `Mode::Win32Input`) on
-     too:** keys arrive as win32-input-mode records (`KeyEncoding::Windows`,
-     with releases), and a paste stays bracketed, but ConPTY writes the pasted
-     newline as Enter's win32 records inside the brackets. ttyr 0.2.0 kept those
-     raw in the paste text; ttyr `main` decodes them ("read win32 records inside
-     a bracketed paste"), so this needs the ttyr release after 0.2.0.
-   - **VT input off (what hjkl runs today):** a paste arrives as key presses and
-     releases, never bracketed.
-   - **Plain conhost (no ConPTY):** `?9001` is ignored silently, so VT input
-     gives plain VT bytes there; nothing breaks.
-   - **Kitty `DISAMBIGUATE_ESCAPE_CODES`** (which `enter_terminal` pushes) was
-     answered under tmxr, by tmxr. Windows Terminal: not measured, believed not
-     to implement it.
-   - **Windows Terminal itself: not measured**, because a paste needs a person.
-     It hosts the same ConPTY, so the results above are expected to hold. What
-     turning VT input on changes: focus comes only from `?1004`
-     (`Mode::FocusChange`, already on); without `?9001` or kitty, Tab and
-     `<C-i>`, Esc and `<C-[>`, Enter and `<C-m>` are the same bytes, and hjkl
-     binds `<C-i>` for the jump list, hence `Mode::Win32Input` too; AltGr
-     characters arrive through the win32 records (#2's path) or, where `?9001`
-     is ignored, as plain text; and a lost paste end marker swallows keys up to
-     ttyr's paste cap. To do: move to the ttyr release with the paste fix, turn
-     the modes on, and have a person paste multi-line text into Insert mode in
-     Windows Terminal. A failure while setting up modes is not a stuck terminal:
-     ttyr's guard records each mode as it is turned on, and its panic hook and
-     `restore` undo them.
-4. **Windows clipboard read keeps CRLF — confirmed by code read.**
+   entry. With VT input and win32-input-mode on (Windows, since the paste fix)
+   keys arrive as win32-input-mode records, which ttyr runs through the same
+   `alt_gr_typed`; where a host ignores win32-input-mode (plain conhost) AltGr
+   characters arrive as plain text.
+3. **Windows clipboard read keeps CRLF — confirmed by code read.**
    `read_clipboard` (`apps/hjkl/src/host.rs`) passes `CF_UNICODETEXT` through,
    so `"+p` of text copied from a Windows app inserts rows ending in `\r`;
    `set_text` writes LF-only. `write_clipboard` ignores the error. Decision
@@ -998,7 +963,7 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    hrdr's own probe the same day did see every read fail while another process
    held the clipboard, so `ClipboardOpen::new` now retries briefly
    (`OPEN_ATTEMPTS`, 2026-10-20); the CRLF decision above is still open.
-5. **Atomic save fails while another process holds the file — confirmed
+4. **Atomic save fails while another process holds the file — confirmed
    2026-10-18, NEEDS A DECISION.** `write_atomic_with` (`hjkl-fs` `atomic.rs`)
    falls back to a non-atomic write only on `CrossesDevices`. Measured on
    Windows 11 with a throwaway test: while the target is open with share mode
@@ -1009,7 +974,7 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    long-lived holder); fall back to an in-place write on `PermissionDenied`
    (always saves, but loses atomicity — a crash mid-write truncates the file);
    or keep failing and say why in the error message.
-6. **Replacing a loaded grammar DLL — suspected.** `publish_path` renames over
+5. **Replacing a loaded grammar DLL — suspected.** `publish_path` renames over
    `<name>.dll`; Windows refuses while another hjkl process has it loaded. Only
    on a grammar revision bump with two instances running.
 
@@ -1034,6 +999,12 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
 - The `~\` completion fix (`expand_path_prefix`) is red/green only on a Windows
   leg: on Unix `\` is a filename character, so the tests pin the literal case.
 - Not exercised: a non-US keyboard layout, conhost, ARM64 Windows.
+- Windows paste (VT input + win32-input-mode + bracketed paste in
+  `enter_terminal`) was driven end to end only through the system ConPTY under
+  tmxr 0.15 (`tmxr paste-buffer -p` of multi-line Rust into Insert mode, saved
+  byte for byte; the same paste without the modes autoindented and auto-closed
+  every line). Windows Terminal hosts the same ConPTY but was not run, and a
+  paste whose end marker is lost swallows keys up to ttyr's paste cap.
 - `hjkl-clipboard`'s Windows backend (§8 #19 fix, 2026-10-18): the
   allocate-before-`EmptyClipboard` order is enforced by `replace_clipboard`
   taking already-built `GlobalBuffer`s, but no test observes an allocation

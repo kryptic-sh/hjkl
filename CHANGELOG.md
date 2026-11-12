@@ -32,6 +32,11 @@ patch bumps.
 
 ### Fixed
 
+- On Windows, a paste arrives as one paste instead of as typed keys, so it is
+  inserted as written: before, each pasted line was autoindented and its
+  brackets auto-closed, so pasted code came out mangled. hjkl now turns on the
+  console's VT input, which carries bracketed paste, and win32-input-mode, which
+  keeps keys such as Tab and `<C-i>` apart under it.
 - From a terminal with the kitty keyboard protocol, a shifted letter typed with
   Alt or Ctrl reads as the capital letter: Alt+Shift+a is `<M-A>`, no longer
   `<M-a>`, and Ctrl+Shift+h is `<C-H>`, no longer `<C-h>`. The kitty protocol
