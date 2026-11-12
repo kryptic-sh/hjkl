@@ -10,7 +10,6 @@ repository = "https://github.com/kryptic-sh/hjkl"
 authors = ["mxaddict <mxaddict@kryptic.sh>"]
 rust-version = "1.95"
 homepage = "https://hjkl.kryptic.sh"
-readme = "README.md"
 
 # Idiom lints kept fixed workspace-wide (round 2, item 20). Every member
 # manifest opts in with `[lints] workspace = true`.
@@ -39,7 +38,6 @@ hjkl-clipboard = { path = "crates/hjkl-clipboard", version = "0.45" }
 hjkl-completion = { path = "crates/hjkl-completion", version = "0.45" }
 hjkl-completion-tui = { path = "crates/hjkl-completion-tui", version = "0.45" }
 hjkl-config = { path = "crates/hjkl-config", version = "0.45" }
-hjkl-css = { path = "crates/hjkl-css", version = "0.45" }
 hjkl-editor = { path = "crates/hjkl-editor", version = "0.45", default-features = false }
 hjkl-editor-tui = { path = "crates/hjkl-editor-tui", version = "0.45" }
 hjkl-engine = { path = "crates/hjkl-engine", version = "0.45", default-features = false }
@@ -58,7 +56,6 @@ hjkl-info-popup = { path = "crates/hjkl-info-popup", version = "0.45" }
 hjkl-info-popup-tui = { path = "crates/hjkl-info-popup-tui", version = "0.45" }
 hjkl-keymap = { path = "crates/hjkl-keymap", version = "0.45", default-features = false }
 hjkl-keymap-tui = { path = "crates/hjkl-keymap-tui", version = "0.45" }
-hjkl-kitty = { path = "crates/hjkl-kitty", version = "0.45" }
 hjkl-lang = { path = "crates/hjkl-lang", version = "0.45" }
 hjkl-layout = { path = "crates/hjkl-layout", version = "0.45" }
 hjkl-lsp = { path = "crates/hjkl-lsp", version = "0.45" }

@@ -138,16 +138,16 @@ impl App {
         // Gather first, so the (blocking, cross-process) lock is held only for
         // the store I/O and not for canonicalizing paths and hashing buffers.
         let mut pending: Vec<(String, (u32, u32), u64)> = Vec::new();
-        for idx in 0..self.slots.len() {
-            if self.slots[idx].is_explorer() {
+        for slot in &self.slots {
+            if slot.is_explorer() {
                 continue;
             }
-            let Some(filename) = self.slots[idx].filename.clone() else {
+            let Some(filename) = slot.filename.clone() else {
                 continue;
             };
             let canonical = std::fs::canonicalize(&filename).unwrap_or(filename);
-            let (row, col) = self.slots[idx].buffer().last_cursor();
-            let hash = hjkl_app::filestate::content_hash(&self.slots[idx].buffer().as_string());
+            let (row, col) = slot.buffer().last_cursor();
+            let hash = hjkl_app::filestate::content_hash(&slot.buffer().as_string());
             pending.push((
                 canonical.to_string_lossy().into_owned(),
                 (row as u32, col as u32),

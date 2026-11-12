@@ -15,7 +15,6 @@ anyhow = "1"
 async-trait = "0.1"
 hjkl-buffer.workspace = true
 hjkl-engine.workspace = true
-hjkl-ex.workspace = true
 hjkl-vim.workspace = true
 nvim-rs = { version = "0.9", features = ["use_tokio"] }
 serde = { version = "1", features = ["derive"] }
@@ -23,6 +22,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "io-util", "process", "m
 toml = "1"
 
 [dev-dependencies]
+hjkl-ex.workspace = true
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [package.metadata.docs.rs]
