@@ -8,7 +8,7 @@
 //! CI runs, not only on a Windows console.
 
 use super::*;
-use ttyr::event::KeyEventKind;
+use ttyr::event::{KeyEncoding, KeyEventKind, ModifierKeyCode};
 
 fn with_kind(code: KeyCode, kind: KeyEventKind) -> KeyEvent {
     KeyEvent::new(code, KeyModifiers::NONE).with_kind(kind)
@@ -82,4 +82,175 @@ fn repeat_events_still_act() {
     app.handle_key_event(with_kind(KeyCode::Char('z'), KeyEventKind::Repeat));
     app.handle_key_event(with_kind(KeyCode::Char('z'), KeyEventKind::Release));
     assert_eq!(line0(&app), "zzz");
+}
+
+/// One step of a keystroke script.
+enum Stroke {
+    /// A key typed without modifiers.
+    Key(char),
+    /// An uppercase letter typed with Shift.
+    Shifted(char),
+    /// A symbol typed with Shift: the key's own character and the one it
+    /// typed.
+    Symbol(char, char),
+    Enter,
+}
+
+/// Runs `script` from `text` and reports the buffer, cursor and mode.
+///
+/// With `windows`, shifted keys come as ttyr reads them from the Windows
+/// console: Shift's own press and release around a shifted letter, and a
+/// shifted symbol as the key's own character with the typed one as
+/// `shifted`. Without it, each comes as just the typed character.
+fn run_script(text: &str, script: &[Stroke], windows: bool) -> (String, (usize, usize), VimMode) {
+    let mut app = App::new(None, false, None, None).unwrap();
+    seed_buffer(&mut app, text);
+    let shift = KeyCode::Modifier(ModifierKeyCode::LeftShift);
+    for stroke in script {
+        match *stroke {
+            Stroke::Key(c) => tap(&mut app, KeyCode::Char(c)),
+            Stroke::Enter => tap(&mut app, KeyCode::Enter),
+            Stroke::Symbol(base, typed) => {
+                let key = if windows {
+                    KeyEvent::new(KeyCode::Char(base), KeyModifiers::SHIFT)
+                        .with_shifted(Some(typed))
+                        .with_encoding(KeyEncoding::Windows)
+                } else {
+                    KeyEvent::new(KeyCode::Char(typed), KeyModifiers::SHIFT)
+                };
+                app.handle_key_event(key.clone().with_kind(KeyEventKind::Press));
+                app.handle_key_event(key.with_kind(KeyEventKind::Release));
+            }
+            Stroke::Shifted(c) => {
+                if windows {
+                    app.handle_key_event(with_kind(shift, KeyEventKind::Press));
+                }
+                let key = KeyEvent::new(KeyCode::Char(c), KeyModifiers::SHIFT);
+                app.handle_key_event(key.clone().with_kind(KeyEventKind::Press));
+                app.handle_key_event(key.with_kind(KeyEventKind::Release));
+                if windows {
+                    app.handle_key_event(with_kind(shift, KeyEventKind::Release));
+                }
+            }
+        }
+    }
+    let rope = app.active_editor().buffer().rope();
+    (
+        rope.to_string(),
+        app.active_editor().cursor(),
+        app.active_editor().vim_mode(),
+    )
+}
+
+/// A modifier pressed on its own is not a key vim sees, so it must change
+/// nothing about what the keys around it do: not end a pending operator,
+/// fill a key that `f`, `r`, `"`, `q`, `@` or `m` waits for, or reach
+/// Insert mode or the command prompt as input.
+#[test]
+fn lone_modifier_presses_change_nothing() {
+    use Stroke::{Enter, Key, Shifted};
+    let cases: &[(&str, &[Stroke])] = &[
+        ("a\nb\nc", &[Key('d'), Shifted('G')]),
+        ("abXcd", &[Key('f'), Shifted('X'), Key('x')]),
+        ("abc", &[Key('i'), Shifted('Q'), Key('z')]),
+        ("abc", &[Key('r'), Shifted('Z')]),
+        (
+            "abc",
+            &[
+                Key('"'),
+                Shifted('A'),
+                Key('y'),
+                Key('l'),
+                Key('"'),
+                Key('a'),
+                Key('P'),
+            ],
+        ),
+        (
+            "ab cd ef",
+            &[
+                Key('q'),
+                Key('q'),
+                Key('w'),
+                Shifted('X'),
+                Key('q'),
+                Key('@'),
+                Key('q'),
+            ],
+        ),
+        (
+            "ab cd",
+            &[
+                Key('w'),
+                Key('m'),
+                Shifted('M'),
+                Key('0'),
+                Key('`'),
+                Shifted('M'),
+            ],
+        ),
+        (
+            "ab",
+            &[
+                Key(':'),
+                Key('s'),
+                Key('/'),
+                Key('a'),
+                Key('/'),
+                Shifted('Q'),
+                Enter,
+            ],
+        ),
+    ];
+    for (text, script) in cases {
+        assert_eq!(
+            run_script(text, script, true),
+            run_script(text, script, false),
+            "buffer {text:?}"
+        );
+    }
+}
+
+/// A shifted symbol read on the Windows layout acts as the character it
+/// typed: as a motion, a register name, Insert-mode text and prompt text.
+#[test]
+fn shifted_symbol_keys_act_as_typed_character() {
+    use Stroke::{Enter, Key, Symbol};
+    let cases: &[(&str, &[Stroke])] = &[
+        ("ab cd", &[Symbol('4', '$'), Key('x')]),
+        ("(ab)", &[Symbol('5', '%'), Key('x')]),
+        ("abc", &[Key('i'), Symbol('1', '!'), Symbol('2', '@')]),
+        (
+            "abc",
+            &[
+                Symbol('\'', '"'),
+                Key('a'),
+                Key('y'),
+                Key('l'),
+                Key('$'),
+                Symbol('\'', '"'),
+                Key('a'),
+                Key('p'),
+            ],
+        ),
+        (
+            "ab",
+            &[
+                Symbol(';', ':'),
+                Key('s'),
+                Key('/'),
+                Key('a'),
+                Key('/'),
+                Symbol('3', '#'),
+                Enter,
+            ],
+        ),
+    ];
+    for (text, script) in cases {
+        assert_eq!(
+            run_script(text, script, true),
+            run_script(text, script, false),
+            "buffer {text:?}"
+        );
+    }
 }
