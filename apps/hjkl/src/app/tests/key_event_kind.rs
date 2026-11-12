@@ -94,6 +94,9 @@ enum Stroke {
     /// typed.
     Symbol(char, char),
     Enter,
+    /// A lock key tapped on its own (Caps Lock, Num Lock, Scroll Lock),
+    /// which only the Windows shape reports.
+    Lock(KeyCode),
 }
 
 /// Runs `script` from `text` and reports the buffer, cursor and mode.
@@ -110,6 +113,11 @@ fn run_script(text: &str, script: &[Stroke], windows: bool) -> (String, (usize, 
         match *stroke {
             Stroke::Key(c) => tap(&mut app, KeyCode::Char(c)),
             Stroke::Enter => tap(&mut app, KeyCode::Enter),
+            Stroke::Lock(code) => {
+                if windows {
+                    tap(&mut app, code);
+                }
+            }
             Stroke::Symbol(base, typed) => {
                 let key = if windows {
                     KeyEvent::new(KeyCode::Char(base), KeyModifiers::SHIFT)
@@ -142,15 +150,18 @@ fn run_script(text: &str, script: &[Stroke], windows: bool) -> (String, (usize, 
     )
 }
 
-/// A modifier pressed on its own is not a key vim sees, so it must change
-/// nothing about what the keys around it do: not end a pending operator,
-/// fill a key that `f`, `r`, `"`, `q`, `@` or `m` waits for, or reach
-/// Insert mode or the command prompt as input.
+/// A modifier or lock key pressed on its own is not a key vim sees, so it
+/// must change nothing about what the keys around it do: not end a pending
+/// operator, fill a key that `f`, `r`, `"`, `q`, `@` or `m` waits for, or
+/// reach Insert mode or the command prompt as input.
 #[test]
 fn lone_modifier_presses_change_nothing() {
-    use Stroke::{Enter, Key, Shifted};
+    use Stroke::{Enter, Key, Lock, Shifted};
     let cases: &[(&str, &[Stroke])] = &[
         ("a\nb\nc", &[Key('d'), Shifted('G')]),
+        ("a\nb\nc", &[Key('d'), Lock(KeyCode::CapsLock), Key('j')]),
+        ("abc", &[Key('r'), Lock(KeyCode::NumLock), Key('z')]),
+        ("abc", &[Key('i'), Lock(KeyCode::ScrollLock), Key('z')]),
         ("abXcd", &[Key('f'), Shifted('X'), Key('x')]),
         ("abc", &[Key('i'), Shifted('Q'), Key('z')]),
         ("abc", &[Key('r'), Shifted('Z')]),
