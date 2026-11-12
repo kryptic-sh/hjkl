@@ -942,21 +942,45 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    ctrl+Char, so on German/French/Nordic layouts `@ { [ ] \ | ~` were suspected
    lost. Since 2026-11-11 hjkl reads the console through ttyr, whose console
    reader drops Ctrl+Alt from a key record that typed a character with AltGr
-   (`alt_gr_typed` in ttyr's `event/console.rs`, read, not run). Confirm on a
-   non-US layout, then delete this entry.
-3. **Bracketed paste probably never arrives on Windows — suspected.** hjkl reads
-   the console's key records (ttyr's console reader, as crossterm's did), which
-   carry no `Event::Paste`, so pastes arrive as keystrokes: autoindent/autopair
-   cascade, and `App::handle_paste`'s CRLF normalization is bypassed. ttyr's
-   `Mode::VirtualTerminalInput` with `Mode::BracketedPaste` gives `Event::Paste`
-   in Windows Terminal (per the ttyr session; conhost unverified). The ttyr port
-   (2026-11-11) did not turn it on: in VT input keys arrive as escape sequences,
-   not key records, so the Windows console's releases
-   (`app/tests/key_event_kind.rs`) and AltGr handling (#2) change with it. Turn
-   it on in `main.rs` terminal setup (`#[cfg(windows)]`) once it has been tried
-   on a Windows machine. A failure while setting up modes is no longer a stuck
-   terminal: ttyr's guard records each mode as it is turned on, and its panic
-   hook and `restore` undo them.
+   (`alt_gr_typed` in ttyr's `event/console.rs`; ttyr's `alt_and_alt_gr` test
+   feeds it the German AltGr+Q record). That the real console sends that record
+   shape is documented, not observed: it needs a person typing on a non-US
+   layout (AltGr+Q in Insert mode on German should insert `@`). Then delete this
+   entry. With VT input on (#3) AltGr characters arrive as plain text instead,
+   so this path only matters while records are read.
+3. **Bracketed paste never arrives on Windows — waiting on a by-hand check.**
+   hjkl reads the console's key records (ttyr's console reader, as crossterm's
+   did), which carry no `Event::Paste`, so pastes arrive as keystrokes:
+   autoindent/autopair cascade, and `App::handle_paste`'s CRLF normalization is
+   bypassed. The fix is `Mode::VirtualTerminalInput` (with
+   `Mode::BracketedPaste`, already on) in `enter_terminal` (`main.rs`),
+   `#[cfg(windows)]`. What the ttyr session measured on 2026-11-13 (Windows 11
+   build 26300), by host:
+   - **System ConPTY under tmxr 0.15:** a `tmxr paste-buffer -p` paste with VT
+     input on arrived as plain key presses, no `ESC[200~`/`ESC[201~`. Not yet
+     known whether ConPTY does not pass `?2004h` out or tmxr does not bracket;
+     the ttyr session asked tmxr.
+   - **Same host, `?9001` (win32-input-mode, ttyr's `Mode::Win32Input`) on
+     too:** keys arrived as win32-input-mode records (`KeyEncoding::Windows`,
+     with releases), so ConPTY honours it whatever the outer terminal. Paste
+     with it on: not measured.
+   - **Plain conhost (no ConPTY):** `?9001` is ignored silently, so VT input
+     gives plain VT bytes there; nothing breaks.
+   - **Kitty `DISAMBIGUATE_ESCAPE_CODES`** (which `enter_terminal` pushes) was
+     answered under tmxr, by tmxr. Windows Terminal: not measured, believed not
+     to implement it.
+   - **Windows Terminal: nothing measured**, because a paste needs a person.
+     What turning VT input on changes: releases stop arriving unless
+     `Mode::Win32Input` is on too (harmless: `handle_key_event` drops them);
+     focus comes only from `?1004` (`Mode::FocusChange`, already on); without
+     `?9001` or kitty, Tab and `<C-i>`, Esc and `<C-[>`, Enter and `<C-m>` are
+     the same bytes, and hjkl binds `<C-i>` for the jump list, so enable
+     `Mode::Win32Input` with it; and a lost paste end marker swallows keys up to
+     ttyr's paste cap. Open: whether a paste with `?9001` on still comes
+     bracketed in Windows Terminal. Decide after a by-hand paste in Windows
+     Terminal with VT input + `?9001` + `?2004`. A failure while setting up
+     modes is not a stuck terminal: ttyr's guard records each mode as it is
+     turned on, and its panic hook and `restore` undo them.
 4. **Windows clipboard read keeps CRLF — confirmed by code read.**
    `read_clipboard` (`apps/hjkl/src/host.rs`) passes `CF_UNICODETEXT` through,
    so `"+p` of text copied from a Windows app inserts rows ending in `\r`;
