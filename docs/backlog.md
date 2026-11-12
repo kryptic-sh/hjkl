@@ -1000,11 +1000,15 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
   leg: on Unix `\` is a filename character, so the tests pin the literal case.
 - Not exercised: a non-US keyboard layout, conhost, ARM64 Windows.
 - Windows paste (VT input + win32-input-mode + bracketed paste in
-  `enter_terminal`) was driven end to end only through the system ConPTY under
-  tmxr 0.15 (`tmxr paste-buffer -p` of multi-line Rust into Insert mode, saved
-  byte for byte; the same paste without the modes autoindented and auto-closed
-  every line). Windows Terminal hosts the same ConPTY but was not run, and a
-  paste whose end marker is lost swallows keys up to ttyr's paste cap.
+  `enter_terminal`): hjkl itself was driven end to end only through the system
+  ConPTY under tmxr 0.15 (`tmxr paste-buffer -p` of multi-line Rust into Insert
+  mode, saved byte for byte; the same paste without the modes autoindented and
+  auto-closed every line). In Windows Terminal the ttyr session drove ttyr's
+  reader (not hjkl) with real keystrokes on 2026-11-13: one `Event::Paste` with
+  the same modes, and WT passes the paste shortcut's `v` release without its
+  press, which `handle_key_event` drops like any release. WT does not answer the
+  kitty flags query, so only win32-input-mode keeps `<C-i>` apart from Tab
+  there. A paste whose end marker is lost swallows keys up to ttyr's paste cap.
 - `hjkl-clipboard`'s Windows backend (§8 #19 fix, 2026-10-18): the
   allocate-before-`EmptyClipboard` order is enforced by `replace_clipboard`
   taking already-built `GlobalBuffer`s, but no test observes an allocation
