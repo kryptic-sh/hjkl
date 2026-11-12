@@ -948,39 +948,43 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    layout (AltGr+Q in Insert mode on German should insert `@`). Then delete this
    entry. With VT input on (#3) AltGr characters arrive as plain text instead,
    so this path only matters while records are read.
-3. **Bracketed paste never arrives on Windows — waiting on a by-hand check.**
+3. **Bracketed paste never arrives on Windows — waiting on a ttyr release.**
    hjkl reads the console's key records (ttyr's console reader, as crossterm's
    did), which carry no `Event::Paste`, so pastes arrive as keystrokes:
    autoindent/autopair cascade, and `App::handle_paste`'s CRLF normalization is
-   bypassed. The fix is `Mode::VirtualTerminalInput` (with
-   `Mode::BracketedPaste`, already on) in `enter_terminal` (`main.rs`),
+   bypassed. The fix is `Mode::VirtualTerminalInput` and `Mode::Win32Input`
+   (with `Mode::BracketedPaste`, already on) in `enter_terminal` (`main.rs`),
    `#[cfg(windows)]`. What the ttyr session measured on 2026-11-13 (Windows 11
    build 26300), by host:
-   - **System ConPTY under tmxr 0.15:** a `tmxr paste-buffer -p` paste with VT
-     input on arrived as plain key presses, no `ESC[200~`/`ESC[201~`. Not yet
-     known whether ConPTY does not pass `?2004h` out or tmxr does not bracket;
-     the ttyr session asked tmxr.
+   - **System ConPTY under tmxr 0.15, VT input + `?2004`:** a paste arrives as
+     one `Event::Paste`, its newlines as `\r` (`handle_paste` turns a lone `\r`
+     into `\n`).
    - **Same host, `?9001` (win32-input-mode, ttyr's `Mode::Win32Input`) on
-     too:** keys arrived as win32-input-mode records (`KeyEncoding::Windows`,
-     with releases), so ConPTY honours it whatever the outer terminal. Paste
-     with it on: not measured.
+     too:** keys arrive as win32-input-mode records (`KeyEncoding::Windows`,
+     with releases), and a paste stays bracketed, but ConPTY writes the pasted
+     newline as Enter's win32 records inside the brackets. ttyr 0.2.0 kept those
+     raw in the paste text; ttyr `main` decodes them ("read win32 records inside
+     a bracketed paste"), so this needs the ttyr release after 0.2.0.
+   - **VT input off (what hjkl runs today):** a paste arrives as key presses and
+     releases, never bracketed.
    - **Plain conhost (no ConPTY):** `?9001` is ignored silently, so VT input
      gives plain VT bytes there; nothing breaks.
    - **Kitty `DISAMBIGUATE_ESCAPE_CODES`** (which `enter_terminal` pushes) was
      answered under tmxr, by tmxr. Windows Terminal: not measured, believed not
      to implement it.
-   - **Windows Terminal: nothing measured**, because a paste needs a person.
-     What turning VT input on changes: releases stop arriving unless
-     `Mode::Win32Input` is on too (harmless: `handle_key_event` drops them);
-     focus comes only from `?1004` (`Mode::FocusChange`, already on); without
-     `?9001` or kitty, Tab and `<C-i>`, Esc and `<C-[>`, Enter and `<C-m>` are
-     the same bytes, and hjkl binds `<C-i>` for the jump list, so enable
-     `Mode::Win32Input` with it; and a lost paste end marker swallows keys up to
-     ttyr's paste cap. Open: whether a paste with `?9001` on still comes
-     bracketed in Windows Terminal. Decide after a by-hand paste in Windows
-     Terminal with VT input + `?9001` + `?2004`. A failure while setting up
-     modes is not a stuck terminal: ttyr's guard records each mode as it is
-     turned on, and its panic hook and `restore` undo them.
+   - **Windows Terminal itself: not measured**, because a paste needs a person.
+     It hosts the same ConPTY, so the results above are expected to hold. What
+     turning VT input on changes: focus comes only from `?1004`
+     (`Mode::FocusChange`, already on); without `?9001` or kitty, Tab and
+     `<C-i>`, Esc and `<C-[>`, Enter and `<C-m>` are the same bytes, and hjkl
+     binds `<C-i>` for the jump list, hence `Mode::Win32Input` too; AltGr
+     characters arrive through the win32 records (#2's path) or, where `?9001`
+     is ignored, as plain text; and a lost paste end marker swallows keys up to
+     ttyr's paste cap. To do: move to the ttyr release with the paste fix, turn
+     the modes on, and have a person paste multi-line text into Insert mode in
+     Windows Terminal. A failure while setting up modes is not a stuck terminal:
+     ttyr's guard records each mode as it is turned on, and its panic hook and
+     `restore` undo them.
 4. **Windows clipboard read keeps CRLF — confirmed by code read.**
    `read_clipboard` (`apps/hjkl/src/host.rs`) passes `CF_UNICODETEXT` through,
    so `"+p` of text copied from a Windows app inserts rows ending in `\r`;
