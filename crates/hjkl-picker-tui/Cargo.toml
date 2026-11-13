@@ -19,7 +19,7 @@ hjkl-buffer-tui.workspace = true
 hjkl-engine.workspace = true
 hjkl-engine-tui.workspace = true
 ratatui = { version = "0.30", default-features = false, features = ["std", "layout-cache", "underline-color"] }
-ttyr = "0.2.0"
+ttyr = "0.3"
 
 [package.metadata.docs.rs]
 all-features = true

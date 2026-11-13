@@ -16,7 +16,7 @@ readme = "README.md"
 hjkl-engine.workspace = true
 hjkl-buffer.workspace = true
 ratatui = { version = "0.30", default-features = false, features = ["std", "layout-cache", "underline-color"] }
-ttyr = "0.2.0"
+ttyr = "0.3"
 
 [dev-dependencies]
 # Test-only: the vim visual-selection accessors these tests assert on now live

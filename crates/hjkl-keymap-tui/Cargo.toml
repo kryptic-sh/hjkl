@@ -15,7 +15,7 @@ readme = "README.md"
 
 [dependencies]
 hjkl-keymap.workspace = true
-ttyr = "0.2.0"
+ttyr = "0.3"
 
 [lints]
 workspace = true

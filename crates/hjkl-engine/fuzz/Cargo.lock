@@ -1928,9 +1928,9 @@ checksum = "d0af592be68c579aa78a16846bd19422978c3c52e438523d45ff5d1bff1f9d4a"
 
 [[package]]
 name = "ttyr"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24f7974888884ad5b7d20323cabcc97b86d2b1801c74fe4e682050314520ed5e"
+checksum = "e05daa0a7ec067418ae8d5b276b7207886f486b3fef54a9a43fc7d5757ae71db"
 dependencies = [
  "bitflags 2.13.2",
  "rustix",
