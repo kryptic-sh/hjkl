@@ -1219,6 +1219,14 @@ Seen while measuring, not `gq`:
       insert that follows overwrites `last_change`, and replay must end in
       Insert mode.
 
+### 1.17 Dependency majors waiting (found at the 0.46.0 cut, 2026-11-13)
+
+- **`nvim-rs` 0.9 → 0.10.** `hjkl-compat-oracle` (`nvim_driver.rs`,
+  `hjkl_driver.rs`) drives nvim and hjkl over msgpack-rpc through it, so the
+  upgrade is the oracle's alone (`publish = false`). Not tried: read the 0.10
+  changelog against `Handler`, `Neovim` and the `create::tokio` entry point,
+  then run the tier-2 corpus with nvim on `PATH`.
+
 ## 2. Blocked on platform access
 
 | Finding                                                      | Location                                                         | Blocker                                                                             |
