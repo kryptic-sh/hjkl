@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-13
+
 ### Changed
 
 - **Breaking:** `KeyEvent` re-exports `ttyr::event::KeyEvent` in place of
@@ -41,6 +43,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
   (`intern_ratatui_style`, `install_ratatui_syntax_spans`,
   `ratatui_style_table`).
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.46.0
 [0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.25.0...v0.40.0
 [0.25.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.25.0

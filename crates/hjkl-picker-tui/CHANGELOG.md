@@ -8,6 +8,8 @@ and this project adheres to
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-13
+
 ### Changed
 
 - **Breaking:** `handle_key` takes `&ttyr::event::KeyEvent` in place of a
@@ -59,7 +61,8 @@ and this project adheres to
 - `PreviewTheme` struct exposing pre-computed `ratatui::Style` values for
   border, gutter, non-text glyphs, and cursor-line background.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/kryptic-sh/hjkl/compare/v0.4.1...v0.46.0
 
 https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.4.0...HEAD [0.4.1]:
 https://github.com/kryptic-sh/hjkl-picker-tui/compare/v0.4.0...v0.4.1 [0.4.0]:

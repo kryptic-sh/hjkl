@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-13
+
 ### Changed
 
 - ratatui without its default features (`std`, `layout-cache` and
@@ -59,7 +61,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
   previously lived behind `hjkl-buffer`'s `ratatui` feature gate, dropped as
   part of #162).
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/kryptic-sh/hjkl/compare/v0.41.0...v0.46.0
 [0.41.0]: https://github.com/kryptic-sh/hjkl/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/kryptic-sh/hjkl/compare/v0.25.0...v0.40.0
 [0.25.0]: https://github.com/kryptic-sh/hjkl-buffer-tui/releases/tag/v0.25.0

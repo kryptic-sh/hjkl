@@ -13,5 +13,5 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   previously lived behind `hjkl-splash`'s `ratatui` feature gate, dropped as
   part of #162).
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.46.0...HEAD
 [0.25.0]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.25.0

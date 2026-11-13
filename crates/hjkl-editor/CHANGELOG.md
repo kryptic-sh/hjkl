@@ -204,7 +204,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 - Standalone `LICENSE`, `.gitignore`, and `ci.yml` workflow at the repo root.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.46.0...HEAD
 [0.8.1]: https://github.com/kryptic-sh/hjkl-editor/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/kryptic-sh/hjkl-editor/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/kryptic-sh/hjkl-editor/compare/v0.6.0...v0.7.0

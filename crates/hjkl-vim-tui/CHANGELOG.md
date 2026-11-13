@@ -6,6 +6,8 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-13
+
 ### Changed
 
 - **Breaking:** `handle_key` takes `&hjkl_engine_tui::KeyEvent`, now ttyr's
@@ -20,5 +22,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
   3). `hjkl-engine` and `hjkl-vim` are now fully toolkit-agnostic; crossterm
   coupling lives here and in `hjkl-engine-tui`.
 
-[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.45.1...HEAD
+[Unreleased]: https://github.com/kryptic-sh/hjkl/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/kryptic-sh/hjkl/compare/v0.25.1...v0.46.0
 [0.25.1]: https://github.com/kryptic-sh/hjkl/releases/tag/v0.25.1
