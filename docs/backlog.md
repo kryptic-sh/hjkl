@@ -936,21 +936,7 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    `tests/install_tests.rs` is `#[cfg(unix)]`. Needs a copy (or hard-link)
    fallback, `std::env::consts::EXE_SUFFIX`, the `Scripts` dir, a Python
    launcher choice, Windows manifest entries with shas, and un-gated tests.
-2. **AltGr characters on Windows — believed fixed by the ttyr port, not run.**
-   crossterm reported AltGr as CONTROL|ALT, `ttyr_to_input` (`hjkl-engine-tui`)
-   would set `ctrl`, and `step_insert` (`hjkl-vim` `insert.rs`) swallows
-   ctrl+Char, so on German/French/Nordic layouts `@ { [ ] \ | ~` were suspected
-   lost. Since 2026-11-11 hjkl reads the console through ttyr, whose console
-   reader drops Ctrl+Alt from a key record that typed a character with AltGr
-   (`alt_gr_typed` in ttyr's `event/console.rs`; ttyr's `alt_and_alt_gr` test
-   feeds it the German AltGr+Q record). That the real console sends that record
-   shape is documented, not observed: it needs a person typing on a non-US
-   layout (AltGr+Q in Insert mode on German should insert `@`). Then delete this
-   entry. With VT input and win32-input-mode on (Windows, since the paste fix)
-   keys arrive as win32-input-mode records, which ttyr runs through the same
-   `alt_gr_typed`; where a host ignores win32-input-mode (plain conhost) AltGr
-   characters arrive as plain text.
-3. **Windows clipboard read keeps CRLF — confirmed by code read.**
+2. **Windows clipboard read keeps CRLF — confirmed by code read.**
    `read_clipboard` (`apps/hjkl/src/host.rs`) passes `CF_UNICODETEXT` through,
    so `"+p` of text copied from a Windows app inserts rows ending in `\r`;
    `set_text` writes LF-only. `write_clipboard` ignores the error. Decision
@@ -963,7 +949,7 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    hrdr's own probe the same day did see every read fail while another process
    held the clipboard, so `ClipboardOpen::new` now retries briefly
    (`OPEN_ATTEMPTS`, 2026-10-20); the CRLF decision above is still open.
-4. **Atomic save fails while another process holds the file — confirmed
+3. **Atomic save fails while another process holds the file — confirmed
    2026-10-18, NEEDS A DECISION.** `write_atomic_with` (`hjkl-fs` `atomic.rs`)
    falls back to a non-atomic write only on `CrossesDevices`. Measured on
    Windows 11 with a throwaway test: while the target is open with share mode
@@ -974,7 +960,7 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
    long-lived holder); fall back to an in-place write on `PermissionDenied`
    (always saves, but loses atomicity — a crash mid-write truncates the file);
    or keep failing and say why in the error message.
-5. **Replacing a loaded grammar DLL — suspected.** `publish_path` renames over
+4. **Replacing a loaded grammar DLL — suspected.** `publish_path` renames over
    `<name>.dll`; Windows refuses while another hjkl process has it loaded. Only
    on a grammar revision bump with two instances running.
 
@@ -998,7 +984,13 @@ git `core.longpaths`, and Windows paths in hunk patches, `~`, `:cd`, `%:p`,
   `findstr "^"`.
 - The `~\` completion fix (`expand_path_prefix`) is red/green only on a Windows
   leg: on Unix `\` is a filename character, so the tests pin the literal case.
-- Not exercised: a non-US keyboard layout, conhost, ARM64 Windows.
+- Not exercised: conhost, ARM64 Windows. A non-US layout was run only through
+  ttyr's reader, not hjkl: on 2026-11-13 the ttyr session typed AltGr+Q and
+  AltGr+E on a German layout in Windows Terminal and got `Char('@')` and
+  `Char('€')` with no modifiers, both from console records and in
+  win32-input-mode (ttyr 0.3.0). hjkl takes a plain character as typed text.
+  Before ttyr, crossterm reported AltGr as Ctrl+Alt and Insert mode dropped the
+  character.
 - Windows paste (VT input + win32-input-mode + bracketed paste in
   `enter_terminal`): hjkl itself was driven end to end only through the system
   ConPTY under tmxr 0.15 (`tmxr paste-buffer -p` of multi-line Rust into Insert
