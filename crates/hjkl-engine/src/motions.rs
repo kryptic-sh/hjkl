@@ -50,17 +50,17 @@ fn write_cursor<B: Cursor + ?Sized>(buf: &mut B, pos: Position) {
     );
 }
 
-/// Borrow line `row`, returning `None` if out of bounds. Mirrors the
+/// Read line `row`, returning `None` if out of bounds. Mirrors the
 /// pre-0.0.40 `View::line(row) -> Option<&str>` shape every motion
-/// body uses (the SPEC `Query::line` panics OOB; the bound check
-/// keeps motion bodies's `unwrap_or("")` pattern intact).
+/// body uses. Bounded by `line_count`, which can stop short of the
+/// rows `Query::line` itself would still answer.
 #[inline]
 fn read_line_opt<B: Query + ?Sized>(buf: &B, row: usize) -> Option<String> {
     let n = Query::line_count(buf) as usize;
     if row >= n {
         return None;
     }
-    Some(Query::line(buf, row as u32))
+    Query::line(buf, row as u32)
 }
 
 /// Read line `row` as an owned `String`, returning an empty `String` for
@@ -2646,8 +2646,8 @@ mod tests {
                 self.lines.len() as u32
             }
 
-            fn line(&self, idx: u32) -> String {
-                self.lines[idx as usize].clone()
+            fn line(&self, idx: u32) -> Option<String> {
+                self.lines.get(idx as usize).cloned()
             }
 
             fn len_bytes(&self) -> usize {

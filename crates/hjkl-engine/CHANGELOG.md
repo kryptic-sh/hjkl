@@ -6,6 +6,16 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed (breaking)
+
+- **`Query::line` returns `Option<String>`** instead of panicking on a row past
+  the end (#313). A row count gone stale against an edit, from an LSP reply or
+  an ex range, reached it and crashed the editor; in the RPC modes a client
+  could do that on purpose. Implementations return `None` past the last line;
+  callers that only want text use `.as_deref().unwrap_or("")`. The `Query`
+  default methods (`byte_of_row`, `content_joined`, `line_bytes`) and
+  `Editor::content` treat a missing row as empty.
+
 ## [0.45.0] - 2026-11-04
 
 ### Changed (breaking)

@@ -1361,9 +1361,11 @@ pub trait Cursor: Send {
 pub trait Query: Send {
     /// Number of logical lines (excluding the implicit trailing line).
     fn line_count(&self) -> u32;
-    /// Return an owned copy of line `idx` (0-based). Implementations should
-    /// panic on out-of-bounds rather than silently return empty.
-    fn line(&self, idx: u32) -> String;
+    /// Return an owned copy of line `idx` (0-based), or `None` when `idx` is
+    /// past the last line. A row count gone stale against an edit (an LSP
+    /// reply, an ex range) reaches this, so it must not panic, and an empty
+    /// string would be indistinguishable from a real empty line.
+    fn line(&self, idx: u32) -> Option<String>;
     /// Total buffer length in bytes.
     fn len_bytes(&self) -> usize;
     /// Slice for the half-open `range`. May allocate (rope joins)
@@ -1403,7 +1405,7 @@ pub trait Query: Send {
         let row = row.min(n);
         let mut acc = 0usize;
         for r in 0..row {
-            acc += self.line(r as u32).len();
+            acc += self.line(r as u32).map_or(0, |line| line.len());
             // Separator newline between rows. The canonical engine
             // join uses `\n` between every pair of lines (no trailing
             // newline), so add one separator per row strictly before
@@ -1430,7 +1432,7 @@ pub trait Query: Send {
             if r > 0 {
                 acc.push('\n');
             }
-            acc.push_str(&self.line(r as u32));
+            acc.push_str(self.line(r as u32).as_deref().unwrap_or(""));
         }
         std::sync::Arc::new(acc)
     }
@@ -1447,7 +1449,7 @@ pub trait Query: Send {
         if row >= n {
             return 0;
         }
-        self.line(row as u32).len()
+        self.line(row as u32).map_or(0, |line| line.len())
     }
 
     /// Return a cheaply-cloned rope snapshot of the buffer. O(1) for the

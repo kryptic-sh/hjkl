@@ -3852,7 +3852,11 @@ impl<H: crate::types::Host> Editor<hjkl_buffer::View, H> {
             if r > 0 {
                 s.push('\n');
             }
-            s.push_str(&crate::types::Query::line(&self.buffer, r as u32));
+            s.push_str(
+                crate::types::Query::line(&self.buffer, r as u32)
+                    .as_deref()
+                    .unwrap_or(""),
+            );
         }
         s.push('\n');
         s

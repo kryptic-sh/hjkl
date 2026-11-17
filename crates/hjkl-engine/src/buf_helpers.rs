@@ -74,7 +74,7 @@ pub fn buf_line<B: Query + ?Sized>(b: &B, row: usize) -> Option<String> {
     if row >= n {
         return None;
     }
-    Some(Query::line(b, row as u32))
+    Query::line(b, row as u32)
 }
 
 /// Length (chars) of `row`. Returns 0 for out-of-bounds rows so call

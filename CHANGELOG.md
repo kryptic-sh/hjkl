@@ -38,6 +38,9 @@ patch bumps.
   Nix instead. Such a binary cannot run there, and since anvil's `bin/` comes
   first on hjkl's `PATH`, it used to shadow a working server installed through
   Nix.
+- Reading a line past the end of a buffer no longer crashes the editor (#313).
+  `hjkl_engine::Query::line` now returns `Option<String>` rather than panicking,
+  which is a breaking change for code that implements or calls it.
 
 ## [0.46.0] - 2026-11-13
 

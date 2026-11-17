@@ -127,17 +127,11 @@ impl Query for RopeBuffer {
         self.row_count() as u32
     }
 
-    fn line(&self, idx: u32) -> String {
+    fn line(&self, idx: u32) -> Option<String> {
         let row = idx as usize;
         let rope = self.rope();
-        // SPEC: panic on OOB rather than silently return empty.
-        if row >= rope.len_lines() {
-            panic!(
-                "Query::line: index {idx} out of bounds (line_count = {})",
-                self.row_count()
-            );
-        }
-        hjkl_buffer::rope_line_str(&rope, row)
+        // `ropey::Rope::line` panics past the last line.
+        (row < rope.len_lines()).then(|| hjkl_buffer::rope_line_str(&rope, row))
     }
 
     fn len_bytes(&self) -> usize {
@@ -689,8 +683,21 @@ mod tests {
     fn query_line_count_and_line() {
         let b = RopeBuffer::from_str("a\nb\nc");
         assert_eq!(Query::line_count(&b), 3);
-        assert_eq!(Query::line(&b, 0), "a");
-        assert_eq!(Query::line(&b, 2), "c");
+        assert_eq!(Query::line(&b, 0).as_deref(), Some("a"));
+        assert_eq!(Query::line(&b, 2).as_deref(), Some("c"));
+    }
+
+    /// A row past the end is `None`, never a panic: a row count gone stale
+    /// against an edit (an LSP reply, an ex range) reaches `line` with one.
+    #[test]
+    fn query_line_past_the_end_is_none() {
+        for text in ["", "a", "a\n", "a\nb\nc", "trailing\n\n"] {
+            let b = RopeBuffer::from_str(text);
+            let past = b.rope().len_lines() as u32;
+            for row in [past, past + 1, u32::MAX] {
+                assert_eq!(Query::line(&b, row), None, "row {row} of {text:?}");
+            }
+        }
     }
 
     /// `Query::line_bytes` is the allocation-free stand-in for
@@ -718,7 +725,7 @@ mod tests {
             for row in 0..n {
                 assert_eq!(
                     Query::line_bytes(&b, row),
-                    Query::line(&b, row as u32).len(),
+                    Query::line(&b, row as u32).map_or(0, |line| line.len()),
                     "row {row} of {text:?}"
                 );
             }
@@ -746,7 +753,7 @@ mod tests {
     fn line_helpers_exclude_a_non_lf_line_break() {
         for text in ["a\rb", "a\u{2028}b", "a\u{0085}b", "a\u{0b}b", "a\u{0c}b"] {
             let b = RopeBuffer::from_str(text);
-            assert_eq!(Query::line(&b, 0), "a", "{text:?}");
+            assert_eq!(Query::line(&b, 0).as_deref(), Some("a"), "{text:?}");
             assert_eq!(Query::line_bytes(&b, 0), 1, "{text:?}");
         }
     }
@@ -757,7 +764,7 @@ mod tests {
     #[test]
     fn crlf_keeps_its_carriage_return() {
         let b = RopeBuffer::from_str("a\r\nb");
-        assert_eq!(Query::line(&b, 0), "a\r");
+        assert_eq!(Query::line(&b, 0).as_deref(), Some("a\r"));
         assert_eq!(Query::line_bytes(&b, 0), 2);
     }
 
@@ -855,8 +862,8 @@ mod tests {
             fn line_count(&self) -> u32 {
                 self.lines.len() as u32
             }
-            fn line(&self, idx: u32) -> String {
-                self.lines[idx as usize].clone()
+            fn line(&self, idx: u32) -> Option<String> {
+                self.lines.get(idx as usize).cloned()
             }
             fn len_bytes(&self) -> usize {
                 0

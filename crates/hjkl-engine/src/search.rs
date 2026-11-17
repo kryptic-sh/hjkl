@@ -572,8 +572,7 @@ pub fn search_forward<B: Cursor + Query + Search>(
         let from_byte = buf.byte_offset(cursor);
         let width = buf
             .line(cursor.line)
-            .chars()
-            .nth(cursor.col as usize)
+            .and_then(|line| line.chars().nth(cursor.col as usize))
             .map_or(1, char::len_utf8);
         buf.pos_at_byte(from_byte.saturating_add(width))
     } else {
@@ -670,7 +669,7 @@ pub fn search_matches<'a, B: Query>(
     }
     // Materialize the line lazily — only when the cache misses. A warm
     // steady-state cache skips the per-row allocation entirely.
-    state.matches_for(row, dirty_gen, || buf.line(row as u32))
+    state.matches_for(row, dirty_gen, || buf.line(row as u32).unwrap_or_default())
 }
 
 /// Warm the per-row match cache for `row` without producing a result.
@@ -687,7 +686,7 @@ pub fn warm_matches<B: Query>(buf: &B, state: &mut SearchState, dirty_gen: u64, 
     if row >= line_count {
         return;
     }
-    state.matches_for(row, dirty_gen, || buf.line(row as u32));
+    state.matches_for(row, dirty_gen, || buf.line(row as u32).unwrap_or_default());
 }
 
 #[cfg(test)]
