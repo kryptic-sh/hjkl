@@ -495,6 +495,27 @@ mod tests {
         assert_eq!(entries.len(), 1, "something was created beside the target");
     }
 
+    /// Whether `dir`, just made 0555, really refuses a new file. Root ignores
+    /// directory modes, so a test run as root cannot build a read-only
+    /// directory this way, and the tests that need one skip that part rather
+    /// than fail for a reason that has nothing to do with the code.
+    #[cfg(unix)]
+    fn dir_refuses_writes(dir: &Path) -> bool {
+        let probe = dir.join(".write-probe");
+        match std::fs::File::create(&probe) {
+            Ok(_) => {
+                std::fs::remove_file(&probe).unwrap();
+                eprintln!(
+                    "skipping the read-only-directory check: {} accepts writes \
+                     despite mode 0555 (running as root?)",
+                    dir.display()
+                );
+                false
+            }
+            Err(_) => true,
+        }
+    }
+
     /// A store directory mounted read-only fails cleanly, before anything is
     /// written, and leaves both the link and the file alone.
     #[cfg(unix)]
@@ -509,6 +530,10 @@ mod tests {
         let original = "[explorer]\nwidth = 20\n";
         std::fs::write(&target, original).unwrap();
         std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o555)).unwrap();
+        if !dir_refuses_writes(&store) {
+            std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o755)).unwrap();
+            return;
+        }
         let link = dir.path().join("config.toml");
         std::os::unix::fs::symlink(&target, &link).unwrap();
 
@@ -585,14 +610,18 @@ mod tests {
         std::os::unix::fs::symlink(&writable, &writable_link).unwrap();
 
         let refused = write_key_at(&read_only_link, "explorer.width", 60i64);
-        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o555)).unwrap();
-        let unlockable = write_key_at(&writable_link, "explorer.width", 60i64);
-        // Restore writability so tempdir deletion works.
-        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o755)).unwrap();
-
         match refused {
             Err(ConfigError::ReadOnly { path }) => assert_eq!(path, read_only_link),
             other => panic!("expected a read-only error, got {other:?}"),
+        }
+
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let enforced = dir_refuses_writes(&store);
+        let unlockable = write_key_at(&writable_link, "explorer.width", 60i64);
+        // Restore writability so tempdir deletion works.
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o755)).unwrap();
+        if !enforced {
+            return;
         }
         match unlockable {
             Err(ConfigError::Write { path, .. }) => assert_eq!(path, writable_link),
