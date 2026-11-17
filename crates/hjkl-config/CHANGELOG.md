@@ -6,6 +6,24 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **`write_key_at` writes through a symlinked config instead of replacing the
+  link.** The atomic write renamed its temp file over the path itself, so a
+  `config.toml` that home-manager links into the Nix store, or stow links into a
+  dotfiles checkout, became a regular file on the first save: home-manager
+  stopped managing it and the next `home-manager switch` failed on the file in
+  its way, and stow's checkout never saw the edit. The link is now resolved
+  once, up front, and the file it points at is rewritten, as vim's `:w` does;
+  the lock, the read and the write all use that real file, so the `.lock` sits
+  beside it and every path to one file shares one lock.
+- **`write_key_at` refuses a read-only config.** A file whose mode marks it
+  read-only, symlinked or not, now returns the new `ConfigError::ReadOnly`
+  instead of being replaced. Before, a home-manager config on a single-user Nix
+  install, where the store directory is writable by its owner, had its store
+  file rewritten in place, and a `config.toml` a user had made read-only was
+  rewritten too.
+
 ## [0.45.0] - 2026-11-04
 
 ### Fixed

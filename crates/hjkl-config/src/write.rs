@@ -185,6 +185,55 @@ fn atomic_write(path: &Path, contents: &str) -> Result<(), ConfigError> {
     })
 }
 
+/// The file a write to `path` really lands in: what a symlinked `path`
+/// resolves to, or `path` itself canonicalized.
+///
+/// Renaming a temp file over the link would replace the link with a regular
+/// file: a config that home-manager links into the Nix store would silently
+/// stop being managed (and block the next `home-manager switch`), and one
+/// that stow links into a dotfiles checkout would never get the edit. Writing
+/// through the link is what vim's `:w` does. Canonicalizing also gives every
+/// spelling of one file the same lock. A dangling link is an error rather than
+/// a cue to replace it.
+fn resolve_target(path: &Path) -> Result<PathBuf, ConfigError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => {
+            std::fs::canonicalize(path).map_err(|e| ConfigError::Write {
+                path: path.to_path_buf(),
+                source: e,
+            })
+        }
+        _ => Ok(hjkl_fs::canonicalize_nearest(path)),
+    }
+}
+
+/// Refuse a target whose mode marks it read-only, as vim refuses `:w` on one.
+/// The directory's permissions are no guide: on a single-user Nix install the
+/// store directory is writable by its owner, and only the file's mode says the
+/// file must not change.
+fn refuse_read_only(target: &Path) -> Result<(), ConfigError> {
+    match std::fs::metadata(target) {
+        Ok(meta) if meta.permissions().readonly() => Err(ConfigError::ReadOnly {
+            path: target.to_path_buf(),
+        }),
+        _ => Ok(()),
+    }
+}
+
+/// Re-point an error raised while working on the resolved file at the path
+/// the caller passed in. That is the path the user configured, and the
+/// resolved one is a `\\?\` path on Windows.
+fn reported_at(err: ConfigError, path: &Path) -> ConfigError {
+    let path = path.to_path_buf();
+    match err {
+        ConfigError::Io { source, .. } => ConfigError::Io { path, source },
+        ConfigError::Write { source, .. } => ConfigError::Write { path, source },
+        ConfigError::ReadOnly { .. } => ConfigError::ReadOnly { path },
+        ConfigError::Invalid { message, .. } => ConfigError::Invalid { path, message },
+        other => other,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -200,23 +249,49 @@ fn atomic_write(path: &Path, contents: &str) -> Result<(), ConfigError> {
 /// - If a path segment exists but is not a table (e.g. `explorer` is a
 ///   string), returns [`ConfigError::Invalid`] rather than clobbering it.
 ///
-/// The read-modify-write sequence is guarded by a lock file
-/// (`<path>.lock`) so concurrent hjkl processes don't silently lose each
-/// other's updates.  The write itself is atomic (temp-file + `fsync` +
-/// `rename`), so a crash or I/O error mid-write never leaves a
-/// partial/truncated config behind.
+/// When `path` is a symlink, the write goes through it: the file the link
+/// resolves to is rewritten and the link is kept. `path` is resolved once, up
+/// front, and the lock, the read and the write all use that real file, so a
+/// link re-pointed mid-write cannot receive another file's contents.
+///
+/// A file whose mode marks it read-only is never rewritten, symlinked or not:
+/// that is how a config home-manager links into the Nix store looks, and how a
+/// user marks a config they do not want hjkl to touch.
+///
+/// The read-modify-write sequence is guarded by a lock file beside the real
+/// file (`<file>.lock`), so concurrent hjkl processes don't silently lose each
+/// other's updates, whichever path they reached the file by.  The write itself
+/// is atomic (temp-file + `fsync` + `rename`), so a crash or I/O error
+/// mid-write never leaves a partial/truncated config behind.
 ///
 /// # Errors
 ///
+/// [`ConfigError::ReadOnly`] when the file's mode marks it read-only,
 /// [`ConfigError::Io`] on read failure (other than "file does not exist"),
 /// [`ConfigError::Invalid`] when the existing file isn't valid TOML or a
 /// path segment collides with a non-table value, [`ConfigError::Write`] on
-/// write failure.
+/// write failure (including a dangling symlink, and a lock that cannot be
+/// created because the real file's directory is not writable). Every error
+/// names `path` as passed in, not the file it resolved to.
 pub fn write_key_at(
     path: &Path,
     dotted_path: &str,
     value: impl Into<toml_edit::Value>,
 ) -> Result<(), ConfigError> {
+    resolve_target(path)
+        .and_then(|target| write_key_to(&target, dotted_path, value.into()))
+        .map_err(|e| reported_at(e, path))
+}
+
+/// [`write_key_at`] on an already-resolved `path`.
+fn write_key_to(
+    path: &Path,
+    dotted_path: &str,
+    value: toml_edit::Value,
+) -> Result<(), ConfigError> {
+    // Before the lock, so a refused file gets nothing created beside it.
+    refuse_read_only(path)?;
+
     // Acquire file lock *before* reading — without it two processes can
     // race: both read the same state, both write, last writer wins.
     let _lock = LockGuard::acquire(path)?;
@@ -253,7 +328,7 @@ pub fn write_key_at(
             message: format!("`{seg}` (in `{dotted_path}`) exists but is not a table"),
         })?;
     }
-    table.insert(last, toml_edit::Item::Value(value.into()));
+    table.insert(last, toml_edit::Item::Value(value));
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| ConfigError::Write {
@@ -363,6 +438,192 @@ mod tests {
         std::fs::write(&path, "explorer = \"oops\"\n").unwrap();
         let err = write_key_at(&path, "explorer.width", 40i64).unwrap_err();
         assert!(matches!(err, ConfigError::Invalid { .. }));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_config_keeps_the_link_and_updates_its_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let dotfiles = dir.path().join("dotfiles");
+        std::fs::create_dir(&dotfiles).unwrap();
+        let target = dotfiles.join("config.toml");
+        std::fs::write(&target, "# mine\n[explorer]\nwidth = 20\n").unwrap();
+        let link = dir.path().join("config.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        write_key_at(&link, "explorer.width", 60i64).unwrap();
+
+        let meta = std::fs::symlink_metadata(&link).unwrap();
+        assert!(meta.file_type().is_symlink(), "the link was replaced");
+        assert_eq!(std::fs::read_link(&link).unwrap(), target);
+        let text = std::fs::read_to_string(&target).unwrap();
+        assert!(text.contains("# mine"));
+        assert!(text.contains("width = 60"));
+    }
+
+    /// The home-manager case on a single-user Nix install, where the store
+    /// directory is writable by its owner and only the file's mode says it is
+    /// immutable.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_to_read_only_file_is_refused_and_changes_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("store");
+        std::fs::create_dir(&store).unwrap();
+        let target = store.join("config.toml");
+        let original = "[explorer]\nwidth = 20\n";
+        std::fs::write(&target, original).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let link = dir.path().join("config.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let result = write_key_at(&link, "explorer.width", 60i64);
+
+        assert!(
+            matches!(result, Err(ConfigError::ReadOnly { .. })),
+            "expected a read-only error, got {result:?}"
+        );
+        let meta = std::fs::symlink_metadata(&link).unwrap();
+        assert!(meta.file_type().is_symlink(), "the link was replaced");
+        assert_eq!(std::fs::read_link(&link).unwrap(), target);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), original);
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o444, "the target's mode changed");
+        let entries: Vec<_> = std::fs::read_dir(&store).unwrap().collect();
+        assert_eq!(entries.len(), 1, "something was created beside the target");
+    }
+
+    /// A store directory mounted read-only fails cleanly, before anything is
+    /// written, and leaves both the link and the file alone.
+    #[cfg(unix)]
+    #[test]
+    fn symlink_into_read_only_dir_fails_cleanly_and_changes_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("store");
+        std::fs::create_dir(&store).unwrap();
+        let target = store.join("config.toml");
+        let original = "[explorer]\nwidth = 20\n";
+        std::fs::write(&target, original).unwrap();
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let link = dir.path().join("config.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let result = write_key_at(&link, "explorer.width", 60i64);
+        // Restore writability so tempdir deletion works.
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(
+            matches!(result, Err(ConfigError::Write { .. })),
+            "expected a write error, got {result:?}"
+        );
+        let meta = std::fs::symlink_metadata(&link).unwrap();
+        assert!(meta.file_type().is_symlink(), "the link was replaced");
+        assert_eq!(std::fs::read_link(&link).unwrap(), target);
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), original);
+    }
+
+    /// The lock belongs to the real file: one held beside it blocks a write
+    /// through the link, and one held beside the link does not.
+    #[cfg(unix)]
+    #[test]
+    fn lock_sits_beside_the_real_file_not_the_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let dotfiles = dir.path().join("dotfiles");
+        std::fs::create_dir(&dotfiles).unwrap();
+        let target = dotfiles.join("config.toml");
+        std::fs::write(&target, "[explorer]\nwidth = 20\n").unwrap();
+        let link = dir.path().join("config.toml");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        // Owned by this live process with a fresh mtime, so never stale.
+        let held = format!("{} 0", std::process::id());
+
+        let link_lock = dir.path().join("config.toml.lock");
+        std::fs::write(&link_lock, &held).unwrap();
+        write_key_at(&link, "explorer.width", 40i64).unwrap();
+        assert!(
+            std::fs::read_to_string(&target)
+                .unwrap()
+                .contains("width = 40")
+        );
+        std::fs::remove_file(&link_lock).unwrap();
+
+        std::fs::write(dotfiles.join("config.toml.lock"), &held).unwrap();
+        let result = write_key_at(&link, "explorer.width", 60i64);
+        assert!(
+            matches!(result, Err(ConfigError::Write { .. })),
+            "a lock held beside the real file must block the write, got {result:?}"
+        );
+        assert!(
+            std::fs::read_to_string(&target)
+                .unwrap()
+                .contains("width = 40")
+        );
+    }
+
+    /// Errors name the path the caller configured, not the file it resolves to
+    /// (on Windows that would be a `\\?\` path), whichever step raised them.
+    #[cfg(unix)]
+    #[test]
+    fn errors_name_the_callers_path_when_it_is_a_symlink() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("store");
+        std::fs::create_dir(&store).unwrap();
+        let read_only = store.join("read-only.toml");
+        std::fs::write(&read_only, "").unwrap();
+        std::fs::set_permissions(&read_only, std::fs::Permissions::from_mode(0o444)).unwrap();
+        let writable = store.join("writable.toml");
+        std::fs::write(&writable, "").unwrap();
+        let read_only_link = dir.path().join("read-only.toml");
+        std::os::unix::fs::symlink(&read_only, &read_only_link).unwrap();
+        let writable_link = dir.path().join("writable.toml");
+        std::os::unix::fs::symlink(&writable, &writable_link).unwrap();
+
+        let refused = write_key_at(&read_only_link, "explorer.width", 60i64);
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let unlockable = write_key_at(&writable_link, "explorer.width", 60i64);
+        // Restore writability so tempdir deletion works.
+        std::fs::set_permissions(&store, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        match refused {
+            Err(ConfigError::ReadOnly { path }) => assert_eq!(path, read_only_link),
+            other => panic!("expected a read-only error, got {other:?}"),
+        }
+        match unlockable {
+            Err(ConfigError::Write { path, .. }) => assert_eq!(path, writable_link),
+            other => panic!("expected a write error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn read_only_config_is_refused_and_left_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let original = "[explorer]\nwidth = 20\n";
+        std::fs::write(&path, original).unwrap();
+        let writable = std::fs::metadata(&path).unwrap().permissions();
+        let mut read_only = writable.clone();
+        read_only.set_readonly(true);
+        std::fs::set_permissions(&path, read_only).unwrap();
+
+        let result = write_key_at(&path, "explorer.width", 60i64);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let still_read_only = std::fs::metadata(&path).unwrap().permissions().readonly();
+        // Restore writability so tempdir deletion works on Windows.
+        std::fs::set_permissions(&path, writable).unwrap();
+
+        match result {
+            // The path as given: canonicalizing it would show `\\?\` on Windows.
+            Err(ConfigError::ReadOnly { path: reported }) => assert_eq!(reported, path),
+            other => panic!("expected a read-only error, got {other:?}"),
+        }
+        assert_eq!(text, original);
+        assert!(still_read_only, "the file's mode changed");
     }
 
     #[test]

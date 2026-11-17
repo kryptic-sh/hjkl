@@ -20,6 +20,11 @@ pub enum ConfigError {
         source: std::io::Error,
     },
 
+    /// The config file's mode marks it read-only, so a runtime write-back
+    /// refuses to replace it, as vim's `:w` does.
+    #[error("config file {path} is read-only")]
+    ReadOnly { path: PathBuf },
+
     #[error("parse error in {path} at line {line}, column {col}: {message}\n  | {snippet}")]
     Parse {
         path: PathBuf,

@@ -8,6 +8,17 @@ patch bumps.
 
 ## [Unreleased]
 
+### Fixed
+
+- Saving a setting back to a symlinked `config.toml` (`:set`, a dock resize,
+  `:set explorer.open=true`) writes through the link instead of replacing it
+  with a regular file, so a config linked from a dotfiles checkout is updated
+  there. A read-only config, which includes one home-manager links into the Nix
+  store, is left alone with a "couldn't save" warning. Before, a home-manager
+  config was silently detached from home-manager, breaking the next
+  `home-manager switch`, and on a single-user Nix install the store file itself
+  was rewritten.
+
 ## [0.46.0] - 2026-11-13
 
 ### Changed
