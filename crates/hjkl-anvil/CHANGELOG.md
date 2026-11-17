@@ -7,6 +7,20 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Versioning:
 
 ## [Unreleased]
 
+### Breaking
+
+- `InstallError` gains `PrebuiltNeedsNixLd`. The enum is not
+  `#[non_exhaustive]`, so an exhaustive `match` on it needs a new arm.
+
+### Fixed
+
+- `install_blocking` refuses a `Github` (prebuilt binary) install on NixOS
+  unless nix-ld is enabled (`NIX_LD` set), returning
+  `InstallError::PrebuiltNeedsNixLd`. Those binaries expect a dynamic loader at
+  a conventional path that NixOS does not have, so they failed to run, and once
+  linked into anvil's `bin/` they shadowed a working server from Nix. NixOS is
+  detected from `ID=nixos` in `/etc/os-release`.
+
 ## [0.40.0] - 2026-08-01
 
 ### Security

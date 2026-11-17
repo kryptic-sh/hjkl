@@ -82,6 +82,12 @@ pub enum InstallError {
 
     #[error("refusing unsafe URL component: {0:?}")]
     UnsafeUrlComponent(String),
+
+    #[error(
+        "{0} is a prebuilt binary, which does not run on NixOS without nix-ld; \
+         install it with Nix, or enable programs.nix-ld"
+    )]
+    PrebuiltNeedsNixLd(String),
 }
 
 // ── Status ────────────────────────────────────────────────────────────────────
@@ -145,6 +151,9 @@ pub fn install_blocking(
         return Err(InstallError::PathEscape(name.to_string()));
     }
     match &spec.method {
+        InstallMethod::Github(_) if !prebuilt_binaries_run_here() => {
+            Err(InstallError::PrebuiltNeedsNixLd(name.to_string()))
+        }
         InstallMethod::Github(_) => GithubInstaller.install(name, spec, progress),
         InstallMethod::Cargo(_) => CargoInstaller.install(name, spec, progress),
         InstallMethod::Npm(_) => NpmInstaller.install(name, spec, progress),
@@ -157,6 +166,33 @@ pub fn install_blocking(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Whether a prebuilt release binary from GitHub can run on this machine.
+///
+/// Those binaries are linked for a conventional filesystem layout, with the
+/// dynamic loader at a fixed path such as `/lib64/ld-linux-x86-64.so.2`. NixOS
+/// has no loader there, so they fail to exec, and because anvil's `bin/` comes
+/// first on `PATH`, a broken copy would also shadow a working server installed
+/// through Nix. nix-ld provides that loader, and NixOS's `programs.nix-ld`
+/// module exports `NIX_LD` when it is enabled.
+fn prebuilt_binaries_run_here() -> bool {
+    if !cfg!(target_os = "linux") {
+        return true;
+    }
+    let os_release = std::fs::read_to_string("/etc/os-release").ok();
+    prebuilt_binaries_run_on(os_release.as_deref(), std::env::var_os("NIX_LD").is_some())
+}
+
+/// [`prebuilt_binaries_run_here`] on a given `/etc/os-release` text and
+/// whether `NIX_LD` is set.
+fn prebuilt_binaries_run_on(os_release: Option<&str>, nix_ld: bool) -> bool {
+    let is_nixos = os_release.is_some_and(|text| {
+        text.lines()
+            .filter_map(|line| line.strip_prefix("ID="))
+            .any(|id| id.trim().trim_matches(['"', '\'']) == "nixos")
+    });
+    !is_nixos || nix_ld
+}
 
 /// Reject a package/crate/module identifier that the spawned package manager
 /// would parse as an option flag (e.g. `cargo install --path=…`,
@@ -1268,6 +1304,22 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::manifest::{GithubMethod, ToolCategory};
+
+    #[test]
+    fn prebuilt_binaries_are_refused_on_nixos_without_nix_ld() {
+        let nixos = "NAME=NixOS\nID=nixos\nVERSION_ID=\"26.11\"\n";
+        assert!(!prebuilt_binaries_run_on(Some(nixos), false));
+        assert!(!prebuilt_binaries_run_on(Some("ID=\"nixos\"\n"), false));
+        assert!(prebuilt_binaries_run_on(Some(nixos), true));
+    }
+
+    #[test]
+    fn prebuilt_binaries_run_on_other_distros() {
+        // `ID_LIKE` naming NixOS is not NixOS itself.
+        let ubuntu = "NAME=\"Ubuntu\"\nID=ubuntu\nID_LIKE=nixos\n";
+        assert!(prebuilt_binaries_run_on(Some(ubuntu), false));
+        assert!(prebuilt_binaries_run_on(None, false));
+    }
 
     /// Build a `store::AnvilPaths` rooted at a fresh `TempDir`'s `data` /
     /// `cache` subdirs — the per-test-isolation seam that replaces

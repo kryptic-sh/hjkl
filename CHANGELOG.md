@@ -33,6 +33,11 @@ patch bumps.
   config was silently detached from home-manager, breaking the next
   `home-manager switch`, and on a single-user Nix install the store file itself
   was rewritten.
+- `:Anvil install` and `:Anvil update` refuse a language server that comes as a
+  prebuilt binary on NixOS unless nix-ld is enabled, and say to install it with
+  Nix instead. Such a binary cannot run there, and since anvil's `bin/` comes
+  first on hjkl's `PATH`, it used to shadow a working server installed through
+  Nix.
 
 ## [0.46.0] - 2026-11-13
 

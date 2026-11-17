@@ -96,9 +96,9 @@ compiler on first use, so the package carries git and a C toolchain in its
 closure. They go on hjkl's `PATH` after your own, so your tools and `$CC` win.
 On macOS that means `/usr/bin/git` and `/usr/bin/cc`, which are only stubs until
 the Command Line Tools are installed (`xcode-select --install`), as for any
-compiler use on a Mac. Language servers that hjkl downloads are prebuilt for a
-conventional Linux layout and need `nix-ld` on NixOS; install them through Nix
-instead.
+compiler use on a Mac. Language servers that `:Anvil install` downloads are
+prebuilt for a conventional Linux layout, so on NixOS it refuses them unless
+`programs.nix-ld` is enabled; install them through Nix instead.
 
 ## Configuring `hjkl`
 
