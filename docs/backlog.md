@@ -1219,6 +1219,36 @@ Seen while measuring, not `gq`:
       insert that follows overwrites `last_change`, and replay must end in
       Insert mode.
 
+### 1.17 Left open by Nix support (2026-11-17, issue #324)
+
+The flake (`flake.nix`, `nix/`) and its `Nix` workflow shipped and build on
+x86_64 and aarch64 Linux and on aarch64 macOS. Not done:
+
+- **No `x86_64-darwin`.** nixpkgs-unstable refuses to evaluate for it; the last
+  release branch that does only gets fixes until the end of 2026. Not worth
+  pinning a second nixpkgs for.
+- **Language servers on NixOS.** `hjkl-anvil` downloads prebuilt binaries
+  dynamically linked for a conventional Linux layout; they do not run on NixOS
+  without `nix-ld`. The README tells Nix users to install servers through Nix. A
+  fix would have anvil prefer a server already on `PATH`, or skip downloads when
+  it detects NixOS.
+- **Grammars still compile at runtime.** The package wraps `git` and `stdenv.cc`
+  onto hjkl's `PATH` (after the user's own) so `hjkl-bonsai` can fetch and
+  compile grammars into the user's cache, which puts a C toolchain in the
+  package closure. Prebuilding grammars into the store would drop both, at the
+  cost of a much longer package build.
+- **No binary cache in CI.** Every `Nix` run builds the dependency crates cold
+  on all three runners. A cache action (or Cachix) would cut that.
+- **Not verified on a real Mac:** that `/usr/bin/cc` and `/usr/bin/git` are
+  stubs before the Command Line Tools are installed, as the README says. CI's
+  macOS runner already has them.
+- **Root-run tests.** `hjkl-config`'s
+  `symlink_into_read_only_dir_fails_cleanly_and_changes_nothing` and the
+  read-only-directory half of
+  `errors_name_the_callers_path_when_it_is_a_symlink` rely on a 0555 directory
+  refusing writes, which root ignores. CI runs tests as the runner user, so this
+  only bites a local run as root.
+
 ## 2. Blocked on platform access
 
 | Finding                                                      | Location                                                         | Blocker                                                                             |
