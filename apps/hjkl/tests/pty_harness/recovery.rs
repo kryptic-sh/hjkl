@@ -177,12 +177,17 @@ fn recovery_restores_undo_tree_after_crash() {
         // the v3 undo tree) is durably on disk, THEN crash. Generous budget so
         // the test still passes if `:set updatetime` didn't take (4000 ms
         // default flush).
+        //
+        // The body alone cannot tell that swap apart from one flushed after
+        // "hello" but before "world" was typed: both hold "hello" and no
+        // "world". Crashing on the early one loses the "world" branch the test
+        // is about, so also require the tree to hold root, "hello" and "world".
         let mut ready = false;
         for _ in 0..400 {
             if let Ok((_h, body, undo)) = hjkl_app::swap::read_swap_full(&swap_path)
                 && body.contains("hello")
                 && !body.contains("world")
-                && undo.is_some()
+                && undo.is_some_and(|u| u.tree.nodes.len() >= 3)
             {
                 ready = true;
                 break;
