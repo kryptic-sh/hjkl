@@ -1,0 +1,82 @@
+name: Nix lock update
+
+# Moves flake.lock forward: nixpkgs, crane, home-manager, and fenix, which pins
+# the Rust toolchain the flake builds with. Dependabot does not update
+# flake.lock, so without this it only moves when someone remembers to.
+#
+# A pull request opened with the workflow token does not trigger other
+# workflows, so the `Nix` workflow would never check it. The `check` job runs the
+# same `nix flake check` on every platform `nix.yml` covers, and the pull
+# request is only opened when all of them pass.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1' # Monday 06:00 UTC, with cron.yml and Dependabot
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    name: nix flake update
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.diff.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: cachix/install-nix-action@v31
+      - run: nix flake update
+      - id: diff
+        run: |
+          if git diff --quiet -- flake.lock; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.diff.outputs.changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: flake-lock
+          path: flake.lock
+
+  check:
+    name: nix ${{ matrix.os }}
+    needs: update
+    if: needs.update.outputs.changed == 'true'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: flake-lock
+      - uses: cachix/install-nix-action@v31
+      - run: nix flake check -L
+
+  pull-request:
+    name: open pull request
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: flake-lock
+      - uses: peter-evans/create-pull-request@v8
+        with:
+          branch: nix/update-flake-lock
+          delete-branch: true
+          add-paths: flake.lock
+          commit-message: 'chore(nix): update flake.lock'
+          title: 'chore(nix): update flake.lock'
+          labels: dependencies
+          body: |
+            Moves `flake.lock` forward with `nix flake update`.
+
+            `nix flake check` passed with this lock on x86_64 and aarch64 Linux and on macOS in [this run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). This pull request was opened with the workflow token, so the `Nix` workflow does not run on it.
