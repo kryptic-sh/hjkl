@@ -8,6 +8,21 @@ patch bumps.
 
 ## [Unreleased]
 
+### Added
+
+- A Nix flake (`flake.nix`) for `x86_64-linux`, `aarch64-linux` and
+  `aarch64-darwin`. `packages.default` builds the `hjkl` binary with crane from
+  `Cargo.lock`, wrapped so `git` and a C compiler are on its `PATH` after the
+  user's own; `apps.default` makes `nix run github:kryptic-sh/hjkl` work;
+  `overlays.default` adds `hjkl` to nixpkgs; and `devShells.default` carries the
+  `rust-toolchain.toml` toolchain from fenix with rust-src, rust-analyzer,
+  cargo-nextest, cargo-machete and prettier. `nixosModules.default` and
+  `homeManagerModules.default` add
+  `programs.hjkl.{enable, package, defaultEditor}`, and the home-manager module
+  also `programs.hjkl.settings`, written to `$XDG_CONFIG_HOME/hjkl/config.toml`.
+  A new `Nix` workflow runs `nix flake check` on x86_64 and aarch64 Linux and on
+  macOS.
+
 ### Fixed
 
 - Saving a setting back to a symlinked `config.toml` (`:set`, a dock resize,

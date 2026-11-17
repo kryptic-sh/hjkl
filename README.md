@@ -65,6 +65,41 @@ The standalone editor installs the same way:
 cargo install hjkl
 ```
 
+### Nix
+
+The repository is a flake for Linux and Apple Silicon macOS. Run the editor
+straight from it:
+
+```bash
+nix run github:kryptic-sh/hjkl
+```
+
+To install it, add the flake as an input and import its NixOS module
+(`nixosModules.default`) or home-manager module (`homeManagerModules.default`).
+Both install the package with `programs.hjkl.enable` and set `EDITOR` with
+`programs.hjkl.defaultEditor`; the home-manager module also writes
+`programs.hjkl.settings` to `$XDG_CONFIG_HOME/hjkl/config.toml`:
+
+```nix
+programs.hjkl = {
+  enable = true;
+  defaultEditor = true;
+  settings.editor.leader = ",";
+};
+```
+
+`overlays.default` adds `hjkl` to a nixpkgs set, and `nix develop` opens a shell
+with the Rust toolchain and the tools CI uses.
+
+hjkl runs `git` for its pickers and compiles tree-sitter grammars with a C
+compiler on first use, so the package carries git and a C toolchain in its
+closure. They go on hjkl's `PATH` after your own, so your tools and `$CC` win.
+On macOS that means `/usr/bin/git` and `/usr/bin/cc`, which are only stubs until
+the Command Line Tools are installed (`xcode-select --install`), as for any
+compiler use on a Mac. Language servers that hjkl downloads are prebuilt for a
+conventional Linux layout and need `nix-ld` on NixOS; install them through Nix
+instead.
+
 ## Configuring `hjkl`
 
 The standalone editor reads `$XDG_CONFIG_HOME/hjkl/config.toml`, falling back to

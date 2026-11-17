@@ -7,7 +7,9 @@ build script, CI job or release step changes.
 
 ## Outputs
 
-For `x86_64-linux`, `aarch64-linux`, `x86_64-darwin` and `aarch64-darwin`:
+For `x86_64-linux`, `aarch64-linux` and `aarch64-darwin`. Not `x86_64-darwin`:
+nixpkgs-unstable no longer evaluates for it, and the last release branch that
+does only gets fixes until the end of 2026.
 
 - `packages.default` / `packages.hjkl` — the `hjkl` binary built with
   [crane](https://github.com/ipetkov/crane) from `Cargo.lock`, version read from
