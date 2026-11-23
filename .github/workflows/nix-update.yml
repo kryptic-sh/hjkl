@@ -25,7 +25,7 @@ jobs:
       changed: ${{ steps.diff.outputs.changed }}
     steps:
       - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
+      - uses: cachix/install-nix-action@v32
       - run: nix flake update
       - id: diff
         run: |
@@ -53,7 +53,7 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: flake-lock
-      - uses: cachix/install-nix-action@v31
+      - uses: cachix/install-nix-action@v32
       - run: nix flake check -L
 
   pull-request:
