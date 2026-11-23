@@ -22,7 +22,7 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
     steps:
       - uses: actions/checkout@v7
-      - uses: cachix/install-nix-action@v31
+      - uses: cachix/install-nix-action@v32
       # Also builds packages.default: checks.<system>.hjkl is the same
       # derivation.
       - run: nix flake check -L
