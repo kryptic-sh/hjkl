@@ -24,15 +24,35 @@ constraints.
   cross-reference to finding #2, not a separate item, and was merged into it.
 - Coverage GAPs from both reviews are compressed into the §1.7 coverage note.
 
+## Scope PR CI runs to the jobs a change needs (asked by the owner, 2026-11-28)
+
+A pull request runs every CI job, whatever files it touches. Run only the jobs
+whose inputs changed, judged from the PR's changed files. Not started.
+
+- **What exists:** pull requests run `ci.yml`, `nix.yml` in full; no workflow
+  filters by path.
+- **How, without a new dependency:** a first job lists the PR's changed files
+  against its base (`git diff --name-only`) and maps them to the jobs that need
+  them, and the other jobs read its outputs in their `if:`. Changes to
+  `.github/`, the lockfile or the toolchain pin select everything; in a Cargo
+  workspace a changed crate selects its reverse dependencies too. A path-filter
+  action such as `dorny/paths-filter` would be a new dependency, which is the
+  owner's call.
+- **Keep:** pushes to the default branch, tags and scheduled runs still run
+  everything. A skipped job says why in the run summary rather than passing
+  silently, and since a job skipped by `if:` reports as skipped, required checks
+  and any release job's `needs` must tolerate it; one summary job to require is
+  the usual answer.
+
 ## CI
 
 - **Add a cargo-audit job to CI.** (2026-11-28.) The owner wants every
-  kryptic-sh repo we own to run both cargo-deny and cargo-audit in CI. This
-  one runs cargo-deny (`.github/workflows/cron.yml`) but has no cargo-audit job. lyr's
-  `.github/workflows/ci.yml` is the model: an `audit` job on `ubuntu-latest`
-  that installs `cargo-audit` with `taiki-e/install-action@v2` and runs plain
-  `cargo audit`, which fails only on vulnerabilities (unmaintained and yanked
-  crates are warnings).
+  kryptic-sh repo we own to run both cargo-deny and cargo-audit in CI. This one
+  runs cargo-deny (`.github/workflows/cron.yml`) but has no cargo-audit job.
+  lyr's `.github/workflows/ci.yml` is the model: an `audit` job on
+  `ubuntu-latest` that installs `cargo-audit` with `taiki-e/install-action@v2`
+  and runs plain `cargo audit`, which fails only on vulnerabilities
+  (unmaintained and yanked crates are warnings).
 
 ## 1. Open work — ranked
 
